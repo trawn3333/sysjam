@@ -366,10 +366,12 @@ pub struct Persona {
     pub swing: f32,
     pub reply: f32,
     pub register: f32,
+    /// how readily this player gets bored of a sound / picks up a new one
+    pub curiosity: f32,
 }
 impl Persona {
     pub fn roll(rng: &mut Rng) -> Self {
-        Persona { eager: rng.f(), busy: rng.range(0.2, 0.9), swing: rng.range(0.0, 0.35), reply: rng.f(), register: rng.bi() }
+        Persona { eager: rng.f(), busy: rng.range(0.2, 0.9), swing: rng.range(0.0, 0.35), reply: rng.f(), register: rng.bi(), curiosity: rng.f() }
     }
     /// join/leave decision against an invitation (hysteresis built in)
     pub fn decide(&self, on: bool, invite: f32, rng: &mut Rng) -> bool {

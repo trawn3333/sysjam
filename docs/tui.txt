@@ -1,36 +1,36 @@
 ┌ sysjam ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ C major │ IV F → Imaj7 Cmaj7 → IV F → V G                                                                                        │
-│  80 bpm bar 42   ○○●○    alive   energy █████████▌     0.68  agitation █████████▍     0.67  seed 7   125s                        │
+│ D minor (home A major) │ VIIadd9 Cadd9 → i Dm → II7 E7 → V A                                                                     │
+│ 105→98 bpm bar 46   ○○○●    subsiding   energy ██▎            0.16  agitation ▋              0.05  seed 5   123s                 │
 └ q quit · space pause display ────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ the band ───────────────────────────────────────────────────────────────────┐┌ machine ──────────────────────────────────────────┐
-│drone    following  ▍        sub drone + detuned pad                         ││cpu            22% ▃▃▃▃▃▂▃▃▃▃▃▃▃▃▃▃▃▂▃▃▃▃▃▂▃▃▃▃    │
-│  ↳ voice-leading pad into F, sub glides to F1 · 5 voices, smooth            ││cores          2/8 ▃▃▃▃▄▃▃▃▃▄▄▄▅▄▃▃▄▃▃▄▃▄▃▂▃▃▄▃    │
-│  ♪ F1 C3 C3 F4 F4 A4                                                        ││net      49.5 MB/s ██████▇████▇██████████▇█████    │
-│bassist  comping    ▉        sine/saw bass                                   ││disk    419.4 MB/s ████████████████████████████    │
-│  ↳ walking an approach note into F                                          ││files        288/s ▆▆▃▆▇▁▆▆▇▁▇▆▃▆▆▁▇▇▇▄▇▇▁▆▆▁▆▇    │
-│  ♪ G2 C2 C2 C3 G1 F1                                                        ││keys          0.00 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│drummer  following  █████▋   synth kick + GM kit                             ││mouse         0.00 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│  ↳ kicks follow the bassist's syncopations (cpu 35%)                        ││screen        hue 1° bri 0.78                      │
-│  ♪ ride ride rim ride kick ride                                             ││top threads                                        │
-│keys     trading    █████▋   String Ensemble 1 (48) / Celesta (8)            ││  100% █████▉ yes                                  │
-│  ↳ trading 2-bar phrases with the lead                                      ││                                                   │
-│  ♪ F5 A5 C6 A5 F5 C5                                                        ││                                                   │
-│lead     trading    █        English Horn (69)                               ││                                                   │
-│  ↳ developing the motif: repeat                                             ││                                                   │
-│  ♪ C5 G5 G5 F5 F5                                                           ││                                                   │
-│colour   following  ▎        Marimba (12) + bells                            ││                                                   │
-│  ↳ heard a network burst (98%) → adding shimmer                             ││                                                   │
-│  ♪ C6                                                                       │└───────────────────────────────────────────────────┘
-│guest    soloing    █▋       saw/sine guest voice                            │┌ levels ───────────────────────────────────────────┐
-│  ↳ thread yes at 100% cpu sits in → long E5                                 ││sub  ██████████████████████████▌           -19 dB  │
-│  ♪ D5 D5 D5 D5 E5                                                           ││bass █████████████████████████▍            -21 dB  │
-│                                                                             ││mid  ██████████████████████████            -20 dB  │
-│                                                                             ││high ██████████████████▎                   -32 dB  │
+│drone    following  ▎        sub drone + detuned pad                         ││cpu             1% ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│  ↳ voice-leading pad into E7, sub glides to E1 · 5 voices, smooth           ││cores          0/8 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│  ♪ E1 B3 D4 D4 E4 Ab4        ⇢ screen warm · curious 0.1 eager 0.7 busy 0.8 ││net        610 B/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│bassist  comping    ██████▋  warm saw bass + Acoustic Bass (32)              ││disk        8 kB/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▄▁▁▁▁▁▁▁▁▁▃▃▃▁▁    │
+│  ↳ walking an approach note into E7                                         ││files          0/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▃▃▃▁▁    │
+│  ♪ B1 B2 E2 E3 E2 E3      ⇢ disk/files 11% · curious 0.2 eager 0.8 busy 0.7 ││keys          0.00 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│drummer  following  ██████▋  boomy kick + GM kit                             ││mouse         0.00 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│  ↳ inspired by the move to subsiding → retuning the kit: boomy kick         ││screen        hue 1° bri 0.78                      │
+│  ♪ maracas maracas rim ride marac ⇢ cpu 5% · curious 0.3 eager 0.8 busy 0.4 ││top threads                                        │
+│keys     comping    ▎        Metallic Pad (93) / Electric Piano 2 (5)        ││    3% ▏      x11vnc                               │
+│  ↳ inspired by the move to subsiding → picking up a metallic pad            ││                                                   │
+│  ♪ D5 F5 A5 A5 D5 B4       ⇢ keys/mouse 0% · curious 0.7 eager 0.9 busy 0.9 ││                                                   │
+│lead     comping    █▎       metal bells                                     ││                                                   │
+│  ↳ a fresh motif — new idea                                                 ││                                                   │
+│  ♪ F6 C6 D6 D6                  ⇢ cores 0% · curious 0.6 eager 0.3 busy 0.8 ││                                                   │
+│colour   following  █▎       Banjo (105) + metal bells                       ││                                                   │
+│  ↳ inspired by the move to subsiding → picking up a banjo                   ││                                                   │
+│  ♪ F6 C6 D6 D6                    ⇢ net 0% · curious 0.4 eager 0.5 busy 0.6 │└───────────────────────────────────────────────────┘
+│guest    laying out          —                                               │┌ levels ───────────────────────────────────────────┐
+│  ↳ my thread calmed down → bowing out                                       ││sub  ████████████████████████████          -17 dB  │
+│  ♪ ·                                                       ⇢ busiest thread ││bass ██████████████████████████▋           -19 dB  │
+│                                                                             ││mid  █████████████████████████▎            -21 dB  │
+│                                                                             ││high ███████████████▊                      -36 dB  │
 └─────────────────────────────────────────────────────────────────────────────┘└───────────────────────────────────────────────────┘
 ┌ band events ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│+ Marimba (12)  − Guitar Harmonics (31) [Colour]                                                                                  │
-│colour player answers the lead                                                                                                    │
-│+ English Horn (69)  − Calliope Lead (82) [Lead]                                                                                  │
 │lead starts a new melodic idea                                                                                                    │
-│~ big I/O burst -> modulation                                                                                                     │
+│~ alive -> subsiding (energy 0.20)                                                                                                │
+│~ tempo 108 → 98 bpm over 5 bars (subsiding)                                                                                      │
+│+ Metallic Pad (93)  − Voice Oohs (53) [Pad]                                                                                      │
+│− Chiff Lead (83) [Lead]                                                                                                          │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

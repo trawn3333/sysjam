@@ -28,6 +28,10 @@ pub struct Mind {
     pub instrument: String,
     pub notes: Vec<String>,
     pub activity: f32,
+    /// personality, e.g. "curious .82 · eager .31"
+    pub traits: String,
+    /// the machine signal this player is tied to, with its level
+    pub tied: String,
 }
 
 #[derive(Clone, Default)]
@@ -36,6 +40,13 @@ pub struct BandSnap {
     /// (chord, roman, -1 past / 0 now / 1 planned)
     pub prog: Vec<(String, String, i8)>,
     pub bpm: f32,
+    /// target while the tempo is ramping
+    pub bpm_to: Option<f32>,
+    pub bpm_locked: bool,
+    /// "", "half-time", "double-time"
+    pub feel: &'static str,
+    /// home key, when the band is currently away from it
+    pub home: Option<String>,
     pub bar: u64,
     pub beat: u32,
     pub state: &'static str,
@@ -278,7 +289,11 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
 
 fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, paused: bool, quitting: bool) {
     let dim = Style::default().fg(Color::DarkGray);
-    let mut prog = vec![Span::styled(format!(" {} ", b.key), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)), Span::styled("│ ", dim)];
+    let mut prog = vec![Span::styled(format!(" {} ", b.key), Style::default().fg(Color::White).add_modifier(Modifier::BOLD))];
+    if let Some(h) = &b.home {
+        prog.push(Span::styled(format!("(home {h}) "), dim));
+    }
+    prog.push(Span::styled("│ ", dim));
     for (i, (name, roman, when)) in b.prog.iter().enumerate() {
         if i > 0 {
             prog.push(Span::styled(" → ", dim));
@@ -295,7 +310,11 @@ fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, paused: bool, quitting: boo
     }
     let beat: String = (0..4).map(|i| if i == b.beat { '●' } else { '○' }).collect();
     let line2 = vec![
-        Span::styled(format!(" {:>3.0} bpm ", b.bpm), Style::default().fg(Color::White)),
+        match b.bpm_to {
+            Some(t) => Span::styled(format!(" {:.0}→{:.0} bpm ", b.bpm, t), Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)),
+            None => Span::styled(format!(" {:>3.0} bpm{} ", b.bpm, if b.bpm_locked { " (locked)" } else { "" }), Style::default().fg(Color::White)),
+        },
+        Span::styled(if b.feel.is_empty() { String::new() } else { format!("{} ", b.feel) }, Style::default().fg(Color::LightMagenta)),
         Span::styled(format!("bar {:<4} ", b.bar + 1), dim),
         Span::styled(beat, Style::default().fg(Color::LightYellow)),
         Span::raw("   "),
@@ -348,8 +367,23 @@ fn draw_band(f: &mut Frame, r: Rect, b: &BandSnap) {
         }
         if per >= 3 {
             let notes = if mi.notes.is_empty() { "·".to_string() } else { mi.notes.join(" ") };
-            let t: String = format!("  ♪ {notes}").chars().take(w).collect();
-            lines.push(Line::from(Span::styled(t, dim)));
+            // right side: tied signal and traits
+            let right = match (mi.tied.is_empty(), mi.traits.is_empty()) {
+                (true, true) => String::new(),
+                (false, true) => format!(" ⇢ {} ", mi.tied),
+                (true, false) => format!(" {} ", mi.traits),
+                _ => format!(" ⇢ {} · {} ", mi.tied, mi.traits),
+            };
+            let rw = right.chars().count();
+            let left_w = w.saturating_sub(rw).max(8);
+            let mut left: String = format!("  ♪ {notes}").chars().take(left_w).collect();
+            let lw = left.chars().count();
+            if lw + rw <= w {
+                left.push_str(&" ".repeat(w - lw - rw));
+                lines.push(Line::from(vec![Span::styled(left, dim), Span::styled(right, Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM))]));
+            } else {
+                lines.push(Line::from(Span::styled(left, dim)));
+            }
         }
     }
     f.render_widget(Paragraph::new(lines), inner);

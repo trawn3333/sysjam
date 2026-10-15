@@ -289,6 +289,8 @@ pub struct Harmony {
     pub warmth: f32,
     last_template: usize,
     key_after: Option<(Key, usize)>,
+    /// human-readable harmony events (new home key etc.), drained by the engine
+    pub events: Vec<String>,
 }
 
 impl Harmony {
@@ -311,6 +313,7 @@ impl Harmony {
             warmth: 0.0,
             last_template: usize::MAX,
             key_after: None,
+            events: Vec::new(),
         }
     }
 
@@ -333,6 +336,10 @@ impl Harmony {
     }
 
     /// chords already planned for this phrase (for display)
+    pub fn home(&self) -> Key {
+        self.home
+    }
+
     pub fn upcoming(&self, n: usize) -> Vec<Chord> {
         self.queue.iter().take(n).map(|c| c.0).collect()
     }
@@ -384,7 +391,7 @@ impl Harmony {
             self.modulate = false;
             self.settle = 4; // stay home for a while
 
-            if self.rng.chance(0.5) && self.key != self.home {
+            if self.rng.chance(0.2) && self.key != self.home {
                 // resolve all the way home
                 self.modulate_to(self.home, "return home");
                 return;
@@ -393,20 +400,37 @@ impl Harmony {
             self.queue.push_back((tonic, Some("resolves to tonic".into())));
             return;
         }
-        let away_pull = if self.key != self.home { (self.phrases_away as f32 - 4.0).max(0.0) * 0.08 } else { 0.0 };
+        // a key that has lasted a few phrases may become the new home
+        if self.key != self.home && self.key_after.is_none() && self.phrases_away >= 3 && self.rng.chance(0.4) {
+            let old = self.home;
+            self.home = self.key;
+            self.phrases_away = 0;
+            self.settle = 2;
+            self.events.push(format!("new home key: {} (was {})", self.key.name(), old.name()));
+            // confirm it cadentially
+            self.queue.push_back((dom, Some(format!("cadence into the new home {}", self.key.name()))));
+            self.queue.push_back((tonic, None));
+            return;
+        }
+        // a gentle pull back home only after a long time away
+        let away_pull = if self.key != self.home { (self.phrases_away as f32 - 6.0).max(0.0) * 0.03 } else { 0.0 };
         self.settle = self.settle.saturating_sub(1);
         if self.modulate || (self.settle == 0 && self.rng.chance(if meander { 0.03 } else { 0.05 } + away_pull)) {
             self.modulate = false;
-            let target = if self.key != self.home && self.rng.chance(0.4 + away_pull) {
+            let p_major = (0.5 + 0.35 * self.warmth).clamp(0.1, 0.9);
+            let target = if self.key != self.home && self.rng.chance(0.15 + away_pull) {
                 self.home
             } else {
                 let r = self.rng.f();
-                if r < 0.35 {
+                if r < 0.25 {
                     // relative major/minor pivot
                     Key { tonic: (key.tonic + if key.minor { 3 } else { -3 }).rem_euclid(12), minor: !key.minor }
+                } else if r < 0.38 && self.rng.chance(if key.minor { p_major } else { 1.0 - p_major }) {
+                    // parallel major/minor (screen colour decides which way it leans)
+                    Key { tonic: key.tonic, minor: !key.minor }
                 } else {
+                    // around the circle of fifths
                     let step = if self.rng.chance(0.5) { 7 } else { 5 };
-                    let p_major = (0.5 + 0.35 * self.warmth).clamp(0.1, 0.9);
                     Key { tonic: (key.tonic + step).rem_euclid(12), minor: !self.rng.chance(p_major) }
                 }
             };

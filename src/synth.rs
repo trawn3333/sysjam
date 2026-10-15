@@ -35,6 +35,8 @@ pub struct EngineCfg {
     pub sub: f32,
     pub tx: Option<Sender<String>>,
     pub ui: Option<Arc<Mutex<crate::ui::BandSnap>>>,
+    /// --bpm given: never change the tempo
+    pub bpm_lock: bool,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -82,6 +84,20 @@ struct Click {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
+enum Feel {
+    Normal,
+    Half,
+    Double,
+}
+
+/// oscillator patches the players can design for themselves
+const BASS_PATCHES: [(&str, f32, f32); 4] = [("round sine bass", 0.08, 1.0), ("warm saw bass", 0.35, 1.0), ("growl bass", 0.6, 2.2), ("soft pluck bass", 0.2, 1.4)];
+/// (name, partial ratio, detune cents, decay scale)
+const BELL_PATCHES: [(&str, f32, f32, f32); 4] = [("glass bells", 1.0, 3.0, 1.0), ("octave chimes", 2.0, 2.0, 1.3), ("metal bells", 3.01, 4.0, 0.8), ("detuned soft bells", 1.0, 11.0, 1.6)];
+/// (name, base Hz, decay s)
+const KICK_PATCHES: [(&str, f32, f32); 3] = [("deep kick", 45.0, 0.28), ("tight kick", 58.0, 0.16), ("boomy kick", 40.0, 0.45)];
+
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum BassMode {
     Sustain,
     Pulse,
@@ -103,7 +119,6 @@ struct Slot {
     program: Option<u8>,
     on: bool,
     want: bool,
-    next_rotate: u64,
     recent: VecDeque<u8>,
 }
 
@@ -237,6 +252,34 @@ pub struct Engine {
     lp: [f32; 3],
     last_pub: u64,
     pub_ver: u64,
+    // living tempo
+    bpm_lock: bool,
+    bpm_from: f32,
+    bpm_to: f32,
+    ramp_len: u32,
+    ramp_pos: u32,
+    feel: Feel,
+    feel_phrases: u32,
+    /// semitone offset that keeps sub/bass at the same absolute register whatever the root
+    reg: i32,
+    // tempo-following echo
+    dlen: usize,
+    dlen_target: usize,
+    // inspiration: pending reason per player, time of last sound change, dwell
+    insp: [Option<String>; 7],
+    hold: [u64; 7],
+    since: [u64; 7],
+    dwell: [u64; 7],
+    prev_sig: crate::band::Signals,
+    bass_patch: usize,
+    bell_patch: usize,
+    kick_patch: usize,
+    bass_saw: f32,
+    bass_drive: f32,
+    bass_saw_t: f32,
+    bass_drive_t: f32,
+    kick_b: f32,
+    kick_d: f32,
 }
 
 fn pan(p: f32) -> (f32, f32) {
@@ -260,6 +303,8 @@ impl Engine {
             }
         }
         let step_len = sr * 60.0 / c.bpm / 4.0;
+        // echo buffer long enough for 3 steps at 50 bpm; active length follows the tempo
+        let dmax = (sr * 60.0 / 50.0 / 4.0 * 3.0) as usize + 4;
         let dlen = (step_len * 3.0) as usize;
         let persona = [(); 6].map(|_| Persona::roll(&mut rng));
         let gm = c.soundfont.as_ref().and_then(|sf| Gm::new(sf, sr as i32, 28).ok());
@@ -273,7 +318,6 @@ impl Engine {
                 program: None,
                 on: false,
                 want: false,
-                next_rotate: 0,
                 recent: VecDeque::new(),
             })
             .collect();
@@ -369,8 +413,8 @@ impl Engine {
             guest_vib: 0.0,
             guest_f: Svf::default(),
             rev: Reverb::new(sr),
-            dl: vec![0.0; dlen.max(1)],
-            dr: vec![0.0; dlen.max(1)],
+            dl: vec![0.0; dmax],
+            dr: vec![0.0; dmax],
             di: 0,
             lim: Limiter::new(sr),
             fade: 0.0,
@@ -397,6 +441,30 @@ impl Engine {
             lp: [0.0; 3],
             last_pub: 0,
             pub_ver: 0,
+            bpm_lock: c.bpm_lock,
+            bpm_from: c.bpm,
+            bpm_to: c.bpm,
+            ramp_len: 0,
+            ramp_pos: 0,
+            feel: Feel::Normal,
+            feel_phrases: 0,
+            reg: 45 - (69.0 + 12.0 * (c.root / 440.0).log2()).round() as i32,
+            dlen: dlen.clamp(1, dmax),
+            dlen_target: dlen.clamp(1, dmax),
+            insp: Default::default(),
+            hold: [0; 7],
+            since: [0; 7],
+            dwell: [(sr * 9.0) as u64; 7],
+            prev_sig: Default::default(),
+            bass_patch: 1,
+            bell_patch: 0,
+            kick_patch: 0,
+            bass_saw: 0.35,
+            bass_drive: 1.0,
+            bass_saw_t: 0.35,
+            bass_drive_t: 1.0,
+            kick_b: 45.0,
+            kick_d: 0.28,
             harm,
             rng,
         };
@@ -417,11 +485,13 @@ impl Engine {
     fn think(&mut self, i: usize, status: &'static str, t: impl Into<String>) {
         if self.ui.is_some() {
             self.minds[i].status = status;
-            self.minds[i].think = t.into();
+            if self.now >= self.hold[i] {
+                self.minds[i].think = t.into();
+            }
         }
     }
     fn set_think(&mut self, i: usize, t: impl Into<String>) {
-        if self.ui.is_some() {
+        if self.ui.is_some() && self.now >= self.hold[i] {
             self.minds[i].think = t.into();
         }
     }
@@ -476,20 +546,36 @@ impl Engine {
         let has_gm = self.gm.is_some();
         let inst = [
             "sub drone + detuned pad".to_string(),
-            match gm_name(Role::Bass, &self.slots) { Some(g) => format!("sine/saw bass + {g}"), None => "sine/saw bass".into() },
-            if has_gm { "synth kick + GM kit".into() } else { "synth kick + hats".into() },
+            match gm_name(Role::Bass, &self.slots) { Some(g) => format!("{} + {g}", BASS_PATCHES[self.bass_patch].0), None => BASS_PATCHES[self.bass_patch].0.into() },
+            if has_gm { format!("{} + GM kit", KICK_PATCHES[self.kick_patch].0) } else { format!("{} + hats", KICK_PATCHES[self.kick_patch].0) },
             match (gm_name(Role::Pad, &self.slots), gm_name(Role::Comp, &self.slots)) {
                 (Some(a), Some(b)) => format!("{a} / {b}"),
                 (Some(a), None) | (None, Some(a)) => a,
                 _ => "—".into(),
             },
-            gm_name(Role::Lead, &self.slots).unwrap_or_else(|| "bells".into()),
-            match gm_name(Role::Colour, &self.slots) { Some(g) => format!("{g} + bells"), None => "bells / shimmer".into() },
+            gm_name(Role::Lead, &self.slots).unwrap_or_else(|| BELL_PATCHES[self.bell_patch].0.into()),
+            match gm_name(Role::Colour, &self.slots) { Some(g) => format!("{g} + {}", BELL_PATCHES[self.bell_patch].0), None => BELL_PATCHES[self.bell_patch].0.into() },
             if self.guest_on { "saw/sine guest voice".into() } else { "—".into() },
         ];
         let recent = (self.sr * 5.0) as u64;
+        let sig = self.ctl.sig;
+        let pct = |x: f32| format!("{:.0}%", x * 100.0);
+        let tied = [
+            if self.ctl.screen_valid { format!("screen {}", if self.ctl.warmth >= 0.0 { "warm" } else { "cool" }) } else { "screen colour".into() },
+            format!("disk/files {}", pct(sig.file)),
+            format!("cpu {}", pct(sig.cpu)),
+            format!("keys/mouse {}", pct(sig.keyboard.max(sig.mouse))),
+            format!("cores {}", pct(sig.cores)),
+            format!("net {}", pct(sig.net)),
+            if self.guest_on { format!("its thread {}", pct(self.guest_cpu)) } else { "busiest thread".into() },
+        ];
         for i in 0..7 {
             self.minds[i].instrument = inst[i].clone();
+            self.minds[i].tied = tied[i].clone();
+            if i < 6 && self.minds[i].traits.is_empty() {
+                let p = self.persona[i];
+                self.minds[i].traits = format!("curious {:.1} eager {:.1} busy {:.1}", p.curiosity, p.eager, p.busy);
+            }
             let now = self.now;
             self.minds[i].notes = self.heard_notes[i].iter().filter(|(t, _)| now.saturating_sub(*t) < recent).map(|x| x.1.clone()).collect();
         }
@@ -498,6 +584,14 @@ impl Engine {
             key: key.name(),
             prog,
             bpm: self.bpm,
+            bpm_to: (self.ramp_pos < self.ramp_len && (self.bpm_to - self.bpm).abs() >= 0.5).then_some(self.bpm_to),
+            bpm_locked: self.bpm_lock,
+            feel: match self.feel {
+                Feel::Normal => "",
+                Feel::Half => "half-time",
+                Feel::Double => "double-time",
+            },
+            home: (self.harm.home() != key).then(|| self.harm.home().name()),
             bar: self.step / 16,
             beat: ((self.step % 16) / 4) as u32,
             state: self.leader.state.name(),
@@ -509,6 +603,148 @@ impl Engine {
             time: self.time(),
             version: self.pub_ver,
         };
+    }
+
+    /// A player hears something that might make it reach for a new sound.
+    fn inspire(&mut self, i: usize, why: String, p: f32) {
+        if !(1..6).contains(&i) || self.insp[i].is_some() {
+            return;
+        }
+        // just changed sound: not ready to be inspired again yet
+        if self.now < self.since[i] + (self.sr * 15.0) as u64 {
+            return;
+        }
+        if self.rng.chance(p * (0.5 + self.persona[i].curiosity)) {
+            self.insp[i] = Some(why);
+        }
+    }
+
+    /// Time on the same sound slowly turns into boredom (curious players get bored sooner).
+    fn boredom(&mut self) {
+        for i in 1..6 {
+            if self.insp[i].is_some() {
+                continue;
+            }
+            let age = (self.now.saturating_sub(self.since[i])) as f32 / self.sr;
+            if age < 25.0 {
+                continue;
+            }
+            let p = (age - 25.0) / (1500.0 * (1.2 - self.persona[i].curiosity));
+            if self.rng.chance(p.min(0.5)) {
+                self.insp[i] = Some(format!("bored after {age:.0}s on the same sound"));
+            }
+        }
+    }
+
+    /// inspired, and the minimum dwell on the current sound has passed
+    fn ready(&self, i: usize) -> bool {
+        self.insp[i].is_some() && self.now >= self.since[i] + self.dwell[i]
+    }
+
+    fn changed_sound(&mut self, i: usize, what: String) {
+        let why = self.insp[i].take().unwrap_or_else(|| "felt like it".into());
+        self.since[i] = self.now;
+        self.dwell[i] = (self.sr * self.rng.range(8.0, 10.0)) as u64;
+        let st = self.minds[i].status;
+        self.hold[i] = 0;
+        self.think(i, st, format!("{why} → {what}"));
+        // keep the reason on screen for a while
+        self.hold[i] = self.now + (self.sr * 10.0) as u64;
+    }
+
+    /// Oscillator players design new patches when inspired (applied click-free).
+    fn patch_manage(&mut self) {
+        let gm_bass = self.slot_on(Role::Bass);
+        if self.ready(1) && !gm_bass {
+            let p = (self.bass_patch + 1 + self.rng.below(BASS_PATCHES.len() - 1)) % BASS_PATCHES.len();
+            self.bass_patch = p;
+            self.bass_saw_t = BASS_PATCHES[p].1;
+            self.bass_drive_t = BASS_PATCHES[p].2;
+            self.changed_sound(1, format!("designing a new patch: {}", BASS_PATCHES[p].0));
+            self.say(format!("~ bassist designs a new patch: {}", BASS_PATCHES[p].0));
+        }
+        if self.ready(2) {
+            let p = (self.kick_patch + 1 + self.rng.below(KICK_PATCHES.len() - 1)) % KICK_PATCHES.len();
+            self.kick_patch = p;
+            self.changed_sound(2, format!("retuning the kit: {}", KICK_PATCHES[p].0));
+            self.say(format!("~ drummer retunes: {}", KICK_PATCHES[p].0));
+        }
+        if self.ready(5) && !self.slot_on(Role::Colour) {
+            let p = (self.bell_patch + 1 + self.rng.below(BELL_PATCHES.len() - 1)) % BELL_PATCHES.len();
+            self.bell_patch = p;
+            self.changed_sound(5, format!("designing a new patch: {}", BELL_PATCHES[p].0));
+            self.say(format!("~ colour player designs a new patch: {}", BELL_PATCHES[p].0));
+        }
+    }
+
+    fn player_of(r: Role) -> usize {
+        match r {
+            Role::Bass => 1,
+            Role::Pad | Role::Comp => 3,
+            Role::Lead => 4,
+            Role::Colour => 5,
+        }
+    }
+
+    fn slot_on(&self, r: Role) -> bool {
+        self.slots.iter().any(|s| s.role == r && s.on)
+    }
+
+    /// Bandleader's tempo: follows the arrangement and mood, only on phrase
+    /// boundaries, always as a smooth ramp over 2-8 bars. Also feel moves.
+    fn tempo_phrase(&mut self, changed: bool) {
+        // feel (half / double time) — allowed even with a locked tempo
+        if self.feel_phrases > 0 {
+            self.feel_phrases -= 1;
+            if self.feel_phrases == 0 && self.feel != Feel::Normal {
+                self.feel = Feel::Normal;
+                self.say("~ drummer goes back to the straight feel".into());
+                self.think(2, "following", "back to the straight feel");
+            }
+        } else if self.on[2] && self.leader.breakdown == 0 {
+            let st = self.leader.state;
+            let p = if st == State::Alive { 0.12 } else { 0.07 };
+            if self.rng.chance(p) {
+                let f = if st == State::Alive && self.bpm < 100.0 && self.rng.chance(0.6) { Feel::Double } else { Feel::Half };
+                self.feel = f;
+                self.feel_phrases = 1 + self.rng.below(2) as u32;
+                let n = if f == Feel::Half { "half-time" } else { "double-time" };
+                self.say(format!("~ drummer switches to a {n} feel"));
+                self.think(2, "following", format!("{n} feel for a phrase or two"));
+            }
+        }
+        if self.bpm_lock || self.ramp_pos < self.ramp_len {
+            return;
+        }
+        let st = self.leader.state;
+        let (lo, hi) = match st {
+            State::Chill => (58.0, 76.0),
+            State::Awaken => (72.0, 96.0),
+            State::Alive => (90.0, 128.0),
+            State::Subside => ((self.bpm - 14.0).max(60.0), (self.bpm - 4.0).max(62.0)),
+        };
+        let outside = self.bpm < lo - 1.0 || self.bpm > hi + 1.0;
+        // let the run's random starting tempo breathe for a couple of phrases
+        if self.step < 16 * 4 * 2 && !changed {
+            return;
+        }
+        if !(changed || outside || self.rng.chance(0.25)) {
+            return;
+        }
+        let mood = (0.2 + 0.5 * self.leader.agitation + 0.3 * self.rng.f()).clamp(0.0, 1.0);
+        let mut to = (lo + (hi - lo) * mood).round();
+        // never more than ~24 bpm in one ramp
+        to = to.clamp(self.bpm - 24.0, self.bpm + 24.0);
+        let d = (to - self.bpm).abs();
+        if d < 3.0 {
+            return;
+        }
+        let bars = (2.0 + d / 4.0).clamp(2.0, 8.0).round() as u32;
+        self.bpm_from = self.bpm;
+        self.bpm_to = to;
+        self.ramp_len = bars * 16;
+        self.ramp_pos = 0;
+        self.say(format!("~ tempo {:.0} → {:.0} bpm over {bars} bars ({})", self.bpm, to, st.name()));
     }
 
     fn say(&mut self, m: String) {
@@ -534,6 +770,21 @@ impl Engine {
         let dt = if first { 0.0 } else { ((self.now - self.last_ctl) as f32 / self.sr).clamp(0.05, 3.0) };
         self.last_ctl = self.now;
         let req = self.leader.listen(&c.sig, dt, &mut msgs);
+        // each player's tied signal: a sharp rise can inspire a new sound
+        let (a, b) = (self.prev_sig, c.sig);
+        let spikes = [
+            (1, a.file, b.file, "disk/file activity spiked"),
+            (2, a.cpu, b.cpu, "the CPU spiked"),
+            (3, a.keyboard.max(a.mouse), b.keyboard.max(b.mouse), "someone started typing"),
+            (4, a.cores, b.cores, "more cores woke up"),
+            (5, a.net, b.net, "a network burst"),
+        ];
+        for (i, x0, x1, why) in spikes {
+            if x0 < 0.45 && x1 >= 0.6 {
+                self.inspire(i, format!("inspired by {why}"), 0.6);
+            }
+        }
+        self.prev_sig = c.sig;
         self.harm.warmth = c.warmth;
         if req.tension {
             self.harm.request_tension();
@@ -553,6 +804,11 @@ impl Engine {
                 if !self.guest_on || self.guest_hash != l.hash {
                     self.guest_hash = l.hash;
                     self.guest_semi = self.guest_pitch();
+                }
+                if !self.guest_on {
+                    let n = l.name.clone();
+                    self.inspire(5, format!("thread {n} sat in as a guest"), 0.4);
+                    self.inspire(4, format!("thread {n} sat in as a guest"), 0.25);
                 }
                 self.guest_on = true;
                 if self.ui.is_some() {
@@ -689,6 +945,15 @@ impl Engine {
     // ------------------------------------------------------------- the clock
 
     fn on_step(&mut self) {
+        if self.ramp_pos < self.ramp_len {
+            // smooth tempo ramp, one tiny change per step (the clock never jumps)
+            self.ramp_pos += 1;
+            let x = self.ramp_pos as f32 / self.ramp_len as f32;
+            let sm = x * x * (3.0 - 2.0 * x);
+            self.bpm = self.bpm_from + (self.bpm_to - self.bpm_from) * sm;
+            self.step_len = self.sr * 60.0 / self.bpm / 4.0;
+            self.dlen_target = ((self.step_len * 3.0) as usize).clamp(1, self.dl.len() - 1);
+        }
         let s = (self.step % 16) as usize;
         let bar = self.step / 16;
         self.step += 1;
@@ -742,6 +1007,8 @@ impl Engine {
             self.ind_freq = self.rng.range(1600.0, 4200.0);
             self.ind_target = if deliberate && !self.leader.chaos { 0.6 } else { 1.0 };
             self.band_say(format!("colour player brings in industrial noise ({bars} bar{})", if bars == 1 { "" } else { "s" }));
+            self.inspire(1, "heard the industrial noise".into(), 0.3);
+            self.inspire(2, "heard the industrial noise".into(), 0.15);
             let why = if self.leader.chaos { "the machine sounds chaotic" } else { "a deliberate colour move" };
             self.think(5, "soloing", format!("{why} → gated industrial noise for {bars} bar{}", if bars == 1 { "" } else { "s" }));
         }
@@ -765,7 +1032,12 @@ impl Engine {
             self.say(m);
         }
         let changed = before != self.leader.state;
+        self.tempo_phrase(changed);
         if changed {
+            let st = self.leader.state.name();
+            for i in 1..6 {
+                self.inspire(i, format!("inspired by the move to {st}"), 0.55);
+            }
             match self.leader.entry {
                 Some(Entry::Riser) if matches!(self.leader.state, State::Awaken | State::Alive) => {
                     self.riser_t = 0.0;
@@ -945,7 +1217,9 @@ impl Engine {
                 self.bell(semi as f32, 0.5, k as f32 * 0.15);
             }
         }
+        self.boredom();
         self.gm_manage();
+        self.patch_manage();
         // harmony
         self.bars_since_change += 1;
         let meander = self.meander();
@@ -955,6 +1229,16 @@ impl Engine {
             self.on_chord(ch.chord, note, false);
             if kc {
                 self.band_say(format!("key change -> {}", ch.key.name()));
+                let k = ch.key.name();
+                for i in 1..6 {
+                    self.inspire(i, format!("inspired by the modulation to {k}"), 0.5);
+                }
+            }
+        }
+        for e in std::mem::take(&mut self.harm.events) {
+            self.say(format!("~ {e}"));
+            for i in 1..6 {
+                self.inspire(i, "the band found a new home key".into(), 0.3);
             }
         }
     }
@@ -1008,9 +1292,9 @@ impl Engine {
                 t.on = false;
             }
         }
-        self.sub_target = Self::fold(c.root, -22, -11) as f32;
+        self.sub_target = Self::fold(c.root, -22 + self.reg, -11 + self.reg) as f32;
         if self.ui.is_some() {
-            let sub = self.note_name(Self::fold(c.root, -22, -11));
+            let sub = self.note_name(Self::fold(c.root, -22 + self.reg, -11 + self.reg));
             let why = match &note {
                 _ if self.meander() => "slow drift".to_string(),
                 _ => format!("{} voices, smooth", v.len()),
@@ -1093,13 +1377,13 @@ impl Engine {
     /// kind: 0 root, 1 fifth, 2 octave, 3 approach to next root
     fn bass_note(&mut self, kind: i32, vel: f32, att: f32, dec: f32) {
         let c = self.chord();
-        let root = Self::fold(c.root, -17, -6); // ~41-78 Hz
+        let root = Self::fold(c.root, -17 + self.reg, -6 + self.reg); // ~41-78 Hz
         let semi = match kind {
             1 => root + (c.fifth() - c.root).rem_euclid(12),
             2 => root + 12,
             3 => {
                 let next = self.harm.peek_next(self.meander());
-                let nr = Self::fold(next.root, -17, -6);
+                let nr = Self::fold(next.root, -17 + self.reg, -6 + self.reg);
                 nr + if self.rng.chance(0.5) { -1 } else { 2 }
             }
             _ => root,
@@ -1221,6 +1505,18 @@ impl Engine {
         if self.entry_wait > 0 || !self.on[2] {
             return;
         }
+        // half-time stretches the bar's pattern over two bars, double-time plays it twice
+        let s = match self.feel {
+            Feel::Normal => s,
+            Feel::Half => {
+                if s % 2 == 1 {
+                    return;
+                }
+                (bar % 2) as usize * 8 + s / 2
+            }
+            Feel::Double => (s * 2) % 16 + (s >= 8) as usize,
+        };
+        let s = s % 16;
         let [k, sn, h, a] = self.drum_pat;
         if k[s] > 0 {
             self.drum(36, k[s], swing);
@@ -1248,6 +1544,10 @@ impl Engine {
         self.kick_t = 0.0;
         self.kick_ph = 0.0;
         self.kick_amp = v.clamp(0.0, 1.0);
+        // patch is latched per hit, so a patch change never bends a ringing kick
+        let (_, kb, kd) = KICK_PATCHES[self.kick_patch];
+        self.kick_b = kb;
+        self.kick_d = kd;
     }
 
     // ----------------------------------------------------------------- keys
@@ -1341,6 +1641,8 @@ impl Engine {
             self.lead_calls += 1;
             if what == "new idea" {
                 self.band_say("lead starts a new melodic idea".into());
+                self.inspire(3, "heard the lead's new idea".into(), 0.3);
+                self.inspire(5, "heard the lead's new idea".into(), 0.2);
             }
             if self.ui.is_some() {
                 let st = if soloing { "soloing" } else if self.leader.trade { "trading" } else { "comping" };
@@ -1358,6 +1660,7 @@ impl Engine {
                 self.reply = Some((m, bar));
                 self.band_say("colour player answers the lead".into());
                 self.think(5, "trading", "heard the lead's call → answering it a 3rd up");
+                self.inspire(4, "liked the colour player's answer".into(), 0.25);
             }
         }
         if !calling {
@@ -1483,7 +1786,6 @@ impl Engine {
             allowed.push(Role::Bass);
         }
         let now = self.now;
-        let sr = self.sr as u64;
         for i in 0..self.slots.len() {
             let role = self.slots[i].role;
             let ok = allowed.contains(&role);
@@ -1505,7 +1807,8 @@ impl Engine {
                 sl.cur = ch;
                 sl.program = Some(p);
                 sl.on = true;
-                sl.next_rotate = now + sr * (20 + (self.rng.next() % 21) as u64);
+                let pl = Self::player_of(role);
+                self.since[pl] = now;
                 sl.recent.push_back(p);
                 if sl.recent.len() > 8 {
                     sl.recent.pop_front();
@@ -1532,14 +1835,13 @@ impl Engine {
                 }
                 self.pad_held.retain(|h| h.0 != chn);
                 self.say(format!("\u{2212} {} ({}) [{:?}]", GM_NAMES[p as usize], p, role));
-            } else if ok && self.slots[i].on && now >= self.slots[i].next_rotate {
+            } else if ok && self.slots[i].on && self.ready(Self::player_of(role)) {
                 // crossfade to a new instrument on the other (silent) channel
                 let s = &self.slots[i];
                 let other = 1 - s.cur;
                 let och = s.chans[other];
                 if !self.gm.as_ref().unwrap().silent(och, now) {
-                    self.slots[i].next_rotate = now + sr * 2;
-                    continue;
+                    continue; // try again next bar
                 }
                 let old_ch = s.chans[s.cur];
                 let old_p = s.program.unwrap_or(0);
@@ -1567,7 +1869,6 @@ impl Engine {
                 let sl = &mut self.slots[i];
                 sl.cur = other;
                 sl.program = Some(p);
-                sl.next_rotate = now + sr * (20 + (self.rng.next() % 21) as u64);
                 sl.recent.push_back(p);
                 if sl.recent.len() > 8 {
                     sl.recent.pop_front();
@@ -1577,6 +1878,10 @@ impl Engine {
                     self.recent_global.pop_front();
                 }
                 self.say(format!("+ {} ({})  \u{2212} {} ({}) [{:?}]", GM_NAMES[p as usize], p, GM_NAMES[old_p as usize], old_p, role));
+                let pl = Self::player_of(role);
+                let nm = GM_NAMES[p as usize].to_lowercase();
+                let art = if nm.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
+                self.changed_sound(pl, format!("picking up {art} {nm}"));
             }
         }
     }
@@ -1598,12 +1903,13 @@ impl Engine {
             m
         });
         let (l, r) = pan(self.rng.bi() * 0.8);
-        let dec = 0.6 + self.rng.f() * 1.2;
+        let (_, ratio, cents, dscale) = BELL_PATCHES[self.bell_patch];
+        let dec = (0.6 + self.rng.f() * 1.2) * dscale;
         let a = gain * (0.6 + 0.4 * self.rng.f());
         let b = &mut self.bells[idx];
         b.on = true;
-        b.inc1 = f * (3.0f32 / 1200.0).exp2() / sr;
-        b.inc2 = f * (-3.0f32 / 1200.0).exp2() / sr;
+        b.inc1 = f * (cents / 1200.0).exp2() / sr;
+        b.inc2 = f * ratio * (-cents / 1200.0).exp2() / sr;
         b.amp = a;
         b.att = 0.0;
         b.dec = (-1.0 / (sr * dec)).exp();
@@ -1741,6 +2047,9 @@ impl Engine {
         let ui_on = self.ui.is_some();
         let sr = self.sr;
         let mut fi = 0;
+        // bass patch changes glide over ~0.5 s (no timbre jumps)
+        self.bass_saw += (self.bass_saw_t - self.bass_saw) * 0.08;
+        self.bass_drive += (self.bass_drive_t - self.bass_drive) * 0.08;
         while fi < frames {
             let n = CHUNK.min(frames - fi);
             // clock: steps fall on chunk boundaries (~1.5 ms resolution)
@@ -1805,7 +2114,11 @@ impl Engine {
                         self.bass_env *= self.bass_dec;
                     }
                     let e = self.bass_env;
-                    let raw = saw(self.bass_ph, self.bass_inc) * 0.35 + sine(tbl, self.bass_ph) * 0.9;
+                    let mut raw = saw(self.bass_ph, self.bass_inc) * self.bass_saw + sine(tbl, self.bass_ph) * 0.9;
+                    let w = ((self.bass_drive - 1.0) / 1.2).clamp(0.0, 1.0);
+                    if w > 0.0 {
+                        raw = raw * (1.0 - w) + (raw * self.bass_drive).tanh() / self.bass_drive.sqrt() * w;
+                    }
                     adv(&mut self.bass_ph, self.bass_inc);
                     bass = self.bass_f.run(raw).0 * e * 0.3;
                 }
@@ -1813,8 +2126,8 @@ impl Engine {
                 let mut kick = 0.0;
                 if self.kick_on {
                     let t = self.kick_t;
-                    let kf = 45.0 + 90.0 * (-t / 0.035).exp();
-                    kick = sine(tbl, self.kick_ph) * self.kick_amp * (-t / 0.28).exp();
+                    let kf = self.kick_b + 90.0 * (-t / 0.035).exp();
+                    kick = sine(tbl, self.kick_ph) * self.kick_amp * (-t / self.kick_d).exp();
                     self.kick_ph = (self.kick_ph + kf / sr) % 1.0;
                     self.kick_t += 1.0 / sr;
                     if t > 1.2 {
@@ -1912,12 +2225,18 @@ impl Engine {
                 };
                 // fx
                 let dly_in = (bl + br) * 0.5 + (gl + gr) * 0.3;
-                let dl = self.dl[self.di];
-                let drr = self.dr[self.di];
+                // echo time follows the tempo, gliding one sample at a time (tape-like, no clicks)
+                if self.dlen != self.dlen_target && (self.now as usize + j) % 4 == 0 {
+                    if self.dlen < self.dlen_target { self.dlen += 1 } else { self.dlen -= 1 }
+                }
+                let dn = self.dl.len();
+                let rd = (self.di + dn - self.dlen) % dn;
+                let dl = self.dl[rd];
+                let drr = self.dr[rd];
                 self.dl[self.di] = dly_in + drr * 0.4;
                 self.dr[self.di] = dl * 0.85;
                 self.di += 1;
-                if self.di == self.dl.len() {
+                if self.di == dn {
                     self.di = 0;
                 }
                 let send = (pl + pr) * 0.25 + (bl + br) * 0.6 + (dl + drr) * 0.5 + (ml + mr) * 0.3 + (gl + gr) * 0.3 + (cl + cr) * 0.3 + ris;

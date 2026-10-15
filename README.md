@@ -4,11 +4,14 @@ A jam band of machine musicians playing your Linux system. Six autonomous
 players (drone, bassist, drummer, keys, lead, colour/FX) listen to CPU,
 cores, network, disk writes, file activity and screen colour, and to each other.
 A loose bandleader moves the arrangement through **chilling → awakening →
-alive → subsiding**. Chords keep moving even on an idle machine, and General
-MIDI instruments rotate in and out. Under everything sits a continuous deep
-sub drone and bass. No two runs are the same unless you pass `--seed`.
+alive → subsiding**. Chords keep moving even on an idle machine. Every run
+starts in a random key (any of the 12 roots, major or minor) at a random tempo
+(60–100 bpm). The tempo then breathes with the arrangement and the key wanders
+around the circle of fifths. Players pick up a new General MIDI instrument or
+design a new synth patch whenever something inspires them. Under everything sits
+a continuous deep sub drone and bass. No two runs are the same unless you pass `--seed`.
 
-(Formerly developed under the working name *sysmusic*.) Listen: [`docs/sample.mp3`](docs/sample.mp3) is a 75 s demo at 192 kbps. It starts calm with no hiss, then hits chaos (CPU + network + disk load plus simulated fast typing), where a short burst of industrial noise comes in, then settles again. Its verbose log is `docs/sample-render.log`.
+(Formerly developed under the working name *sysmusic*.) Listen: [`docs/sample.mp3`](docs/sample.mp3) is a 75 s demo at 192 kbps. It starts calm with no hiss, then hits chaos (CPU + network + disk load plus simulated fast typing), where a short burst of industrial noise comes in, then settles again. Its verbose log is `docs/sample-render.log`. [`docs/sample-tempo.mp3`](docs/sample-tempo.mp3) is a 90 s demo (seed 5, made with `tools/demo_tempo.sh`). It starts in A major at 84 bpm, and the tempo eases down to 71 while the band is chilling. Under load the band comes alive, ramps up to 95 bpm and modulates to D minor; when the load stops it subsides to 86 bpm. Its log is `docs/sample-tempo-render.log`.
 
 ![sysjam's live terminal UI](docs/tui.png)
 
@@ -31,8 +34,8 @@ loaded at run time with `dlopen`, so it starts even when one of them is missing.
 |---|---|
 | `--volume V` | master 0–1 (default 0.6) |
 | `--sub L` | sub-drone level 0–2 (default 1.2). The sub is never high-passed; a gentle limiter guards the output |
-| `--scale minor\|major`, `--root NOTE` | starting key (default A2 minor). Older scale names still work: dorian etc. map to minor, lydian etc. to major |
-| `--bpm N` | tempo (default 80) |
+| `--scale minor\|major`, `--root NOTE` | home key. Default: random each run (all 12 roots, major or minor, root in D#2–D3). Given flags are used exactly. Older scale names still work: dorian etc. map to minor, lydian etc. to major |
+| `--bpm N` | lock the tempo at N. Default: a random start of 60–100 bpm, after which the bandleader moves it |
 | `--chord-bars N` | base bars per chord (default 2). Chilling stretches this, peaks tighten it |
 | `--seed N` | repeat a run exactly (same input → same music) |
 | `--soundfont PATH`, `--no-gm`, `--gm-layers N` | General MIDI layer (see below); N = 1–4 simultaneous layers (default 3, +1 at peaks) |
@@ -51,18 +54,22 @@ crossterm) that shows how the band is thinking. Piped or redirected output, or
 `--no-tui`, gives the plain log instead.
 
 - **Header**: key, the chord progression with roman numerals (past chords dim,
-  the current chord highlighted, the planned ones after it), tempo, bar and beat,
+  the current chord highlighted, the planned ones after it), the home key when the
+  band is away from it, e.g. `D minor (home A major)`, the tempo with an arrow while it is
+  ramping (`105→98 bpm`; `(locked)` with `--bpm`), any half-time or double-time feel, bar and beat,
   the arrangement state (chilling / awakening / alive / subsiding) and the
   bandleader's energy and agitation meters.
 - **The band**: one panel per member: drone, bassist, drummer, keys, lead,
   colour/FX, plus the guest voice when a busy thread sits in. Each panel shows:
   - the member's status: laying out, comping, following, soloing or trading;
-  - an activity meter and the current GM instrument;
+  - an activity meter and the current GM instrument or synth patch;
   - a "thinking" line explaining the latest decision, e.g. `heard a network burst (98%) → adding shimmer`,
     `resolving the motif to the root (A4), then resting`,
     `kicks follow the bassist's syncopations`, or
-    `thread make at 100% cpu sits in → long E5`;
-  - the notes it played in the last few seconds.
+    `thread make at 100% cpu sits in → long E5`, or why it picked up a new sound,
+    e.g. `inspired by the modulation to D minor → picking up a fifths lead`;
+  - the notes it played in the last few seconds, plus the machine signal it is tied
+    to (`⇢ net 98%`) and its personality (`curious 0.4 eager 0.5 busy 0.6`).
 - **Machine**: CPU, busy cores, network, disk writes, file churn, keyboard and
   mouse rates, each with a sparkline of the last two minutes. Below them sit a
   swatch of the sampled screen colour and the busiest threads.
@@ -119,7 +126,25 @@ In chilling the band "meanders" through a Markov graph built from the same templ
 
 About 13% of phrases take a **detour**:
 - a secondary dominant (V/x), a borrowed chord (bVI, bVII, iv in major; IV or V in minor), or a colour phrase (sus2/sus4/add9/7ths);
-- an occasional **modulation**, either to the relative key via a pivot chord or by a fifth up or down via pivot → V7 → new tonic. After a few phrases away the band is pulled back home. Screen colour biases the new key's mode: warm/bright screens favour major, cool/dark favour minor.
+- an occasional **modulation**: to the relative key via a pivot chord, to the parallel major or minor, or a fifth up or down around the circle of fifths via pivot → V7 → new tonic. Screen colour biases the new key's mode: warm/bright screens favour major, cool/dark favour minor.
+
+**The home key isn't sacred.** Once a new key has lasted about 3 phrases, it can
+become the new home (40% chance per phrase). The band then confirms it with a
+V7 → I cadence and logs `~ new home key: D major (was A major)`. The pull back to
+the old home is weak and builds only after about 6 phrases away. Over a long session
+the key wanders.
+
+**The tempo breathes.** At phrase boundaries the bandleader may set a new
+target tempo, depending on the arrangement state and its agitation:
+
+| state | tempo range |
+|---|---|
+| chilling | 58–76 bpm |
+| awakening | 72–96 bpm |
+| alive | 90–128 bpm |
+| subsiding | drifts 4–14 bpm lower per move |
+
+The tempo never jumps. It ramps smoothly over 2–8 bars (at most 24 bpm per ramp), one tiny step-length change per sixteenth, so the step clock stays glitch-free. The echo time follows the tempo, gliding one sample at a time. Sometimes the drummer plays a phrase or two in **half-time** or **double-time** feel. `--bpm N` locks the tempo; feel moves still happen.
 
 The voicing keeps common tones and moves the other voices by the smallest
 interval. The bass follows chord roots; shimmer, arps and the lead use chord
@@ -157,7 +182,19 @@ one hint line: `sudo apt install fluid-soundfont-gm` (FluidR3, 140 MB, sounds
 better than TimGM6mb).
 
 Picks are weighted across all 128 programs plus the drum kit.
-- 2–4 layers are active (pad, comp/keys, lead, colour, and sometimes a GM bass). Each layer rotates every 20–40 s with a CC11 crossfade between a pair of channels.
+- 2–4 layers are active (pad, comp/keys, lead, colour, and sometimes a GM bass).
+- There is no fixed rotation. A player picks up a new instrument when something **inspires** it:
+  - a state change (e.g. awakening → alive);
+  - a key change, or the band settling into a new home key;
+  - its tied signal spiking (bassist: disk/files, drummer: CPU, keys: keyboard/mouse, lead: busy cores, colour: network);
+  - hearing another player do something interesting: the lead's new idea, the colour player's answer, industrial noise, or a guest thread sitting in;
+  - boredom, which grows with time on the same sound and comes faster for players with a high *curiosity* trait.
+- Each sound stays at least 8–10 s, and a player isn't open to new inspiration for 15 s after a change.
+- Swaps are crossfaded (CC11, 5–12 s) to the other channel of the player's pair. Held pad notes are re-struck on the new channel and released on the old one after its fade, so notes are never cut off. The reason shows in the TUI, e.g. `inspired by the move to subsiding → picking up a banjo`.
+- Oscillator players design new **synth patches** the same way:
+  - bassist: round sine / warm saw / growl / soft pluck, gliding over about 0.5 s;
+  - drummer: deep / tight / boomy kick, latched per hit;
+  - colour/lead bells: glass, octave chimes, metal, detuned soft, applied to new notes only.
 - Program changes only happen on a channel that has been silent for 4 s.
 - CC7 sets per-program gain, so odd programs (FX, helicopter, gunshot…) play quieter and rarer.
 - Velocities are humanised.
@@ -249,7 +286,7 @@ interrupts it. Capture runs on its own nice-15 thread, so it can never block aud
 ```
 instruments: /usr/share/sounds/sf2/FluidR3_GM.sf2      (or ./TimGM6mb.sf2)
 audio: ALSA 'default' 44100 Hz stereo
-sysjam playing: root A2 minor, seed 734912055  (Ctrl-C to fade out)
+sysjam playing: root F2 major, 87 bpm, seed 734912055  (Ctrl-C to fade out)
 ```
 On a Wayland desktop the system **screen-share dialog** opens. Pick the monitor
 and allow it. The music is already playing while the dialog is open. Then:
@@ -274,6 +311,7 @@ Measured exactly (schedstat, all threads) on an 8-vCPU Xeon VM:
 | idle, `--no-gm` | 1.47% | 3.7 MB |
 | idle, TimGM6mb, input tracking on (/proc/interrupts) vs `--no-input` | 1.87% vs 1.63% (difference within run-to-run noise) | 10 MB |
 | 75 s chaos demo (`tools/demo_short.sh`) | 2.15% | |
+| 90 s tempo/key demo (`tools/demo_tempo.sh`: random key + tempo, 40 s of stress-ng/downloads/direct writes/typing), incl. WAV writing | 2.36% | |
 | 3-min demo under heavy load (stress-ng, ~50 MB/s downloads, ~500 MB/s direct writes), incl. WAV writing | 2.50% | |
 | offline engine only, alive state | ~1.7% | |
 | idle, FluidR3, **live terminal UI on** vs `--no-tui` (same seed, side by side, 120 s, /proc utime+stime) | 2.22% vs 1.89% (the UI thread itself: 0.27%) | |

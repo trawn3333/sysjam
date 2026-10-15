@@ -4,6 +4,7 @@
 *.raw
 *.log
 !docs/sample-render.log
+!docs/sample-tempo-render.log
 __pycache__/
 *.pyc
 .DS_Store

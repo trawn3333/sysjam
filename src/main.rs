@@ -43,10 +43,10 @@ USAGE: sysjam [OPTIONS]
 
   --volume V          master volume 0.0-1.0 (default 0.6)
   --sub L             sub drone level 0-2 (default 1.2)
-  --scale NAME        starting key flavour: minor (default) or major
+  --scale NAME        home key flavour: minor or major (default: random each run)
                       (minor-pentatonic, dorian, ... map to minor; major-pentatonic, lydian, ... to major)
-  --root NOTE         root note or Hz, e.g. A2 (default), C3, 98
-  --bpm N             tempo (default 80)
+  --root NOTE         home key root, note or Hz, e.g. A2, C3, 98 (default: random of all 12)
+  --bpm N             lock the tempo (default: random start 60-100, then it follows the band)
   --chord-bars N      base bars per chord (default 2; chilling plays slower, peaks faster)
   --seed N            reproducible run (instrument picks, motifs, voicings, personalities)
   --soundfont PATH    General MIDI .sf2 to use (default: search system paths, then next to the binary)
@@ -69,6 +69,10 @@ USAGE: sysjam [OPTIONS]
   -h, --help          this help
 
 Ctrl-C fades out and exits (press twice to quit immediately).";
+
+fn dsp_rng(seed: u64) -> dsp::Rng {
+    dsp::Rng::seeded(seed ^ 0x5354_4152_54)
+}
 
 fn die(msg: &str) -> ! {
     eprintln!("sysjam: {msg}\n(see --help)");
@@ -99,9 +103,9 @@ fn main() {
     let mut volume = 0.6f32;
     let mut no_screen = false;
     let mut no_input = false;
-    let mut scale = music::find_scale("minor-pentatonic").unwrap();
-    let mut root = 110.0f32;
-    let mut bpm = 80.0f32;
+    let mut scale: Option<&'static music::ScalePair> = None;
+    let mut root: Option<f32> = None;
+    let mut bpm: Option<f32> = None;
     let mut clicks = 0.25f32;
     let mut sub = 1.2f32;
     let mut chord_bars = 2u32;
@@ -132,13 +136,13 @@ fn main() {
             "--no-input" => no_input = true,
             "--scale" => {
                 let s = val(&mut i);
-                scale = music::find_scale(&s).unwrap_or_else(|| die(&format!("unknown scale {s}")))
+                scale = Some(music::find_scale(&s).unwrap_or_else(|| die(&format!("unknown scale {s}"))))
             }
             "--root" => {
                 let s = val(&mut i);
-                root = music::parse_root(&s).unwrap_or_else(|| die(&format!("bad root {s}")))
+                root = Some(music::parse_root(&s).unwrap_or_else(|| die(&format!("bad root {s}"))))
             }
-            "--bpm" => bpm = num(val(&mut i), "--bpm").clamp(30.0, 200.0),
+            "--bpm" => bpm = Some(num(val(&mut i), "--bpm").clamp(30.0, 200.0)),
             "--clicks" => clicks = num(val(&mut i), "--clicks").clamp(0.0, 1.0),
             "--verbose" | "-v" => verbose = true,
             "--no-tui" => no_tui = true,
@@ -193,6 +197,16 @@ fn main() {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1);
         (t ^ ((std::process::id() as u64) << 32)) % 1_000_000_000
     });
+    // Random home key and tempo per run (reproducible with --seed); flags override exactly.
+    let mut pick = dsp_rng(seed);
+    let bpm_lock = bpm.is_some();
+    let bpm = bpm.unwrap_or_else(|| (60.0 + pick.f() * 40.0).round());
+    let scale = scale.unwrap_or_else(|| music::find_scale(if pick.chance(0.5) { "major-pentatonic" } else { "minor-pentatonic" }).unwrap());
+    let root = root.unwrap_or_else(|| {
+        // any of the 12 roots, in the octave D#2..D3 (the sub then sits at ~31-58 Hz)
+        let midi = 39 + pick.below(12) as i32;
+        440.0 * ((midi - 69) as f32 / 12.0).exp2()
+    });
     // snap the root to the nearest equal-tempered note so GM instruments stay in tune
     let root = 440.0 * (((69.0 + 12.0 * (root / 440.0).log2()).round() - 69.0) / 12.0).exp2();
     let minor = !scale.default_bright;
@@ -236,6 +250,7 @@ fn main() {
             sub,
             tx,
             ui,
+            bpm_lock,
         })
     };
     if bench {
@@ -341,9 +356,11 @@ fn main() {
         _ => None,
     };
     say!(
-        "sysjam playing: root {} {}, seed {}{}  (Ctrl-C to fade out)",
+        "sysjam playing: root {} {}, {:.0} bpm{}, seed {}{}  (Ctrl-C to fade out)",
         music::note_name(root),
         if minor { "minor" } else { "major" },
+        bpm,
+        if bpm_lock { " (locked)" } else { "" },
         seed,
         if synth.has_gm() { "" } else { ", oscillators only" }
     );
