@@ -1,0 +1,115 @@
+instruments: dist/TimGM6mb.sf2
+rendering to dist/sample.wav (real time, 180s)
+sysjam playing: root A2 minor, seed 2026  (Ctrl-C to fade out)
+screen colour: X11, one tiny sample every 4s
+Key: A minor | Am
+[    0s] cpu   0% cores 0/8 | net 0B/s | write 0B/s | fds 0/s | screen hue 224 bri 0.19 warm -0.67 | signals cpu 0.00 net 0.00 file 0.00 | guest: -
+[    5s] cpu   2% cores 0/8 | net 4kB/s | write 188kB/s | fds 0/s | screen hue 224 bri 0.19 warm -0.67 | signals cpu 0.05 net 0.00 file 0.00 | guest: -
++ Synth Strings 1 (50) [Pad]
++ Woodblock (115) [Colour]
+[   10s] cpu   2% cores 0/8 | net 594B/s | write 184kB/s | fds 0/s | screen hue 224 bri 0.19 warm -0.67 | signals cpu 0.05 net 0.00 file 0.00 | guest: -
+Key: A minor | Am → E   (borrowed E)
+[   15s] cpu   1% cores 0/8 | net 4kB/s | write 172kB/s | fds 0/s | screen hue 224 bri 0.19 warm -0.67 | signals cpu 0.07 net 0.00 file 0.00 | guest: -
+[   20s] cpu   1% cores 0/8 | net 528B/s | write 192kB/s | fds 0/s | screen hue 224 bri 0.19 warm -0.67 | signals cpu 0.06 net 0.06 file 0.03 | guest: -
+[   25s] cpu   1% cores 0/8 | net 4kB/s | write 180kB/s | fds 0/s | screen hue 224 bri 0.19 warm -0.67 | signals cpu 0.05 net 0.01 file 0.01 | guest: -
+Key: A minor | Am → E → Em7
+[   30s] cpu   1% cores 0/8 | net 396B/s | write 209kB/s | fds 0/s | screen hue 224 bri 0.19 warm -0.67 | signals cpu 0.05 net 0.00 file 0.00 | guest: -
++ Polysynth Pad (90)  − Synth Strings 1 (50) [Pad]
+[   35s] cpu 100% cores 8/8 | net 4kB/s | write 200kB/s | fds 0/s | screen hue 224 bri 0.19 warm -0.67 | signals cpu 0.64 net 0.00 file 0.05 | guest: -
++ FX Soundtrack (97)  − Woodblock (115) [Colour]
+[   40s] cpu 100% cores 8/8 | net 10kB/s | write 192kB/s | fds 0/s | screen hue 224 bri 0.19 warm -0.67 | signals cpu 0.93 net 0.01 file 0.01 | guest: -
+~ sustained CPU spike -> tension
+Key: A minor | Am → E → Em7 → E7   (tension: E7 (V7))
+♪ singing: stress-ng-cpu (100% cpu for >10s) -> lead (E4)
+[   45s] cpu 100% cores 8/8 | net 4kB/s | write 188kB/s | fds 32/s | screen hue 224 bri 0.19 warm -0.67 | signals cpu 0.99 net 0.00 file 0.10 | guest: stress-ng-cpu (97%)
+~ chilling -> alive (energy 0.44)
+drummer joins
+lead joins
+bassist starts a groove
++ Electric Piano 2 (5) [Comp]
++ Recorder (74) [Lead]
++ Fretless Bass (35) [Bass]
+[   50s] cpu  67% cores 6/8 | net 83.6MB/s | write 609.9MB/s | fds 384/s | screen hue 224 bri 0.19 warm -0.67 | signals cpu 0.88 net 0.49 file 0.65 | guest: stress-ng-cpu (78%)
+[   55s] cpu  66% cores 6/8 | net 68.4MB/s | write 465.1MB/s | fds 384/s | screen hue 224 bri 0.19 warm -0.67 | signals cpu 0.78 net 0.83 file 0.92 | guest: stress-ng-cpu (40%)
+~ big I/O burst -> modulation
+Key: A minor | E → Em7 → E7 → Am
+[   60s] cpu  66% cores 6/8 | net 86.5MB/s | write 515.9MB/s | fds 384/s | screen hue 224 bri 0.19 warm -0.67 | signals cpu 0.75 net 0.64 file 0.95 | guest: stress-ng-cpu (16%)
+Key: A minor | Em7 → E7 → Am → Asus2
+lead starts a new melodic idea
++ Choir Aahs (52)  − Polysynth Pad (90) [Pad]
+Key: A minor | E7 → Am → Asus2 → Dm7
+[   65s] cpu  68% cores 7/8 | net 135.7MB/s | write 998.1MB/s | fds 352/s | screen hue 224 bri 0.19 warm -0.67 | signals cpu 0.76 net 0.93 file 0.99 | guest: stress-ng-cpu (8%)
+Key: A minor | Am → Asus2 → Dm7 → G   (modulation: pivot G)
+  quiet:   stress-ng-cpu (held 26s)
+[   70s] cpu  65% cores 6/8 | net 46.1MB/s | write 116.0MB/s | fds 384/s | screen hue 224 bri 0.19 warm -0.67 | signals cpu 0.74 net 0.63 file 0.97 | guest: -
+Key: A minor | Asus2 → Dm7 → G → A7
+[   75s] cpu  69% cores 7/8 | net 151.9MB/s | write 1043.2MB/s | fds 768/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.75 net 0.78 file 0.99 | guest: -
++ Ocarina (79)  − Recorder (74) [Lead]
++ Choir Pad (91)  − FX Soundtrack (97) [Colour]
+Key: D major | Dm7 → G → A7 → D   (modulation: A minor -> D major)
+key change -> D major
+colour player answers the lead
+[   80s] cpu  65% cores 5/8 | net 50.7MB/s | write 314.7MB/s | fds 704/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.74 net 0.61 file 0.96 | guest: -
+~ sustained CPU spike -> tension
+Key: D major | G → A7 → D → F   (tension: borrowed F)
+[   85s] cpu  69% cores 7/8 | net 128.2MB/s | write 1088.9MB/s | fds 736/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.75 net 0.78 file 0.99 | guest: -
++ String Ensemble 2 (49)  − Choir Aahs (52) [Pad]
++ Acoustic Grand Piano (0)  − Electric Piano 2 (5) [Comp]
+Key: D major | A7 → D → F → G
+♪ singing: stress-ng-cpu (101% cpu for >10s) -> lead (E4)
+[   90s] cpu  63% cores 5/8 | net 9.6MB/s | write 18.9MB/s | fds 704/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.74 net 0.56 file 0.95 | guest: stress-ng-cpu (101%)
++ Acoustic Bass (32)  − Fretless Bass (35) [Bass]
+Key: D major | D → F → G → D
+Key: D major | F → G → D → A
+[   95s] cpu  69% cores 7/8 | net 101.6MB/s | write 1060.0MB/s | fds 384/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.75 net 0.77 file 0.97 | guest: stress-ng-cpu (100%)
++ FX Goblins (101)  − Choir Pad (91) [Colour]
+Key: D major | G → D → A → Bm
+Key: D major | D → A → Bm → Dsus2   (colour phrase)
+[  100s] cpu  64% cores 5/8 | net 10.4MB/s | write 142.6MB/s | fds 384/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.74 net 0.56 file 0.97 | guest: stress-ng-cpu (100%)
++ Chiff Lead (83)  − Ocarina (79) [Lead]
+[  105s] cpu  70% cores 8/8 | net 119.5MB/s | write 980.6MB/s | fds 416/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.77 net 0.92 file 1.00 | guest: stress-ng-cpu (100%)
+Key: D major | A → Bm → Dsus2 → A
+bandleader calls a key change
+[  110s] cpu  60% cores 5/8 | net 0B/s | write 164kB/s | fds 768/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.73 net 0.25 file 0.96 | guest: stress-ng-cpu (101%)
+Key: D major | Bm → Dsus2 → A → Bm
+Key: D major | Dsus2 → A → Bm → Gsus4
+[  115s] cpu   1% cores 0/8 | net 2kB/s | write 180kB/s | fds 0/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.18 net 0.06 file 0.22 | guest: stress-ng-cpu (52%)
++ Seashore (122)  − FX Goblins (101) [Colour]
+  quiet:   stress-ng-cpu (held 30s)
+[  120s] cpu  11% cores 1/8 | net 7.7MB/s | write 147kB/s | fds 0/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.21 net 0.26 file 0.07 | guest: -
++ Picked Bass (34)  − Acoustic Bass (32) [Bass]
+Key: D major | A → Bm → Gsus4 → G   (modulation: pivot G)
++ Bowed Pad (92)  − String Ensemble 2 (49) [Pad]
+[  125s] cpu   1% cores 0/8 | net 2kB/s | write 172kB/s | fds 0/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.08 net 0.05 file 0.01 | guest: -
++ Banjo (105)  − Acoustic Grand Piano (0) [Comp]
+Key: D major | Bm → Gsus4 → G → E7
+[  130s] cpu   1% cores 0/8 | net 396B/s | write 147kB/s | fds 0/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.06 net 0.01 file 0.10 | guest: -
+~ back to idle -> resolve to tonic
++ Fiddle (110)  − Chiff Lead (83) [Lead]
+Key: A minor | Gsus4 → G → E7 → Am   (modulation: D major -> A minor)
+key change -> A minor
+[  135s] cpu   1% cores 0/8 | net 2kB/s | write 213kB/s | fds 32/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.05 net 0.00 file 0.12 | guest: -
+Key: A minor | G → E7 → Am → E7   (cadence V7)
+[  140s] cpu   1% cores 0/8 | net 15kB/s | write 188kB/s | fds 0/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.05 net 0.03 file 0.02 | guest: -
+Key: A minor | E7 → Am → E7 → Am   (resolves to tonic)
+~ alive -> subsiding (energy 0.17)
+− Fiddle (110) [Lead]
+[  145s] cpu   1% cores 0/8 | net 3kB/s | write 369kB/s | fds 0/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.07 net 0.01 file 0.23 | guest: -
+Key: A minor | Am → E7 → Am → Dm
+[  150s] cpu   1% cores 0/8 | net 396B/s | write 180kB/s | fds 0/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.05 net 0.00 file 0.17 | guest: -
++ FX Brightness (100)  − Bowed Pad (92) [Pad]
++ Marimba (12)  − Banjo (105) [Comp]
++ Synth Bass 2 (39)  − Picked Bass (34) [Bass]
+Key: A minor | E7 → Am → Dm → Em
+[  155s] cpu   1% cores 0/8 | net 2kB/s | write 172kB/s | fds 0/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.06 net 0.00 file 0.09 | guest: -
+bassist starts pulsing on the roots
++ Bird Tweet (123)  − Seashore (122) [Colour]
+− Synth Bass 2 (39) [Bass]
+[  160s] cpu   2% cores 0/8 | net 264B/s | write 147kB/s | fds 0/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.06 net 0.00 file 0.02 | guest: -
+Key: A minor | Am → Dm → Em → Am(add9)
+[  165s] cpu   1% cores 0/8 | net 2kB/s | write 213kB/s | fds 0/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.05 net 0.00 file 0.05 | guest: -
+[  170s] cpu   1% cores 0/8 | net 396B/s | write 172kB/s | fds 0/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.05 net 0.00 file 0.05 | guest: -
+Key: A minor | Dm → Em → Am(add9) → E7   (cadence V7)
+colour player answers the lead
+[  175s] cpu   2% cores 0/8 | net 2kB/s | write 188kB/s | fds 0/s | screen hue 29 bri 0.61 warm +1.00 | signals cpu 0.05 net 0.00 file 0.01 | guest: -
+bye.

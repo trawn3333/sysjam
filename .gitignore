@@ -1,0 +1,11 @@
+/target/
+/dist/
+*.wav
+*.raw
+*.log
+!docs/sample-render.log
+__pycache__/
+*.pyc
+.DS_Store
+*.swp
+*~
