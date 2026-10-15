@@ -61,6 +61,9 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 static ROOT_PC: AtomicI32 = AtomicI32::new(9);
 /// spell with sharps (follows the current key signature)
 static USE_SHARPS: AtomicBool = AtomicBool::new(false);
+/// C major / A minor: usual chromatic spellings (C# Eb F# G# Bb)
+static NATURAL: AtomicBool = AtomicBool::new(true);
+const NATURALS: [&str; 12] = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "G#", "A", "Bb", "B"];
 pub fn set_root_pc(midi: i32) {
     ROOT_PC.store(midi.rem_euclid(12), Ordering::Relaxed);
 }
@@ -69,18 +72,44 @@ fn spell_for(key: &Key) {
     let c = (key.tonic + ROOT_PC.load(Ordering::Relaxed)).rem_euclid(12);
     let maj = if key.minor { (c + 3) % 12 } else { c };
     USE_SHARPS.store(matches!(maj, 7 | 2 | 9 | 4 | 11 | 6), Ordering::Relaxed);
+    NATURAL.store(maj == 0, Ordering::Relaxed);
 }
 
 /// pitch class relative to the global root (A = 0) -> name
 pub fn pc_name(pc: i32) -> &'static str {
     let i = (pc + ROOT_PC.load(Ordering::Relaxed)).rem_euclid(12) as usize;
-    if USE_SHARPS.load(Ordering::Relaxed) { SHARPS[i] } else { FLATS[i] }
+    if NATURAL.load(Ordering::Relaxed) {
+        NATURALS[i]
+    } else if USE_SHARPS.load(Ordering::Relaxed) {
+        SHARPS[i]
+    } else {
+        FLATS[i]
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Chord {
     pub root: i32, // pitch class relative to global root, 0..11
     pub q: Q,
+}
+
+/// Roman numeral of `c` in `key` (b/# for non-diatonic roots, lower case for minor).
+pub fn roman_of(c: Chord, key: Key) -> String {
+    const R: [&str; 12] = ["I", "bII", "II", "bIII", "III", "IV", "#IV", "V", "bVI", "VI", "bVII", "VII"];
+    const RM: [&str; 12] = ["I", "bII", "II", "III", "#III", "IV", "#IV", "V", "VI", "#VI", "VII", "#VII"];
+    let d = (c.root - key.tonic).rem_euclid(12) as usize;
+    let base = if key.minor { RM[d] } else { R[d] };
+    let mut r = if c.q.minorish() { base.to_lowercase() } else { base.to_string() };
+    r.push_str(match c.q {
+        Q::Dim => "\u{b0}",
+        Q::Dom7 | Q::Min7 => "7",
+        Q::Maj7 => "maj7",
+        Q::Sus2 => "sus2",
+        Q::Sus4 => "sus4",
+        Q::Add9 | Q::MinAdd9 => "add9",
+        _ => "",
+    });
+    r
 }
 
 impl Chord {
@@ -116,10 +145,11 @@ impl Key {
         o
     }
     pub fn name(&self) -> String {
-        let prev = USE_SHARPS.load(Ordering::Relaxed);
+        let prev = (USE_SHARPS.load(Ordering::Relaxed), NATURAL.load(Ordering::Relaxed));
         spell_for(self);
         let n = format!("{} {}", pc_name(self.tonic), if self.minor { "minor" } else { "major" });
-        USE_SHARPS.store(prev, Ordering::Relaxed);
+        USE_SHARPS.store(prev.0, Ordering::Relaxed);
+        NATURAL.store(prev.1, Ordering::Relaxed);
         n
     }
     /// pentatonic subset (for sparse melodic material)
@@ -300,6 +330,11 @@ impl Harmony {
             self.plan(meander);
         }
         self.queue.front().map(|c| c.0).unwrap_or(self.cur)
+    }
+
+    /// chords already planned for this phrase (for display)
+    pub fn upcoming(&self, n: usize) -> Vec<Chord> {
+        self.queue.iter().take(n).map(|c| c.0).collect()
     }
 
     fn colourise(&mut self, c: Chord, p: f32) -> Chord {

@@ -10,15 +10,18 @@ sub drone and bass. No two runs are the same unless you pass `--seed`.
 
 (Formerly developed under the working name *sysmusic*.) Listen: [`docs/sample.mp3`](docs/sample.mp3) is a 75 s demo at 192 kbps. It starts calm with no hiss, then hits chaos (CPU + network + disk load plus simulated fast typing), where a short burst of industrial noise comes in, then settles again. Its verbose log is `docs/sample-render.log`.
 
-One static-ish binary (`sysjam`, ~1 MB, x86_64, needs glibc ≥ 2.29). It
+![sysjam's live terminal UI](docs/tui.png)
+
+One static-ish binary (`sysjam`, ~1.4 MB, x86_64, needs glibc ≥ 2.29). It
 links only libc, libm, libpthread and libdl. ALSA, D-Bus and PipeWire are
 loaded at run time with `dlopen`, so it starts even when one of them is missing.
 
 ## Run
 
 ```bash
-./sysjam                         # play (Ctrl-C fades out; twice = quit now)
-./sysjam --verbose               # watch the band: chords, players, instruments
+./sysjam                         # play with the live terminal UI (q fades out; twice = quit now)
+./sysjam --no-tui                # plain log output instead of the UI
+./sysjam --no-tui --verbose      # plain log of everything: chords, players, instruments, metrics
 ./sysjam --volume 0.4 --sub 1.5  # quieter overall, more sub
 ./sysjam --seed 42               # reproducible run
 ./sysjam --wav out.wav --duration 120   # render to a file (real time)
@@ -38,7 +41,47 @@ loaded at run time with `dlopen`, so it starts even when one of them is missing.
 | `--no-input` | don't watch keyboard/mouse activity (see below) |
 | `--no-screen`, `--screen-method auto\|portal\|grim\|x11\|cmd`, `--screen-cmd CMD`, `--screen-interval S` | screen colour (see below) |
 | `--device NAME` | ALSA device (`default`, `pipewire`, `pulse`, `hw:0`) |
-| `--null`, `--duration S`, `--verbose` | testing / logging |
+| `--no-tui` | plain log lines instead of the live terminal UI (the UI is the default when stdout is a terminal) |
+| `--null`, `--duration S`, `--verbose` | testing / logging (`--verbose` adds metrics lines with `--no-tui`) |
+
+## Live terminal UI
+
+When stdout is a terminal, sysjam opens a full-screen terminal UI (ratatui +
+crossterm) that shows how the band is thinking. Piped or redirected output, or
+`--no-tui`, gives the plain log instead.
+
+- **Header**: key, the chord progression with roman numerals (past chords dim,
+  the current chord highlighted, the planned ones after it), tempo, bar and beat,
+  the arrangement state (chilling / awakening / alive / subsiding) and the
+  bandleader's energy and agitation meters.
+- **The band**: one panel per member: drone, bassist, drummer, keys, lead,
+  colour/FX, plus the guest voice when a busy thread sits in. Each panel shows:
+  - the member's status: laying out, comping, following, soloing or trading;
+  - an activity meter and the current GM instrument;
+  - a "thinking" line explaining the latest decision, e.g. `heard a network burst (98%) → adding shimmer`,
+    `resolving the motif to the root (A4), then resting`,
+    `kicks follow the bassist's syncopations`, or
+    `thread make at 100% cpu sits in → long E5`;
+  - the notes it played in the last few seconds.
+- **Machine**: CPU, busy cores, network, disk writes, file churn, keyboard and
+  mouse rates, each with a sparkline of the last two minutes. Below them sit a
+  swatch of the sampled screen colour and the busiest threads.
+- **Levels**: sub (< 60 Hz), bass, mid and high meters of the output.
+- **Band events**: a rate-limited log of instrument changes, band moves,
+  modulations and guests.
+
+Keys:
+
+| key | action |
+|---|---|
+| `q`, `Esc`, `Ctrl-C` | fade out and quit (press again to quit immediately) |
+| `space` | pause / resume the display (the music keeps playing) |
+
+The UI runs in its own thread at nice 5 and redraws at 5 fps. The audio thread
+publishes a small snapshot about every 100 ms with a non-blocking `try_lock`, so
+a slow or stalled terminal can never hold up the audio. The terminal is restored
+on exit and also when sysjam panics. Colours follow `NO_COLOR`. The UI needs a
+terminal of about 100×30 or larger; 130×36 is comfortable.
 
 ## The band
 
@@ -233,6 +276,8 @@ Measured exactly (schedstat, all threads) on an 8-vCPU Xeon VM:
 | 75 s chaos demo (`tools/demo_short.sh`) | 2.15% | |
 | 3-min demo under heavy load (stress-ng, ~50 MB/s downloads, ~500 MB/s direct writes), incl. WAV writing | 2.50% | |
 | offline engine only, alive state | ~1.7% | |
+| idle, FluidR3, **live terminal UI on** vs `--no-tui` (same seed, side by side, 120 s, /proc utime+stime) | 2.22% vs 1.89% (the UI thread itself: 0.27%) | |
+| alive under heavy load (busy thread as guest, ~400 MB/s writes, ~40 MB/s downloads, file churn), UI on, X11 screen sampling, 60 s | 3.05% | |
 
 ## Troubleshooting
 

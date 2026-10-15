@@ -2,7 +2,11 @@
 macro_rules! say {
     ($($t:tt)*) => {{
         use std::io::Write;
-        let _ = writeln!(std::io::stdout(), $($t)*);
+        if crate::ui::TUI_ON.load(std::sync::atomic::Ordering::Relaxed) {
+            crate::ui::log(format!($($t)*));
+        } else {
+            let _ = writeln!(std::io::stdout(), $($t)*);
+        }
     }};
 }
 
@@ -20,6 +24,7 @@ mod pwcap;
 mod screen;
 mod shared;
 mod synth;
+mod ui;
 
 use shared::{Control, ScreenColor};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -49,7 +54,9 @@ USAGE: sysjam [OPTIONS]
   --gm-layers N       simultaneous GM layers 1-4 (default 3; +1 at peaks)
   --clicks L          file open/close click texture 0-1 (default 0.25, 0 = off)
   --no-leads          never let a busy thread sit in as a guest musician
-  --verbose           band events, chords, instruments, and metrics every 5 s
+  --verbose           band events, chords, instruments, and metrics every 5 s (with --no-tui)
+  --no-tui            plain log output instead of the live terminal UI
+                      (the UI is the default when stdout is a terminal; keys: q quit, space pause display)
   --device NAME       ALSA device (default \"default\"; e.g. pipewire, pulse, hw:0)
   --wav FILE          render to a WAV file instead of the sound card (real time)
   --null              run without any audio output (testing)
@@ -105,6 +112,7 @@ fn main() {
     let mut screen_method = "auto".to_string();
     let mut leads = true;
     let mut verbose = false;
+    let mut no_tui = false;
     let mut device = "default".to_string();
     let mut wav: Option<String> = None;
     let mut null = false;
@@ -133,6 +141,7 @@ fn main() {
             "--bpm" => bpm = num(val(&mut i), "--bpm").clamp(30.0, 200.0),
             "--clicks" => clicks = num(val(&mut i), "--clicks").clamp(0.0, 1.0),
             "--verbose" | "-v" => verbose = true,
+            "--no-tui" => no_tui = true,
             "--no-leads" => leads = false,
             "--sub" => sub = num(val(&mut i), "--sub").clamp(0.0, 2.0),
             "--chord-bars" => chord_bars = num(val(&mut i), "--chord-bars").clamp(1.0, 16.0) as u32,
@@ -208,7 +217,11 @@ fn main() {
             }
         }
     };
-    let make_engine = |tx| {
+    let bench = std::env::var_os("SYSJAM_BENCH").is_some();
+    let tui = !no_tui && !bench && unsafe { libc::isatty(1) == 1 };
+    let band_ui: Option<Arc<Mutex<ui::BandSnap>>> = tui.then(|| Arc::new(Mutex::new(ui::BandSnap::default())));
+    let mon_ui: Option<Arc<Mutex<ui::MonSnap>>> = tui.then(|| Arc::new(Mutex::new(ui::MonSnap::default())));
+    let make_engine = |tx, ui: Option<Arc<Mutex<ui::BandSnap>>>| {
         synth::Engine::new(synth::EngineCfg {
             sr: RATE as f32,
             root,
@@ -222,12 +235,13 @@ fn main() {
             gm_layers,
             sub,
             tx,
+            ui,
         })
     };
-    if std::env::var_os("SYSJAM_BENCH").is_some() {
+    if bench {
         // offline benchmark / timeline: idle 40 s, busy 80 s, idle 80 s
         let (tx, rx) = std::sync::mpsc::channel();
-        let mut en = make_engine(Some(tx));
+        let mut en = make_engine(Some(tx), None);
         let mut b = vec![0f32; BLOCK * 2];
         let mut raw = std::env::var("SYSJAM_BENCH_RAW").ok().and_then(|p| std::fs::File::create(p).ok());
         let show = std::env::var_os("SYSJAM_BENCH_LOG").is_some();
@@ -295,7 +309,12 @@ fn main() {
         default_bright: scale.default_bright,
         root,
         input: !no_input,
+        ui: mon_ui.clone(),
     };
+    if tui {
+        // from here on, messages go to the UI's event log
+        ui::TUI_ON.store(true, Ordering::Relaxed);
+    }
     let mon = {
         let (c, s, st) = (ctl.clone(), scr.clone(), stop.clone());
         std::thread::Builder::new().name("sysjam-mon".into()).spawn(move || monitor::run(mcfg, c, s, st, Some(rx))).unwrap()
@@ -308,7 +327,19 @@ fn main() {
         Some(std::thread::Builder::new().name("sysjam-scr".into()).spawn(move || screen::run(screen_method, screen_cmd, screen_iv, s, st, verbose)).unwrap())
     };
 
-    let mut synth = make_engine(Some(tx));
+    let mut synth = make_engine(Some(tx), band_ui.clone());
+    let tui_t = match (band_ui, mon_ui) {
+        (Some(band), Some(mon)) => {
+            let st = stop.clone();
+            Some(
+                std::thread::Builder::new()
+                    .name("sysjam-tui".into())
+                    .spawn(move || ui::run(ui::Ui { band, mon }, st, || SIGS.fetch_add(1, Ordering::SeqCst)))
+                    .unwrap(),
+            )
+        }
+        _ => None,
+    };
     say!(
         "sysjam playing: root {} {}, seed {}{}  (Ctrl-C to fade out)",
         music::note_name(root),
@@ -342,7 +373,7 @@ fn main() {
             let timeup = duration.map(|d| t >= d - 2.0).unwrap_or(false);
             if SIGS.load(Ordering::Relaxed) > 0 || timeup {
                 if !timeup {
-                    say!("\nfading out...");
+                    say!("{}fading out...", if tui { "" } else { "\n" });
                 }
                 synth.fade_out(2.0);
                 fading = true;
@@ -352,6 +383,9 @@ fn main() {
         }
     }
     stop.store(true, Ordering::Relaxed);
+    if let Some(t) = tui_t {
+        let _ = t.join(); // restores the terminal
+    }
     sink.finish();
     let _ = mon.join();
     if let Some(t) = scr_t {

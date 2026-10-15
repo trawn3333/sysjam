@@ -18,6 +18,7 @@ pub struct MonitorCfg {
     pub default_bright: bool,
     pub root: f32,
     pub input: bool,
+    pub ui: Option<Arc<Mutex<crate::ui::MonSnap>>>,
 }
 
 fn read_into(path: &str, buf: &mut String) -> bool {
@@ -306,6 +307,9 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
     let mut cores_busy = 0usize;
     let start = Instant::now();
     let mut tick: u64 = 0;
+    let tui = cfg.ui.is_some();
+    let mut top: Vec<(String, f32)> = Vec::new();
+    let mut hist: [std::collections::VecDeque<f32>; 7] = Default::default();
     let tickd = Duration::from_millis(500);
 
     while !stop.load(Ordering::Relaxed) {
@@ -352,11 +356,14 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
             wr_r = w;
         }
 
-        if tick % 3 == 0 && cfg.leads {
+        if tick % 3 == 0 && (cfg.leads || tui) {
             // --- threads every 1.5 s: only a sustained heavy thread may sing ---
             let dt = 1.5f32;
             let cands = scanner.scan();
-            let heavy: Vec<&Cand> = cands.iter().filter(|c| c.cpu >= 0.40 && !ignored(&c.pcomm, &c.name)).collect();
+            if tui {
+                top = cands.iter().filter(|c| !c.pcomm.starts_with("sysjam")).take(4).map(|c| (c.name.clone(), c.cpu)).collect();
+            }
+            let heavy: Vec<&Cand> = cands.iter().filter(|c| cfg.leads && c.cpu >= 0.40 && !ignored(&c.pcomm, &c.name)).collect();
             let mut ns = HashMap::new();
             for c in &heavy {
                 ns.insert(c.tid, sustain.get(&c.tid).copied().unwrap_or(0.0) + dt);
@@ -393,7 +400,7 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
             }
             if let Some(m) = msg {
                 // rate-limited, verbose only
-                if cfg.verbose && last_msg.map(|t| t.elapsed().as_secs() >= 10).unwrap_or(true) {
+                if (cfg.verbose || tui) && last_msg.map(|t| t.elapsed().as_secs() >= 10).unwrap_or(true) {
                     say!("{m}");
                     last_msg = Some(Instant::now());
                 }
@@ -404,7 +411,7 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
         // drain band/chord messages from the audio thread (verbose only)
         if let Some(rx) = &msgs {
             while let Ok(m) = rx.try_recv() {
-                if cfg.verbose {
+                if cfg.verbose || tui {
                     say!("{m}");
                 }
             }
@@ -438,8 +445,34 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
             c.leads = [lead.as_ref().map(|l| l.0.clone()), None, None];
             c.version += 1;
             *ctl.lock().unwrap() = c.clone();
+            if let Some(ui) = &cfg.ui {
+                let ncpu = cpus.len().saturating_sub(1);
+                let v = [cpu_s, cores_busy as f32 / ncores, raw_net, wl.max(fl), fl, act.keyboard, act.mouse];
+                for (h, x) in hist.iter_mut().zip(v) {
+                    h.push_back(x.clamp(0.0, 1.0));
+                    while h.len() > crate::ui::HIST {
+                        h.pop_front();
+                    }
+                }
+                let snap = crate::ui::MonSnap {
+                    cpu: cpu_s,
+                    cores: (cores_busy, ncpu),
+                    net: net_r,
+                    write: wr_r,
+                    fd: fd_r,
+                    keys: act.keyboard,
+                    mouse: act.mouse,
+                    input_on: input.is_some(),
+                    screen: if sc.valid { Some((sc.hue, sc.saturation, sc.brightness)) } else { None },
+                    top: top.clone(),
+                    hist: hist.clone(),
+                };
+                if let Ok(mut g) = ui.lock() {
+                    *g = snap;
+                }
+            }
 
-            if cfg.verbose && tick % 10 == 0 {
+            if cfg.verbose && !tui && tick % 10 == 0 {
                 let scr = if sc.valid {
                     format!("hue {:.0} bri {:.2} warm {:+.2}", sc.hue, sc.brightness, sc.warmth)
                 } else {

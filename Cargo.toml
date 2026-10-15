@@ -2,6 +2,7 @@
 name = "sysjam"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.85"
 description = "A jam band of machine musicians playing your Linux system"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/trawn3333/sysjam"
@@ -11,6 +12,8 @@ readme = "README.md"
 libc = "0.2"
 x11rb = { version = "0.13", default-features = false }
 rustysynth = "=1.3.5"
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
+crossterm = { version = "0.28", default-features = false, features = ["events"] }
 
 [profile.release]
 opt-level = 3

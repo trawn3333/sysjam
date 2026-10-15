@@ -11,7 +11,9 @@ use crate::shared::Control;
 use rustysynth::SoundFont;
 use std::collections::VecDeque;
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use crate::ui::Mind;
+use crate::harmony::{pc_name, roman_of};
 
 const CR: usize = 32; // control-rate block
 const CHUNK: usize = 64; // GM/event chunk
@@ -32,6 +34,7 @@ pub struct EngineCfg {
     pub gm_layers: usize,
     pub sub: f32,
     pub tx: Option<Sender<String>>,
+    pub ui: Option<Arc<Mutex<crate::ui::BandSnap>>>,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -222,6 +225,18 @@ pub struct Engine {
     pad_held: Vec<(usize, i32)>,
     recent_global: VecDeque<u8>,
     msg_budget: f32,
+    // live UI (only touched when `ui` is Some)
+    ui: Option<Arc<Mutex<crate::ui::BandSnap>>>,
+    seed: u64,
+    bpm: f32,
+    minds: [Mind; 7],
+    heard_notes: [VecDeque<(u64, String)>; 7],
+    hist_ch: VecDeque<Chord>,
+    lv: [f32; 4],
+    lv_n: u32,
+    lp: [f32; 3],
+    last_pub: u64,
+    pub_ver: u64,
 }
 
 fn pan(p: f32) -> (f32, f32) {
@@ -368,6 +383,20 @@ impl Engine {
             pad_held: Vec::new(),
             recent_global: VecDeque::new(),
             msg_budget: 3.0,
+            ui: c.ui.clone(),
+            seed: c.seed,
+            bpm: c.bpm,
+            minds: {
+                let names = ["drone", "bassist", "drummer", "keys", "lead", "colour", "guest"];
+                std::array::from_fn(|i| Mind { name: names[i], status: if i == 0 { "following" } else { "laying out" }, think: "listening".into(), ..Default::default() })
+            },
+            heard_notes: Default::default(),
+            hist_ch: VecDeque::new(),
+            lv: [0.0; 4],
+            lv_n: 0,
+            lp: [0.0; 3],
+            last_pub: 0,
+            pub_ver: 0,
             harm,
             rng,
         };
@@ -383,6 +412,103 @@ impl Engine {
 
     pub fn has_gm(&self) -> bool {
         self.gm.is_some()
+    }
+
+    fn think(&mut self, i: usize, status: &'static str, t: impl Into<String>) {
+        if self.ui.is_some() {
+            self.minds[i].status = status;
+            self.minds[i].think = t.into();
+        }
+    }
+    fn set_think(&mut self, i: usize, t: impl Into<String>) {
+        if self.ui.is_some() {
+            self.minds[i].think = t.into();
+        }
+    }
+    fn note_name(&self, semi: i32) -> String {
+        let midi = self.midi_root + semi;
+        format!("{}{}", pc_name(semi.rem_euclid(12)), midi.div_euclid(12) - 1)
+    }
+    /// a player sounded something (UI only)
+    fn heard(&mut self, i: usize, label: String, vel: f32) {
+        if self.ui.is_none() {
+            return;
+        }
+        let q = &mut self.heard_notes[i];
+        q.push_back((self.now, label));
+        while q.len() > 6 {
+            q.pop_front();
+        }
+        self.minds[i].activity = (self.minds[i].activity + 0.15 + 0.35 * vel.clamp(0.0, 1.0)).min(1.0);
+    }
+    fn heard_semi(&mut self, i: usize, semi: i32, vel: f32) {
+        if self.ui.is_some() {
+            let n = self.note_name(semi);
+            self.heard(i, n, vel);
+        }
+    }
+
+    /// Publish a snapshot for the TUI (never blocks the audio thread).
+    fn publish(&mut self) {
+        let Some(ui) = self.ui.clone() else { return };
+        let Ok(mut snap) = ui.try_lock() else { return };
+        let key = self.key();
+        let mut prog = Vec::new();
+        let hn = self.hist_ch.len();
+        for (i, c) in self.hist_ch.iter().enumerate() {
+            let when = if i + 1 == hn { 0 } else { -1 };
+            if hn - i <= 3 {
+                prog.push((c.name(), roman_of(*c, key), when));
+            }
+        }
+        for c in self.harm.upcoming(4) {
+            prog.push((c.name(), roman_of(c, key), 1));
+        }
+        let lv = |a: f32| if a > 0.0 { 10.0 * a.log10() } else { -99.0 };
+        let n = self.lv_n.max(1) as f32;
+        let levels = [lv(self.lv[0] / n), lv(self.lv[1] / n), lv(self.lv[2] / n), lv(self.lv[3] / n)];
+        self.lv = [0.0; 4];
+        self.lv_n = 0;
+        // instruments + recent notes
+        let gm_name = |r: Role, sl: &[Slot]| -> Option<String> {
+            sl.iter().find(|s| s.role == r && s.on).and_then(|s| s.program).map(|p| format!("{} ({p})", GM_NAMES[p as usize]))
+        };
+        let has_gm = self.gm.is_some();
+        let inst = [
+            "sub drone + detuned pad".to_string(),
+            match gm_name(Role::Bass, &self.slots) { Some(g) => format!("sine/saw bass + {g}"), None => "sine/saw bass".into() },
+            if has_gm { "synth kick + GM kit".into() } else { "synth kick + hats".into() },
+            match (gm_name(Role::Pad, &self.slots), gm_name(Role::Comp, &self.slots)) {
+                (Some(a), Some(b)) => format!("{a} / {b}"),
+                (Some(a), None) | (None, Some(a)) => a,
+                _ => "—".into(),
+            },
+            gm_name(Role::Lead, &self.slots).unwrap_or_else(|| "bells".into()),
+            match gm_name(Role::Colour, &self.slots) { Some(g) => format!("{g} + bells"), None => "bells / shimmer".into() },
+            if self.guest_on { "saw/sine guest voice".into() } else { "—".into() },
+        ];
+        let recent = (self.sr * 5.0) as u64;
+        for i in 0..7 {
+            self.minds[i].instrument = inst[i].clone();
+            let now = self.now;
+            self.minds[i].notes = self.heard_notes[i].iter().filter(|(t, _)| now.saturating_sub(*t) < recent).map(|x| x.1.clone()).collect();
+        }
+        self.pub_ver += 1;
+        *snap = crate::ui::BandSnap {
+            key: key.name(),
+            prog,
+            bpm: self.bpm,
+            bar: self.step / 16,
+            beat: ((self.step % 16) / 4) as u32,
+            state: self.leader.state.name(),
+            energy: self.leader.energy,
+            agitation: self.leader.agitation,
+            minds: self.minds.to_vec(),
+            levels,
+            seed: self.seed,
+            time: self.time(),
+            version: self.pub_ver,
+        };
     }
 
     fn say(&mut self, m: String) {
@@ -429,9 +555,20 @@ impl Engine {
                     self.guest_semi = self.guest_pitch();
                 }
                 self.guest_on = true;
+                if self.ui.is_some() {
+                    let semi = self.guest_semi.round() as i32;
+                    let n = self.note_name(semi);
+                    self.think(6, "soloing", format!("thread {} at {:.0}% cpu sits in → long {n}", l.name, l.cpu * 100.0));
+                    self.heard(6, n, 0.6);
+                }
                 self.guest_cpu = l.cpu;
             }
-            None => self.guest_on = false,
+            None => {
+                if self.guest_on {
+                    self.think(6, "laying out", "my thread calmed down → bowing out");
+                }
+                self.guest_on = false
+            }
         }
     }
 
@@ -518,9 +655,32 @@ impl Engine {
     fn role_note(&mut self, r: Role, semi: i32, vel: i32, steps: f32, delay: f32) {
         if let Some(ch) = self.slot_ch(r) {
             self.note(ch, semi, vel, steps, delay);
+            let who = match r {
+                Role::Bass => 1,
+                Role::Pad | Role::Comp => 3,
+                Role::Lead => 4,
+                Role::Colour => 5,
+            };
+            self.heard_semi(who, semi, vel as f32 / 100.0);
         }
     }
     fn drum(&mut self, key: i32, vel: i32, delay: f32) {
+        if self.ui.is_some() {
+            let n = match key {
+                35 | 36 => "kick",
+                37 => "rim",
+                38 | 40 => "snare",
+                42 | 44 => "hat",
+                46 => "open hat",
+                49 | 57 => "crash",
+                51 | 59 => "ride",
+                45 | 47 | 48 | 50 => "tom",
+                70 => "maracas",
+                82 => "shaker",
+                _ => "perc",
+            };
+            self.heard(2, n.into(), vel as f32 / 90.0);
+        }
         if self.gm.is_some() {
             self.note(9, key - self.midi_root, vel, 1.0, delay);
         }
@@ -559,8 +719,10 @@ impl Engine {
                 self.ind_target = 0.0;
                 self.ind_cd = 25.0;
                 self.band_say("colour player lets the industrial noise go".into());
+                self.set_think(5, "chaos is easing → letting the industrial noise go");
             } else if (self.ind_pat >> s) & 1 == 1 {
                 self.ind_env = 0.6 + 0.4 * self.rng.f();
+                self.heard(5, "noise".into(), 0.7);
             }
             return;
         }
@@ -580,6 +742,8 @@ impl Engine {
             self.ind_freq = self.rng.range(1600.0, 4200.0);
             self.ind_target = if deliberate && !self.leader.chaos { 0.6 } else { 1.0 };
             self.band_say(format!("colour player brings in industrial noise ({bars} bar{})", if bars == 1 { "" } else { "s" }));
+            let why = if self.leader.chaos { "the machine sounds chaotic" } else { "a deliberate colour move" };
+            self.think(5, "soloing", format!("{why} → gated industrial noise for {bars} bar{}", if bars == 1 { "" } else { "s" }));
         }
     }
 
@@ -630,6 +794,8 @@ impl Engine {
                     // resolve: one long chord-root note
                     let r = self.motif_pitch(0, true, 31);
                     self.role_note(Role::Lead, r, 55, 12.0, 0.0);
+                    let n = self.note_name(r);
+                    self.think(4, "laying out", format!("resolving the motif to the root ({n}), then resting"));
                 }
                 self.band_say(m);
             }
@@ -664,6 +830,105 @@ impl Engine {
         };
         if self.on[2] && self.rng.chance(pf) {
             self.fill = true;
+        }
+        self.phrase_minds();
+    }
+
+    /// Phrase-level summary of what each player decided and why (UI only).
+    fn phrase_minds(&mut self) {
+        if self.ui.is_none() {
+            return;
+        }
+        let st = self.leader.state.name();
+        let sig = self.ctl.sig;
+        let solo = self.leader.soloist;
+        let lone = self.leader.lone;
+        let brk = self.leader.breakdown > 0;
+        let trade = self.leader.trade;
+        // bassist
+        let inv = self.leader.invite(P::Bass);
+        let (bs, bt) = match self.bass_mode {
+            BassMode::Sustain => ("following", format!("only long roots — {st}, invite {inv:.2}")),
+            BassMode::Pulse => ("following", format!("pulsing roots/fifths with the drummer (invite {inv:.2})")),
+            BassMode::Groove => ("comping", if sig.file > 0.4 { format!("disk/file churn {:.0}% → busier syncopated groove", sig.file * 100.0) } else { "locking a syncopated groove".into() }),
+        };
+        let bs = if brk { "laying out" } else { bs };
+        let bt = if brk { "breakdown → dropping to long notes".into() } else { bt };
+        self.think(1, bs, bt);
+        // drummer
+        let d = self.leader.invite(P::Drums);
+        let (ds, dt): (&'static str, String) = if !self.on[2] {
+            ("laying out", format!("not invited yet (invite {d:.2})"))
+        } else if brk {
+            ("laying out", "breakdown → out for a phrase".into())
+        } else if self.leader.state == State::Subside {
+            ("following", "thinning out bar by bar".into())
+        } else if self.fill {
+            ("following", "fill into the next phrase".into())
+        } else if self.bass_mode == BassMode::Groove {
+            ("following", format!("kicks follow the bassist's syncopations (cpu {:.0}%)", sig.cpu * 100.0))
+        } else {
+            ("comping", format!("simple time-keeping at {st} energy"))
+        };
+        self.think(2, ds, dt);
+        // keys
+        let (ks, kt): (&'static str, String) = if !self.on[3] {
+            ("laying out", "waiting for space".into())
+        } else if solo == Some(P::Keys) || lone == Some(P::Keys) {
+            ("soloing", "bandleader gave me the floor → taking the melody".into())
+        } else if trade && self.on[4] {
+            ("trading", "trading 2-bar phrases with the lead".into())
+        } else {
+            let style = match self.comp {
+                Comp::Sparse => "sparse stabs, lots of space",
+                Comp::Arp => "rolling arpeggio",
+                Comp::ArpUD => "up-and-down arpeggio",
+                Comp::Broken => "broken chord pattern",
+                Comp::Offbeat => "offbeat chord stabs",
+            };
+            ("comping", format!("{style}; pad holds the common tones"))
+        };
+        self.think(3, ks, kt);
+        // lead (status only; the think line comes from motif development)
+        let ls: &'static str = if !self.on[4] {
+            "laying out"
+        } else if solo == Some(P::Lead) || lone == Some(P::Lead) {
+            "soloing"
+        } else if trade {
+            "trading"
+        } else {
+            "comping"
+        };
+        if !self.on[4] {
+            if self.minds[4].status != "laying out" {
+                self.think(4, ls, "resting, listening to the band");
+            }
+        } else {
+            self.minds[4].status = ls;
+        }
+        // colour
+        let cs: &'static str = if self.ind_steps > 0 {
+            "soloing"
+        } else if !self.on[5] {
+            "laying out"
+        } else if solo == Some(P::Colour) || lone == Some(P::Colour) {
+            "soloing"
+        } else {
+            "following"
+        };
+        if self.ind_steps == 0 {
+            let ct = if !self.on[5] {
+                "only a stray shimmer now and then".to_string()
+            } else if sig.net > 0.4 {
+                format!("network at {:.0}% → shimmer clouds", sig.net * 100.0)
+            } else if self.meander() {
+                "slow landscape swells".into()
+            } else {
+                "listening for the lead's calls".into()
+            };
+            self.think(5, cs, ct);
+        } else {
+            self.minds[5].status = cs;
         }
     }
 
@@ -708,12 +973,16 @@ impl Engine {
         while self.history.len() > 4 {
             self.history.pop_front();
         }
+        self.hist_ch.push_back(c);
+        while self.hist_ch.len() > 4 {
+            self.hist_ch.pop_front();
+        }
         let hist: Vec<String> = self.history.iter().cloned().collect();
         let line = format!(
             "Key: {} | {}{}",
             self.key().name(),
             hist.join(" \u{2192} "),
-            note.map(|n| format!("   ({n})")).unwrap_or_default()
+            note.clone().map(|n| format!("   ({n})")).unwrap_or_default()
         );
         self.say(line);
         // drone player: voice-led pad, sub follows the root
@@ -740,6 +1009,22 @@ impl Engine {
             }
         }
         self.sub_target = Self::fold(c.root, -22, -11) as f32;
+        if self.ui.is_some() {
+            let sub = self.note_name(Self::fold(c.root, -22, -11));
+            let why = match &note {
+                _ if self.meander() => "slow drift".to_string(),
+                _ => format!("{} voices, smooth", v.len()),
+            };
+            self.think(0, "following", format!("voice-leading pad into {}, sub glides to {sub} · {why}", c.name()));
+            let names: Vec<String> = v.iter().map(|&x| self.note_name(x)).collect();
+            self.heard_notes[0].clear();
+            let now = self.now;
+            self.heard_notes[0].push_back((now, sub));
+            for n in names {
+                self.heard_notes[0].push_back((now, n));
+            }
+            self.minds[0].activity = (self.minds[0].activity + 0.4).min(1.0);
+        }
         if init {
             self.sub_semi = self.sub_target;
         }
@@ -819,6 +1104,11 @@ impl Engine {
             }
             _ => root,
         };
+        self.heard_semi(1, semi, vel);
+        if kind == 3 && self.ui.is_some() {
+            let next = self.harm.peek_next(self.meander());
+            self.set_think(1, format!("walking an approach note into {}", next.name()));
+        }
         let f = semi_to_freq(self.root, semi as f32);
         self.bass_inc = f / self.sr;
         self.bass_attack = true;
@@ -1052,6 +1342,14 @@ impl Engine {
             if what == "new idea" {
                 self.band_say("lead starts a new melodic idea".into());
             }
+            if self.ui.is_some() {
+                let st = if soloing { "soloing" } else if self.leader.trade { "trading" } else { "comping" };
+                let t = match what {
+                    "new idea" => "a fresh motif — new idea".to_string(),
+                    w => format!("developing the motif: {w}{}", if state == State::Chill { " (fragments only)" } else { "" }),
+                };
+                self.think(4, st, t);
+            }
         }
         if s == 0 && phase == 2 && !soloing {
             // the colour player may answer the call
@@ -1059,6 +1357,7 @@ impl Engine {
                 let (m, _) = self.motif.develop(&mut self.rng, 0.4);
                 self.reply = Some((m, bar));
                 self.band_say("colour player answers the lead".into());
+                self.think(5, "trading", "heard the lead's call → answering it a 3rd up");
             }
         }
         if !calling {
@@ -1076,6 +1375,7 @@ impl Engine {
                 self.role_note(Role::Lead, p, n.vel - 10, n.len as f32, 0.0);
             } else {
                 self.bell(p as f32 + 12.0, 0.6, 0.0);
+                self.heard_semi(4, p + 12, 0.6);
             }
         }
     }
@@ -1091,6 +1391,9 @@ impl Engine {
             let pc = pcs[self.rng.below(pcs.len())];
             let oct = 12 * self.rng.below(2) as i32;
             self.bell((pc + 36 + oct) as f32, 0.45 + 0.4 * net, 0.0);
+            if net > 0.45 && self.ui.is_some() && self.ind_steps == 0 && self.reply.is_none() {
+                self.set_think(5, format!("heard a network burst ({:.0}%) → adding shimmer", net * 100.0));
+            }
         }
         if !self.on[5] {
             return;
@@ -1282,6 +1585,7 @@ impl Engine {
 
     fn bell(&mut self, semi: f32, gain: f32, delay_s: f32) {
         let _ = delay_s;
+        self.heard_semi(5, semi.round() as i32, gain);
         let sr = self.sr;
         let f = semi_to_freq(self.root, semi);
         let idx = self.bells.iter().position(|b| !b.on).unwrap_or_else(|| {
@@ -1434,6 +1738,7 @@ impl Engine {
     /// Render interleaved stereo frames.
     pub fn render(&mut self, out: &mut [f32]) {
         let frames = out.len() / 2;
+        let ui_on = self.ui.is_some();
         let sr = self.sr;
         let mut fi = 0;
         while fi < frames {
@@ -1631,9 +1936,30 @@ impl Engine {
                 let (ol, or) = self.lim.run(l, r);
                 out[(fi + j) * 2] = ol;
                 out[(fi + j) * 2 + 1] = or;
+                if ui_on {
+                    // three one-pole splits: <60 Hz, <250 Hz, <3 kHz
+                    let m = 0.5 * (ol + or);
+                    self.lp[0] += (m - self.lp[0]) * 0.0085;
+                    self.lp[1] += (m - self.lp[1]) * 0.035;
+                    self.lp[2] += (m - self.lp[2]) * 0.35;
+                    let (a, b2, c) = (self.lp[0], self.lp[1], self.lp[2]);
+                    self.lv[0] += a * a;
+                    self.lv[1] += (b2 - a) * (b2 - a);
+                    self.lv[2] += (c - b2) * (c - b2);
+                    self.lv[3] += (m - c) * (m - c);
+                    self.lv_n += 1;
+                }
             }
             self.now = end;
             fi += n;
+        }
+        if ui_on && self.now.saturating_sub(self.last_pub) as f32 >= self.sr * 0.1 {
+            let dt = (self.now - self.last_pub) as f32 / self.sr;
+            self.last_pub = self.now;
+            for m in self.minds.iter_mut() {
+                m.activity *= (-dt / 0.8).exp();
+            }
+            self.publish();
         }
     }
 }
