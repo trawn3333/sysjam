@@ -1,74 +1,87 @@
 instruments: assets/TimGM6mb.sf2
 rendering to dist/sample-tempo.wav (real time, 90s)
 screen colour: off (--no-screen)
-sysjam playing: root A2 major, seed 5  (Ctrl-C to fade out)
-input activity: /proc/interrupts (irq 1 kbd, irq 12 pointer)
+input: evdev unavailable: /dev/input doesn't exist
+input: irq fallback: irq 1 i8042 (kbd), irq 12 i8042 (pointer)
+sysjam playing: root A2 major, 84 bpm, seed 5  (Ctrl-C to fade out)
+palettes: keys: mallets & bells, lead: winds & pipes, colour: strings & voices
 Key: A major | A
 [    0s] cpu   0% cores 0/8 | net 0B/s | write 0B/s | fds 0/s | keys 0.00 mouse 0.00 | screen off | signals cpu 0.00 net 0.00 file 0.00 | guest: -
-[    5s] cpu   1% cores 0/8 | net 4kB/s | write 180kB/s | fds 0/s | keys 0.00 mouse 0.00 | screen off | signals cpu 0.04 net 0.00 file 0.01 | guest: -
-+ Warm Pad (89) [Pad]
-+ Woodblock (115) [Colour]
-[   10s] cpu   4% cores 0/8 | net 409B/s | write 209kB/s | fds 0/s | keys 0.00 mouse 0.00 | screen off | signals cpu 0.06 net 0.01 file 0.07 | guest: -
++ synth subtractive PWM ±12c, res 0.4 lead [Colour]
+[    5s] cpu   1% cores 0/8 | net 528B/s | write 192kB/s | fds 0/s | keys 0.00 mouse 0.00 | screen off | signals cpu 0.04 net 0.02 file 0.05 | guest: -
++ synth subtractive 2×saw ±9c, res 0.5 pad [Pad]
 Key: A major | A → D
-[   15s] cpu   2% cores 0/8 | net 3kB/s | write 172kB/s | fds 0/s | keys 0.00 mouse 0.00 | screen off | signals cpu 0.05 net 0.00 file 0.01 | guest: -
-[   20s] cpu 100% cores 8/8 | net 97.6MB/s | write 874.2MB/s | fds 0/s | keys 0.28 mouse 0.00 | screen off | signals cpu 0.50 net 0.49 file 0.63 | guest: -
-~ tempo 84 → 71 bpm over 5 bars (chilling)
+[   10s] cpu   1% cores 0/8 | net 4kB/s | write 197kB/s | fds 0/s | keys 0.00 mouse 0.00 | screen off | signals cpu 0.05 net 0.01 file 0.05 | guest: -
+[   15s] cpu   1% cores 0/8 | net 805B/s | write 180kB/s | fds 0/s | keys 0.00 mouse 0.00 | screen off | signals cpu 0.06 net 0.01 file 0.01 | guest: -
+[   20s] cpu 100% cores 8/8 | net 143.2MB/s | write 881.6MB/s | fds 0/s | keys 0.27 mouse 0.00 | screen off | signals cpu 0.50 net 0.49 file 0.63 | guest: -
+~ tempo 84 → 73 bpm over 5 bars (chilling)
 Key: A major | A → D → E
-[   25s] cpu 100% cores 8/8 | net 10.5MB/s | write 244.6MB/s | fds 32/s | keys 0.30 mouse 0.09 | screen off | signals cpu 0.91 net 0.50 file 0.65 | guest: -
+[   25s] cpu 100% cores 8/8 | net 0B/s | write 184kB/s | fds 0/s | keys 0.54 mouse 0.29 | screen off | signals cpu 0.91 net 0.42 file 0.44 | guest: -
 ~ sustained CPU spike -> tension
 Key: A major | A → D → E → E7   (tension: E7 (V7))
-colour player brings in industrial noise (1 bar)
+colour player brings in industrial noise (2 bars)
 ♪ singing: stress-ng-cpu (98% cpu for >10s) -> lead (E4)
-[   30s] cpu 100% cores 8/8 | net 83.4MB/s | write 913.8MB/s | fds 0/s | keys 0.80 mouse 0.41 | screen off | signals cpu 0.98 net 0.90 file 0.93 | guest: stress-ng-cpu (98%)
-~ big I/O burst -> modulation
-colour player lets the industrial noise go
-[   35s] cpu 100% cores 8/8 | net 0B/s | write 171kB/s | fds 0/s | keys 0.47 mouse 0.24 | screen off | signals cpu 1.00 net 0.35 file 0.36 | guest: stress-ng-cpu (102%)
-~ chilling -> alive (energy 0.66)
+[   30s] cpu 100% cores 8/8 | net 111.2MB/s | write 944.7MB/s | fds 0/s | keys 0.62 mouse 0.42 | screen off | signals cpu 0.98 net 0.68 file 0.72 | guest: stress-ng-cpu (98%)
+~ bassist designs a new patch: soft pluck bass
+~ chilling -> alive (energy 0.64)
+~ keys drifts to E major over A major
+~ colour drifts to E Dorian over A major
 drummer joins
 bassist starts a groove
-+ Contrabass (43)  − Warm Pad (89) [Pad]
-+ Honky-tonk Piano (3) [Comp]
-+ Acoustic Bass (32) [Bass]
-[   40s] cpu 100% cores 8/8 | net 93.9MB/s | write 992.2MB/s | fds 0/s | keys 0.77 mouse 0.39 | screen off | signals cpu 1.00 net 0.80 file 0.80 | guest: stress-ng-cpu (95%)
-[   45s] cpu 100% cores 8/8 | net 0B/s | write 319kB/s | fds 0/s | keys 0.39 mouse 0.20 | screen off | signals cpu 1.00 net 0.33 file 0.34 | guest: stress-ng-cpu (99%)
++ GM Tubular Bells (14) [Comp]
+colour player lets the industrial noise go
+[   35s] cpu 100% cores 8/8 | net 0B/s | write 171kB/s | fds 0/s | keys 0.41 mouse 0.28 | screen off | signals cpu 1.00 net 0.45 file 0.46 | guest: stress-ng-cpu (101%)
+[   40s] cpu 100% cores 8/8 | net 74.8MB/s | write 900.0MB/s | fds 0/s | keys 0.71 mouse 0.49 | screen off | signals cpu 1.00 net 0.82 file 0.82 | guest: stress-ng-cpu (94%)
+~ big I/O burst -> modulation
 Key: A major | D → E → E7 → A
+[   45s] cpu 100% cores 8/8 | net 0B/s | write 164kB/s | fds 0/s | keys 0.35 mouse 0.25 | screen off | signals cpu 1.00 net 0.33 file 0.33 | guest: stress-ng-cpu (99%)
 lead takes a solo
-~ tempo 71 → 95 bpm over 8 bars (alive)
+~ tempo 73 → 97 bpm over 8 bars (alive)
 lead joins
 colour player lays out
-− Honky-tonk Piano (3) [Comp]
-+ Recorder (74) [Lead]
-− Woodblock (115) [Colour]
-~ colour player designs a new patch: metal bells
-[   50s] cpu 100% cores 8/8 | net 103.1MB/s | write 941.1MB/s | fds 0/s | keys 0.71 mouse 0.35 | screen off | signals cpu 1.00 net 0.80 file 0.80 | guest: stress-ng-cpu (92%)
+− GM Tubular Bells (14) [Comp]
++ GM Tango Accordion (23) [Lead]
+− synth subtractive PWM ±12c, res 0.4 lead [Colour]
+~ colour player designs a new patch: detuned soft bells
+[   50s] cpu 100% cores 8/8 | net 109.7MB/s | write 952.7MB/s | fds 0/s | keys 0.70 mouse 0.49 | screen off | signals cpu 1.00 net 0.85 file 0.87 | guest: stress-ng-cpu (89%)
 Key: A major | E → E7 → A → Asus4
-[   55s] cpu 100% cores 8/8 | net 0B/s | write 228kB/s | fds 0/s | keys 0.31 mouse 0.16 | screen off | signals cpu 1.00 net 0.43 file 0.48 | guest: stress-ng-cpu (104%)
+~ drummer picks up the GM Power kit + congas & bongos
+[   55s] cpu 100% cores 8/8 | net 0B/s | write 180kB/s | fds 0/s | keys 0.35 mouse 0.25 | screen off | signals cpu 1.00 net 0.34 file 0.34 | guest: stress-ng-cpu (101%)
++ GM Baritone Sax (67)  − GM Tango Accordion (23) [Lead]
 Key: A major | E7 → A → Asus4 → G   (borrowed G)
-colour player brings in industrial noise (1 bar)
-[   60s] cpu   1% cores 0/8 | net 404B/s | write 188kB/s | fds 0/s | keys 0.11 mouse 0.06 | screen off | signals cpu 0.52 net 0.33 file 0.34 | guest: stress-ng-cpu (63%)
+[   60s] cpu   8% cores 1/8 | net 62kB/s | write 242kB/s | fds 0/s | keys 0.07 mouse 0.05 | screen off | signals cpu 0.57 net 0.45 file 0.39 | guest: stress-ng-cpu (58%)
+~ SURGE: the band is running hot → tempo 85 → 133 bpm, drummer and bassist drop into a V-twin lope for 2 phrases
+~ keys comes home to A major
+~ lead drifts to F# minor over A major
+colour player brings in industrial noise (3 bars)
 Key: A major | A → Asus4 → G → A7
 colour player lets the industrial noise go
-[   65s] cpu   1% cores 0/8 | net 2kB/s | write 8kB/s | fds 0/s | keys 0.02 mouse 0.01 | screen off | signals cpu 0.14 net 0.06 file 0.06 | guest: stress-ng-cpu (32%)
-~ drummer retunes: boomy kick
 Key: D minor | Asus4 → G → A7 → Dm   (modulation: A major -> D minor)
 key change -> D minor
+[   65s] cpu   1% cores 0/8 | net 10kB/s | write 197kB/s | fds 0/s | keys 0.01 mouse 0.01 | screen off | signals cpu 0.22 net 0.26 file 0.10 | guest: stress-ng-cpu (30%)
++ synth subtractive 2×saw ±13c, res 0.5 pad  − synth subtractive 2×saw ±9c, res 0.5 pad [Pad]
   quiet:   stress-ng-cpu (held 38s)
-+ Reed Organ (20)  − Contrabass (43) [Pad]
-+ Ocarina (79)  − Recorder (74) [Lead]
-[   70s] cpu   3% cores 0/8 | net 277B/s | write 352kB/s | fds 0/s | keys 0.00 mouse 0.00 | screen off | signals cpu 0.08 net 0.01 file 0.17 | guest: -
 lead ends the solo
-colour player joins
-+ Electric Grand Piano (2) [Comp]
-+ Bird Tweet (123) [Colour]
-[   75s] cpu   1% cores 0/8 | net 2kB/s | write 8kB/s | fds 0/s | keys 0.00 mouse 0.00 | screen off | signals cpu 0.06 net 0.01 file 0.04 | guest: -
+~ lead comes home to D minor
++ GM Synth Drum (118) [Comp]
+~ bassist designs a new patch: warm saw bass
+[   70s] cpu   2% cores 0/8 | net 10kB/s | write 197kB/s | fds 0/s | keys 0.00 mouse 0.00 | screen off | signals cpu 0.09 net 0.08 file 0.03 | guest: -
 Key: D minor | G → A7 → Dm → Csus2
-~ back to idle -> resolve to tonic
-[   80s] cpu   2% cores 0/8 | net 552B/s | write 311kB/s | fds 0/s | keys 0.00 mouse 0.00 | screen off | signals cpu 0.06 net 0.00 file 0.02 | guest: -
-~ alive -> subsiding (energy 0.27)
-~ tempo 95 → 86 bpm over 4 bars (subsiding)
-− Ocarina (79) [Lead]
-~ drummer retunes: tight kick
 Key: D minor | A7 → Dm → Csus2 → Bb
-[   85s] cpu   1% cores 0/8 | net 2kB/s | write 8kB/s | fds 0/s | keys 0.00 mouse 0.00 | screen off | signals cpu 0.05 net 0.00 file 0.05 | guest: -
+[   75s] cpu   2% cores 0/8 | net 9kB/s | write 197kB/s | fds 0/s | keys 0.00 mouse 0.00 | screen off | signals cpu 0.07 net 0.04 file 0.00 | guest: -
+~ surge winds down: 133 → 109 bpm over 6 bars
+~ keys drifts to D major over D minor
+colour player joins
++ GM FX Soundtrack (97) [Colour]
 Key: D minor | Dm → Csus2 → Bb → C
+lead starts a new melodic idea
+~ back to idle -> resolve to tonic
+Key: D minor | Csus2 → Bb → C → A7   (cadence V7)
+[   80s] cpu   5% cores 0/8 | net 10kB/s | write 143kB/s | fds 32/s | keys 0.00 mouse 0.00 | screen off | signals cpu 0.08 net 0.03 file 0.23 | guest: -
+Key: D minor | Bb → C → A7 → Dm   (resolves to tonic)
+~ alive -> subsiding (energy 0.26)
+~ keys comes home to D minor
+− GM Baritone Sax (67) [Lead]
+Key: D minor | C → A7 → Dm → A7   (cadence V7)
+[   85s] cpu   3% cores 0/8 | net 10kB/s | write 139kB/s | fds 0/s | keys 0.00 mouse 0.00 | screen off | signals cpu 0.07 net 0.05 file 0.04 | guest: -
 bye.

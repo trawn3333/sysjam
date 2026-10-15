@@ -49,6 +49,8 @@ fns! {
     dbus_error_init: fn(*mut DErr) -> ();
     dbus_error_free: fn(*mut DErr) -> ();
     dbus_bus_get_private: fn(c_int, *mut DErr) -> *mut Conn;
+    dbus_connection_open_private: fn(*const c_char, *mut DErr) -> *mut Conn;
+    dbus_bus_register: fn(*mut Conn, *mut DErr) -> u32;
     dbus_connection_set_exit_on_disconnect: fn(*mut Conn, u32) -> ();
     dbus_bus_get_unique_name: fn(*mut Conn) -> *const c_char;
     dbus_bus_add_match: fn(*mut Conn, *const c_char, *mut DErr) -> ();
@@ -136,14 +138,38 @@ unsafe impl Send for Bus {}
 impl Bus {
     pub fn session() -> Result<Bus, String> {
         unsafe {
-            let h = libc::dlopen(c"libdbus-1.so.3".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+            let h = crate::shared::dlopen_sys("libdbus-1.so.3");
             if h.is_null() {
                 return Err("libdbus-1.so.3 not found".into());
             }
             let f = Fns::load(h)?;
             let mut e = DErr::new();
             (f.dbus_error_init)(&mut *e);
-            let c = (f.dbus_bus_get_private)(0, &mut *e);
+            // In secure mode (setgid install) libdbus ignores every environment variable,
+            // so it can't find the session bus itself; hand it the address explicitly.
+            let c = if crate::shared::secure() {
+                let addr = std::env::var("DBUS_SESSION_BUS_ADDRESS").ok().filter(|a| !a.is_empty()).or_else(|| {
+                    let rt = std::env::var("XDG_RUNTIME_DIR").ok().filter(|d| !d.is_empty()).unwrap_or_else(|| format!("/run/user/{}", libc::getuid()));
+                    let p = format!("{rt}/bus");
+                    std::path::Path::new(&p).exists().then(|| format!("unix:path={p}"))
+                });
+                match addr {
+                    None => return Err("no session bus address (DBUS_SESSION_BUS_ADDRESS unset)".into()),
+                    Some(a) => {
+                        let ca = CString::new(a).map_err(|_| "bad bus address".to_string())?;
+                        let c = (f.dbus_connection_open_private)(ca.as_ptr(), &mut *e);
+                        if !c.is_null() && (f.dbus_bus_register)(c, &mut *e) == 0 {
+                            (f.dbus_connection_close)(c);
+                            (f.dbus_connection_unref)(c);
+                            std::ptr::null_mut()
+                        } else {
+                            c
+                        }
+                    }
+                }
+            } else {
+                (f.dbus_bus_get_private)(0, &mut *e)
+            };
             if c.is_null() {
                 let m = e.message().unwrap_or_else(|| "no session bus".into());
                 (f.dbus_error_free)(&mut *e);

@@ -1,5 +1,5 @@
 #!/bin/bash
-# ~90 s demo: random key + tempo -> chaos (tempo ramps up, I/O-burst modulations) -> calm (tempo drifts down).
+# ~90 s demo: random key + tempo -> chaos (tempo ramps up, I/O-burst modulations, usually a V-twin surge) -> calm (tempo drifts down).
 # Typing is simulated through a fake /proc/interrupts (SYSJAM_INTERRUPTS) because
 # a headless box has no keyboard; on a desktop the real counters are used.
 set -u

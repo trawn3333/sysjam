@@ -1,36 +1,42 @@
-┌ sysjam ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ D minor (home A major) │ VIIadd9 Cadd9 → i Dm → II7 E7 → V A                                                                     │
-│ 105→98 bpm bar 46   ○○○●    subsiding   energy ██▎            0.16  agitation ▋              0.05  seed 5   123s                 │
-└ q quit · space pause display ────────────────────────────────────────────────────────────────────────────────────────────────────┘
-┌ the band ───────────────────────────────────────────────────────────────────┐┌ machine ──────────────────────────────────────────┐
-│drone    following  ▎        sub drone + detuned pad                         ││cpu             1% ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│  ↳ voice-leading pad into E7, sub glides to E1 · 5 voices, smooth           ││cores          0/8 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│  ♪ E1 B3 D4 D4 E4 Ab4        ⇢ screen warm · curious 0.1 eager 0.7 busy 0.8 ││net        610 B/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│bassist  comping    ██████▋  warm saw bass + Acoustic Bass (32)              ││disk        8 kB/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▄▁▁▁▁▁▁▁▁▁▃▃▃▁▁    │
-│  ↳ walking an approach note into E7                                         ││files          0/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▃▃▃▁▁    │
-│  ♪ B1 B2 E2 E3 E2 E3      ⇢ disk/files 11% · curious 0.2 eager 0.8 busy 0.7 ││keys          0.00 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│drummer  following  ██████▋  boomy kick + GM kit                             ││mouse         0.00 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│  ↳ inspired by the move to subsiding → retuning the kit: boomy kick         ││screen        hue 1° bri 0.78                      │
-│  ♪ maracas maracas rim ride marac ⇢ cpu 5% · curious 0.3 eager 0.8 busy 0.4 ││top threads                                        │
-│keys     comping    ▎        Metallic Pad (93) / Electric Piano 2 (5)        ││    3% ▏      x11vnc                               │
-│  ↳ inspired by the move to subsiding → picking up a metallic pad            ││                                                   │
-│  ♪ D5 F5 A5 A5 D5 B4       ⇢ keys/mouse 0% · curious 0.7 eager 0.9 busy 0.9 ││                                                   │
-│lead     comping    █▎       metal bells                                     ││                                                   │
-│  ↳ a fresh motif — new idea                                                 ││                                                   │
-│  ♪ F6 C6 D6 D6                  ⇢ cores 0% · curious 0.6 eager 0.3 busy 0.8 ││                                                   │
-│colour   following  █▎       Banjo (105) + metal bells                       ││                                                   │
-│  ↳ inspired by the move to subsiding → picking up a banjo                   ││                                                   │
-│  ♪ F6 C6 D6 D6                    ⇢ net 0% · curious 0.4 eager 0.5 busy 0.6 │└───────────────────────────────────────────────────┘
-│guest    laying out          —                                               │┌ levels ───────────────────────────────────────────┐
-│  ↳ my thread calmed down → bowing out                                       ││sub  ████████████████████████████          -17 dB  │
-│  ♪ ·                                                       ⇢ busiest thread ││bass ██████████████████████████▋           -19 dB  │
-│                                                                             ││mid  █████████████████████████▎            -21 dB  │
-│                                                                             ││high ███████████████▊                      -36 dB  │
-└─────────────────────────────────────────────────────────────────────────────┘└───────────────────────────────────────────────────┘
-┌ band events ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│lead starts a new melodic idea                                                                                                    │
-│~ alive -> subsiding (energy 0.20)                                                                                                │
-│~ tempo 108 → 98 bpm over 5 bars (subsiding)                                                                                      │
-│+ Metallic Pad (93)  − Voice Oohs (53) [Pad]                                                                                      │
-│− Chiff Lead (83) [Lead]                                                                                                          │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ sysjam ──────────────────────────────────────────────────────────────────────────────────────── input irq i8042 keys ███▌   mouse ██▌    ┐
+│ D minor │ VI Bb → VII C → VIsus2 Bbsus2 → VII C → i Dm → i Dm                                                                            │
+│ 123 bpm surge — V-twin lope bar 25   ○●○○    alive   energy █████████████▌ 0.96  agitation █████████████▊ 0.98  seed 21    78s           │
+└ q quit · space pause display ────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ the band ────────────────────────────────────────────────────────────────────────┐┌ machine ─────────────────────────────────────────────┐
+│drone    following  █▏       D minor        sub drone + detuned pad               ││cpu            53% ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅    │
+│  ↳ voice-leading pad into Bbsus2, sub glides to Bb1 · 5 voices, smooth           ││cores          5/8 ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅    │
+│  ♪ Bb1 Bb3 F4 C5 C5 F5          ⇢ screen colour · curious 0.7 eager 1.0 busy 0.3 ││net         9 kB/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│bassist  comping    ████▋    D minor        synth round sine bass + GM Fretless Ba││disk      123 kB/s ▁▁▃▁▁▁▁▃▁▁▁▁▃▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│  ↳ bored after 33s on the same sound → picking up a fretless bass                ││files          0/s ▁▁▃▁▁▁▁▃▁▁▁▁▃▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│  ♪ C2 C3 Bb1 Bb2 Bb1 Bb2        ⇢ disk/files 0% · curious 0.5 eager 0.4 busy 0.6 ││keys          0.60 ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅    │
+│drummer  following  ████▋    —              synth boomy kick + GM Standard kit · t││mouse         0.43 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    │
+│  ↳ V-twin lope at 123 bpm: long-short low kicks + floor toms, 3 phrases to go    ││screen colour off                                     │
+│  ♪ tom tom tom crash perc perc        ⇢ cpu 64% · curious 0.2 eager 0.7 busy 0.3 ││top threads                                           │
+│keys     comping    ██████▋  D Phrygian     synth wavetable hollow square→soft saw││  100% █████▉ stress-ng-cpu                           │
+│  ↳ up-and-down arpeggio; pad holds the common tones                              ││  100% █████▉ stress-ng-cpu                           │
+│  ♪ C5 F5 Bb5 C6 F6 C6          ⇢ keys/mouse 60% · curious 0.1 eager 0.8 busy 0.8 ││  100% █████▉ stress-ng-cpu                           │
+│lead     comping    ██▋      F major        GM Cello (42)                         ││  100% █████▉ stress-ng-cpu                           │
+│  ↳ liked the colour player's answer → picking up a cello (wildcard!)             ││                                                      │
+│  ♪ E5                               ⇢ cores 59% · curious 0.3 eager 0.6 busy 0.6 ││                                                      │
+│colour   soloing    ███▎     D minor        GM Timpani (47) + glass bells         ││                                                      │
+│  ↳ phrase end → leaving A Dorian, back with the band in D minor                  ││                                                      │
+│  ♪ noise noise noise noise noise noise ⇢ net 0% · curious 0.4 eager 0.6 busy 0.8 ││                                                      │
+│guest    soloing    █▏       D minor        saw/sine guest voice                  ││                                                      │
+│  ↳ thread stress-ng-cpu at 100% cpu sits in → long E5                            ││                                                      │
+│  ♪ D5 E5 E5 E5 E5                                              ⇢ its thread 100% ││                                                      │
+│                                                                                  ││                                                      │
+│                                                                                  ││                                                      │
+│                                                                                  │└──────────────────────────────────────────────────────┘
+│                                                                                  │┌ levels ──────────────────────────────────────────────┐
+│                                                                                  ││sub  ██████████████████████████▌              -22 dB  │
+│                                                                                  ││bass ████████████████████████▊                -25 dB  │
+│                                                                                  ││mid  ██████████████████████████▍              -22 dB  │
+│                                                                                  ││high █████████████████████▏                   -30 dB  │
+└──────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────┘
+┌ band events ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│colour player brings in industrial noise (3 bars)                                                                                         │
+│+ GM Cello (42)  − GM Soprano Sax (64) [Lead]                                                                                             │
+│~ keys drifts to D Phrygian over D minor                                                                                                  │
+│~ colour comes home to D minor                                                                                                            │
+│+ GM Fretless Bass (35)  − GM Synth Bass 1 (38) [Bass]                                                                                    │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

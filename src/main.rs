@@ -25,6 +25,7 @@ mod screen;
 mod shared;
 mod synth;
 mod ui;
+mod voice;
 
 use shared::{Control, ScreenColor};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -90,6 +91,9 @@ fn enable_ftz() {
 }
 
 fn main() {
+    // Before anything else (threads, dlopen, arg parsing): open /dev/input while a
+    // setgid `input` gid may still be in effect, then drop it for good.
+    input::early_open(!std::env::args().skip(1).any(|a| a == "--no-input"));
     enable_ftz();
     let mut args: Vec<String> = Vec::new();
     for a in std::env::args().skip(1) {
@@ -290,6 +294,8 @@ fn main() {
             let e = t.elapsed().as_secs_f64();
             say!("bench {phase} ({:.0}-{:.0}s): {secs} s audio in {e:.3} s = {:.2}% of one core", t_base, en.time(), e / secs as f64 * 100.0);
         }
+        let (distinct, gm_picks, synth) = en.sound_stats();
+        say!("bench sounds: {distinct} distinct GM programs, {gm_picks} GM picks, {synth} synth patches designed");
         return;
     }
     let mut sink = if let Some(p) = &wav {
@@ -364,6 +370,7 @@ fn main() {
         seed,
         if synth.has_gm() { "" } else { ", oscillators only" }
     );
+    say!("palettes: {}", synth.palettes());
     let mut fbuf = vec![0f32; BLOCK * 2];
     let mut ibuf = vec![0i16; BLOCK * 2];
     let mut local = Control::default();

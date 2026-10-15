@@ -35,3 +35,32 @@ pub fn set_thread_nice(n: i32) {
         libc::setpriority(libc::PRIO_PROCESS, tid, n);
     }
 }
+
+/// True when the kernel started us in secure mode (setgid/setuid install). Stays true
+/// after privileges are dropped; glibc then ignores LD_LIBRARY_PATH and friends.
+pub fn secure() -> bool {
+    unsafe { libc::getauxval(libc::AT_SECURE) != 0 }
+}
+
+/// dlopen a system library by soname, then by absolute path in the standard
+/// multiarch dirs (works the same in secure mode, which ignores LD_LIBRARY_PATH).
+pub fn dlopen_sys(soname: &str) -> *mut std::ffi::c_void {
+    const DIRS: [&str; 6] = ["/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu", "/usr/lib64", "/lib64", "/usr/lib", "/lib"];
+    let flags = libc::RTLD_NOW | libc::RTLD_LOCAL;
+    let c = std::ffi::CString::new(soname).unwrap();
+    let h = unsafe { libc::dlopen(c.as_ptr(), flags) };
+    if !h.is_null() {
+        return h;
+    }
+    for d in DIRS {
+        let p = format!("{d}/{soname}");
+        if std::path::Path::new(&p).exists() {
+            let c = std::ffi::CString::new(p).unwrap();
+            let h = unsafe { libc::dlopen(c.as_ptr(), flags) };
+            if !h.is_null() {
+                return h;
+            }
+        }
+    }
+    std::ptr::null_mut()
+}

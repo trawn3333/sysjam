@@ -30,6 +30,10 @@ pub struct Mind {
     pub activity: f32,
     /// personality, e.g. "curious .82 · eager .31"
     pub traits: String,
+    /// the player's own key, e.g. "E Dorian"
+    pub key: String,
+    /// true when it differs from the band key
+    pub away: bool,
     /// the machine signal this player is tied to, with its level
     pub tied: String,
 }
@@ -72,6 +76,8 @@ pub struct MonSnap {
     pub keys: f32,
     pub mouse: f32,
     pub input_on: bool,
+    /// short input source label ("evdev×3", "irq xhci≈", "none", "off")
+    pub input_src: String,
     /// hue, saturation, brightness
     pub screen: Option<(f32, f32, f32)>,
     pub top: Vec<(String, f32)>,
@@ -272,7 +278,7 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(4), Constraint::Min(10), Constraint::Length(7)])
         .split(area);
-    draw_header(f, rows[0], b, paused, quitting);
+    draw_header(f, rows[0], b, m, paused, quitting);
     let mid = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
@@ -287,7 +293,7 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
     draw_log(f, rows[2], log);
 }
 
-fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, paused: bool, quitting: bool) {
+fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, quitting: bool) {
     let dim = Style::default().fg(Color::DarkGray);
     let mut prog = vec![Span::styled(format!(" {} ", b.key), Style::default().fg(Color::White).add_modifier(Modifier::BOLD))];
     if let Some(h) = &b.home {
@@ -335,8 +341,24 @@ fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, paused: bool, quitting: boo
     }
     let mut line2 = line2;
     line2.push(Span::styled(tail, dim));
-    let p = Paragraph::new(vec![Line::from(prog), Line::from(line2)])
-        .block(Block::default().borders(Borders::ALL).title(Span::styled(" sysjam ", Style::default().add_modifier(Modifier::BOLD))).title_bottom(Span::styled(" q quit · space pause display ", dim)));
+    // input source + live typing / mouse meters, top-right on the border
+    let src = if m.input_src.is_empty() { "…" } else { m.input_src.as_str() };
+    let live = m.input_on && src != "none";
+    let mut inp = vec![Span::styled(format!(" input {src} "), if live { Style::default().fg(Color::Gray) } else { dim })];
+    if live {
+        inp.push(Span::styled("keys ", dim));
+        inp.push(Span::styled(meter(m.keys, 6), Style::default().fg(Color::LightGreen)));
+        inp.push(Span::styled(" mouse ", dim));
+        inp.push(Span::styled(meter(m.mouse, 6), Style::default().fg(Color::Green)));
+        inp.push(Span::raw(" "));
+    }
+    let p = Paragraph::new(vec![Line::from(prog), Line::from(line2)]).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(Span::styled(" sysjam ", Style::default().add_modifier(Modifier::BOLD)))
+            .title(Line::from(inp).right_aligned())
+            .title_bottom(Span::styled(" q quit · space pause display ", dim)),
+    );
     f.render_widget(p, r);
 }
 
@@ -356,8 +378,13 @@ fn draw_band(f: &mut Frame, r: Rect, b: &BandSnap) {
             Span::styled(format!("{:<11}", mi.status), Style::default().fg(st)),
             Span::styled(meter(mi.activity, 8), Style::default().fg(st)),
             Span::raw(" "),
+            Span::styled(
+                format!("{:<14}", mi.key),
+                if mi.away { Style::default().fg(Color::Black).bg(Color::LightMagenta).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::Gray) },
+            ),
+            Span::raw(" "),
         ];
-        let used = 9 + 11 + 8 + 1;
+        let used = 9 + 11 + 8 + 1 + 15;
         let inst: String = mi.instrument.chars().take(w.saturating_sub(used)).collect();
         l1.push(Span::styled(inst, Style::default().fg(Color::LightBlue)));
         lines.push(Line::from(l1));

@@ -11,7 +11,7 @@ around the circle of fifths. Players pick up a new General MIDI instrument or
 design a new synth patch whenever something inspires them. Under everything sits
 a continuous deep sub drone and bass. No two runs are the same unless you pass `--seed`.
 
-(Formerly developed under the working name *sysmusic*.) Listen: [`docs/sample.mp3`](docs/sample.mp3) is a 75 s demo at 192 kbps. It starts calm with no hiss, then hits chaos (CPU + network + disk load plus simulated fast typing), where a short burst of industrial noise comes in, then settles again. Its verbose log is `docs/sample-render.log`. [`docs/sample-tempo.mp3`](docs/sample-tempo.mp3) is a 90 s demo (seed 5, made with `tools/demo_tempo.sh`). It starts in A major at 84 bpm, and the tempo eases down to 71 while the band is chilling. Under load the band comes alive, ramps up to 95 bpm and modulates to D minor; when the load stops it subsides to 86 bpm. Its log is `docs/sample-tempo-render.log`.
+(Formerly developed under the working name *sysmusic*.) Listen: [`docs/sample.mp3`](docs/sample.mp3) is a 75 s demo at 192 kbps. It starts calm with no hiss, then hits chaos (CPU + network + disk load plus simulated fast typing), where a short burst of industrial noise comes in, then settles again. Its verbose log is `docs/sample-render.log`. [`docs/sample-tempo.mp3`](docs/sample-tempo.mp3) is a 90 s demo (seed 5, made with `tools/demo_tempo.sh`). It starts in A major at 84 bpm, and the tempo eases down to 73 while the band is chilling. Under load (from 18 s) the band comes alive and ramps toward 97 bpm. At about 60 s a **surge** opens the throttle from 85 to 133 bpm with the V-twin lope, while the band modulates to D minor. The surge winds down to 109 bpm at about 75 s, and the band then subsides. Its log is `docs/sample-tempo-render.log`.
 
 ![sysjam's live terminal UI](docs/tui.png)
 
@@ -56,9 +56,10 @@ crossterm) that shows how the band is thinking. Piped or redirected output, or
 - **Header**: key, the chord progression with roman numerals (past chords dim,
   the current chord highlighted, the planned ones after it), the home key when the
   band is away from it, e.g. `D minor (home A major)`, the tempo with an arrow while it is
-  ramping (`105→98 bpm`; `(locked)` with `--bpm`), any half-time or double-time feel, bar and beat,
+  ramping (`105→98 bpm`; `(locked)` with `--bpm`), any half-time, double-time or `surge — V-twin lope` feel, bar and beat,
   the arrangement state (chilling / awakening / alive / subsiding) and the
-  bandleader's energy and agitation meters.
+  bandleader's energy and agitation meters. Top right: the input source
+  (`evdev×2`, `evdev×2 setgid`, `usb-hid`, `irq i8042`, `irq xhci≈`, `none`) with live keys and mouse meters.
 - **The band**: one panel per member: drone, bassist, drummer, keys, lead,
   colour/FX, plus the guest voice when a busy thread sits in. Each panel shows:
   - the member's status: laying out, comping, following, soloing or trading;
@@ -146,6 +147,26 @@ target tempo, depending on the arrangement state and its agitation:
 
 The tempo never jumps. It ramps smoothly over 2–8 bars (at most 24 bpm per ramp), one tiny step-length change per sixteenth, so the step clock stays glitch-free. The echo time follows the tempo, gliding one sample at a time. Sometimes the drummer plays a phrase or two in **half-time** or **double-time** feel. `--bpm N` locks the tempo; feel moves still happen.
 
+**Surges.** Every so often the band opens the throttle. A surge is rare: the
+first one can come after about 40 s, later ones at least 2.5 minutes apart. It is
+much more likely when the band is alive or the typing is intense. When it fires:
+- the tempo ramps to 120–150 bpm over 2 bars, holds for 2–4 phrases, then winds back down over 6 bars to the middle of the state's tempo range;
+- the drummer drops into a lopsided Harley-Davidson V-twin **"potato-potato" lope**: long-short pairs of deep kicks (38–47 Hz bodies) and floor toms on sixteenths 0, 3, 8 and 11, with a soft rim;
+- the bassist thuds the root on the same long-short pulse with a growl patch;
+- a low-passed **throttle-rev swell** (a rising 33→75 Hz rumble) opens the surge and some phrases inside it, and a falling one closes it;
+- the TUI shows the feel as `surge — V-twin lope`, and the drummer's thinking line explains it, e.g. `the typing is racing → opening the throttle to 138 bpm: V-twin lope, long-short low kicks + floor toms`.
+
+Nothing in a surge is high-passed or noisy: it is all low end. `--bpm` keeps the tempo locked, but the lope still happens.
+
+**Every player has its own key.** The bassist and drone anchor the band key. Keys,
+lead and colour each carry their own key and mode, related to the band's, and
+they listen to the others:
+- At phrase boundaries a player may wander, guided by its *adventure* trait, to the relative or parallel key, a fifth up or down, or a brighter or darker mode (Lydian, Mixolydian, Dorian, Phrygian…). The TUI shows e.g. `drifting to E Dorian over the band's A minor`.
+- Adventurous players can go **bitonal** (a tritone or a major third away), but only in chaos.
+- Notes outside the player's own scale snap to the nearest scale tone. Every note is scored for roughness against the bass and pad, and a player that hears too much steers back (`heard roughness against the bass/pad … → steering back`).
+- At cadences, phrase ends and key changes everyone converges on the band key again.
+- In minor keys the raised 7th is spelt as a sharp (G# in A minor, C# in D minor), and keys are spelt the conventional way (E♭ minor, not D# minor).
+
 The voicing keeps common tones and moves the other voices by the smallest
 interval. The bass follows chord roots; shimmer, arps and the lead use chord
 tones.
@@ -181,7 +202,33 @@ If none is found, the band plays its oscillator instruments only and prints
 one hint line: `sudo apt install fluid-soundfont-gm` (FluidR3, 140 MB, sounds
 better than TimGM6mb).
 
-Picks are weighted across all 128 programs plus the drum kit.
+Picks are weighted across **all 128 programs**: every program has a real
+weight in at least two roles (pad, comp, lead, colour, bass). On top of that,
+each player draws a **signature palette** from its personality (ethnic plucks;
+brass, reeds & organs; synth leads & FX; mallets & bells; strings & voices; keys
+& guitars; winds & pipes; oddballs & sound FX). It favours that palette, with an
+occasional wildcard from anywhere. Per-program gain is kept narrow (0.75–0.95), so
+oddballs are audible, and the GM layer rises with the band's energy so it sits
+in front of the oscillator bed.
+
+The **drummer** switches between GM kits (Standard, Room, Power, Electronic,
+TR-808, Jazz, Brush, Orchestra) and auxiliary percussion sets (shakers,
+congas & bongos, agogo/claves/woodblocks, triangle & tambourine, timbales &
+cowbell).
+
+**Every player can play GM or synthesize.** Each has a *synth* trait (sample vs
+synth preference). When inspired, it picks either a GM program or a patch it
+designs itself, with parameters drawn from its personality and its tied signal.
+There are four engines:
+- **subtractive**: detuned saw / square / PWM into a resonant filter with its own envelope;
+- **FM**: 2–4 operators with a decaying index (bells, e-pianos, metallic leads);
+- **wavetable**: morphing between sine, soft saw, hollow square, vocal and glass tables;
+- **Karplus-Strong pluck**, with a brightness-controlled loop filter.
+
+The voices share a 10-voice pool. The quietest or released voice is stolen,
+with a de-click tail, so CPU stays capped. The sub drone is separate and always
+on. The TUI shows the source, e.g. `GM Koto (107)` or `synth FM 3-op ratio 3.5 bell`.
+
 - 2–4 layers are active (pad, comp/keys, lead, colour, and sometimes a GM bass).
 - There is no fixed rotation. A player picks up a new instrument when something **inspires** it:
   - a state change (e.g. awakening → alive);
@@ -241,16 +288,65 @@ speakers, raise `--sub` (up to 2) or lower `--volume`.
 
 ## Keyboard / mouse activity
 
-Intense typing makes the band pick up, and mouse bursts nudge it more gently.
-These are improvisational cues, not one click per keypress. sysjam only counts
-**how many** input events happen; it never reads which keys.
+Intense typing makes the band pick up (and can trigger a surge), and mouse
+bursts nudge it more gently. These are improvisational cues, not one click per
+keypress. sysjam only counts **how many** input events happen. It never reads
+which keys, and key codes are never stored or logged.
 
-Detection order (no root needed):
-1. **`/proc/interrupts`**: deltas of the `i8042` lines (irq 1 = keyboard, irq 12 = PS/2 mouse/touchpad) and i2c-HID touchpad lines. Readable by everyone and essentially free. This covers most laptops' built-in keyboards and touchpads. USB keyboards don't get their own line (they share the USB controller's interrupt), so they are not counted this way.
-2. **`/dev/input/event*`**, opened read-only and non-blocking, but only if your user can open them (the `input` group). Devices are classified by their sysfs name (keyboard / mouse / touchpad / trackpoint); everything else is skipped. sysjam counts key presses/repeats and motion events. Key codes are discarded unread and nothing is stored.
-3. Otherwise it is off. `--verbose` prints one line saying why, and the music carries on.
+At startup sysjam logs which source it uses, and the TUI header shows it with
+live keys and mouse meters (top right: `input evdev×2 keys ███▌ mouse █`):
 
-Rates are smoothed over ~3 s and mapped to 0–1: about 6 keystrokes/s saturates the keyboard, and continuous mouse motion only reaches the mouse cap. The two together can add at most 0.45 to the bandleader's energy input, so they push but never dominate on their own. Heavy typing counts as a "hot" signal, and with high agitation it lets awakening → alive happen before the usual dwell. `--no-input` turns it off.
+```
+input: evdev (2 devices: AT Translated Set 2 keyboard, ELAN0712:00 04F3:30FD Touchpad)
+input: evdev via setgid input (privileges dropped) — 2 devices: …
+input: evdev unavailable: permission denied on 3 keyboard/pointer nodes (/dev/input/event* is root:input 660, and you're not in that group)
+input: to opt in: `sudo usermod -aG input $USER` and log in again (or the setgid install below); sysjam counts events only, never key codes
+input: irq fallback: usb-hid Logitech USB Receiver (kbd+pointer), irq 1 i8042 (kbd), irq 51 elan0712:00 (pointer)
+input: irq fallback: xhci (irq 127) — shared controller line(s), idle baseline calibrated, USB disk/net traffic ignored; approximate
+input: none — no readable keyboard/mouse counters …
+```
+
+Sources, best first:
+1. **evdev** (`/dev/input/event*`), read-only and non-blocking. Only keyboard and pointer nodes are opened. They are classified from sysfs capabilities (EV_KEY+EV_REP = keyboard, EV_REL or a touchpad/mouse name = pointer); power buttons, lid switches, jacks and the like are skipped. It counts key *presses* and motion events. This needs the `input` group or the setgid install below. Devices are opened once at startup, so plug in new ones before starting.
+2. **No-permission fallbacks**, combined when several exist:
+   - **USB HID report counters**: `/sys/bus/usb/devices/*/urbnum` (world-readable) of each USB device that carries a keyboard or pointer, identified via `/sys/class/input`. This covers USB keyboards and mice, which otherwise hide behind the shared USB controller interrupt. Devices that also stream audio (headsets) are skipped.
+   - **specific `/proc/interrupts` lines**: `i8042` (irq 1 = keyboard, irq 12 = PS/2 pointer) and i2c-HID touchpads/keyboards (`i2c_hid`, `ELAN…`, `SYNA…`, `MSFT0001`, `PNP0C50`, …).
+3. **Aggregate controller lines** (`xhci_hcd`, `ehci_hcd`, `i2c_designware`) when nothing more specific exists. These are shared with other devices, so sysjam keeps an **idle baseline** per line (it drops at once, then creeps up over about 5 minutes) and counts only the excess. Intervals in which a USB-attached disk or network adapter moved data are ignored. Constant streams like a USB DAC sink into the baseline. It is approximate: a trickle is read as typing, a stream as mouse motion.
+4. Otherwise **none**. The music carries on.
+
+Dedicated fallback counters get the same baseline, but with a smaller margin and a ~30-minute creep, so long typing sessions aren't absorbed into it.
+Rates are smoothed over about 3 s and mapped to 0–1; about 6 keystrokes/s saturates the keyboard meter. The two together can add at most 0.45 to the bandleader's energy input, so they push but never dominate. `--no-input` turns all of it off, and nothing is opened.
+
+### Giving sysjam evdev access, and the security tradeoff
+
+Access to `/dev/input/event*` is access to **every keystroke**, including
+passwords, for any program that has it. sysjam reads only the event type and
+whether it was a press, and drops the rest, but whatever you grant this way
+applies to the binary, so pick the narrowest option:
+
+- **Do nothing.** The fallbacks above need no permission, and on most machines they are good enough to drive the band.
+- **`sudo usermod -aG input $USER`**, then log out and back in. Simple, but *every* program you run can then read every keyboard. This is the broadest option.
+- **setgid `input` on the sysjam binary only.** Only this binary gets the group, and only for an instant:
+
+  ```bash
+  install -m 0755 dist/sysjam ~/.local/bin/sysjam   # a dir only you can write to
+  sudo chgrp input ~/.local/bin/sysjam && sudo chmod g+s ~/.local/bin/sysjam
+  ```
+
+  At the very start of `main`, before any thread, library or argument parsing,
+  sysjam opens the keyboard/pointer event nodes it needs. It then permanently
+  drops the elevated gid with `setresgid(rgid, rgid, rgid)` and verifies that the
+  real, effective and saved gid are all your own and that the old gid can't be
+  regained; otherwise it refuses to run. It logs
+  `input: evdev via setgid input (privileges dropped)`. The kernel keeps a setgid
+  process non-dumpable, so other programs running as you can't ptrace it and take
+  over the open input fds.
+
+  Caveats:
+  - **Redo the `chgrp`/`chmod` after every binary update.** Replacing or rebuilding the file drops the setgid bit (that's intended).
+  - **Keep it in a path only you (or root) can write**, such as `~/.local/bin` (check with `ls -ld ~/.local/bin`) or `/usr/local/bin`. If another user could replace the file, they could swap in a binary that keeps the `input` gid.
+  - In setgid mode, glibc runs sysjam in *secure mode* (AT_SECURE). `LD_LIBRARY_PATH` and similar variables are ignored, and so are sysjam's own test hooks (`SYSJAM_INPUT_DIR`, `SYSJAM_INTERRUPTS`). ALSA, PipeWire and D-Bus are loaded from the standard system library paths: by soname, then by absolute path in `/usr/lib/x86_64-linux-gnu`, `/usr/lib64` and `/usr/lib`. libdbus ignores the environment in secure mode, so sysjam passes it the session-bus address itself (`$DBUS_SESSION_BUS_ADDRESS`, or `$XDG_RUNTIME_DIR/bus`). Screen capture through the portal keeps working.
+  - To undo: `sudo chmod g-s ~/.local/bin/sysjam`.
 
 ## Screen colour
 
@@ -311,10 +407,11 @@ Measured exactly (schedstat, all threads) on an 8-vCPU Xeon VM:
 | idle, `--no-gm` | 1.47% | 3.7 MB |
 | idle, TimGM6mb, input tracking on (/proc/interrupts) vs `--no-input` | 1.87% vs 1.63% (difference within run-to-run noise) | 10 MB |
 | 75 s chaos demo (`tools/demo_short.sh`) | 2.15% | |
-| 90 s tempo/key demo (`tools/demo_tempo.sh`: random key + tempo, 40 s of stress-ng/downloads/direct writes/typing), incl. WAV writing | 2.36% | |
+| 90 s tempo/key demo (`tools/demo_tempo.sh`: random key + tempo, 40 s of stress-ng/downloads/direct writes/typing, one surge at ~60–75 s), incl. WAV writing | 2.84% | |
 | 3-min demo under heavy load (stress-ng, ~50 MB/s downloads, ~500 MB/s direct writes), incl. WAV writing | 2.50% | |
 | offline engine only, alive state | ~1.7% | |
 | idle, FluidR3, **live terminal UI on** vs `--no-tui` (same seed, side by side, 120 s, /proc utime+stime) | 2.22% vs 1.89% (the UI thread itself: 0.27%) | |
+| idle, TimGM6mb, synth voice pool + per-player keys, **UI on** vs `--no-tui` (side by side, 60 s) | 2.05% vs 1.71% | |
 | alive under heavy load (busy thread as guest, ~400 MB/s writes, ~40 MB/s downloads, file churn), UI on, X11 screen sampling, 60 s | 3.05% | |
 
 ## Troubleshooting
@@ -342,7 +439,7 @@ batched system-wide counter, so small bursts cancel out.
 cargo build --release           # native build
 # portable build used for dist/ (glibc 2.29 symbol baseline) via zig:
 pip install ziglang && cargo install cargo-zigbuild --version 0.21.8
-cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.31
+cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.29
 mkdir -p dist && cp target/x86_64-unknown-linux-gnu/release/sysjam dist/
 ```
 Requires rustc ≥ 1.85 (rustysynth is pinned to 1.3.5).

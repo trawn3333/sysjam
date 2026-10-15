@@ -463,6 +463,7 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
                     keys: act.keyboard,
                     mouse: act.mouse,
                     input_on: input.is_some(),
+                    input_src: input.as_ref().map(|t| t.label().to_string()).unwrap_or_else(|| "off".into()),
                     screen: if sc.valid { Some((sc.hue, sc.saturation, sc.brightness)) } else { None },
                     top: top.clone(),
                     hist: hist.clone(),

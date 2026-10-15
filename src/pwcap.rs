@@ -302,7 +302,7 @@ impl Capture {
     /// Connect to the portal's PipeWire remote (takes ownership of `fd`).
     pub fn open(fd: i32, node: u32) -> Result<Capture, String> {
         unsafe {
-            let h = libc::dlopen(c"libpipewire-0.3.so.0".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+            let h = crate::shared::dlopen_sys("libpipewire-0.3.so.0");
             if h.is_null() {
                 libc::close(fd);
                 return Err("libpipewire-0.3.so.0 not found".into());

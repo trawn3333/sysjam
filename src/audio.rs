@@ -33,8 +33,7 @@ unsafe fn sym<T: Copy>(h: *mut c_void, name: &str) -> Result<T, String> {
 impl Alsa {
     pub fn open(device: &str, rate: u32, latency_us: u32) -> Result<Alsa, String> {
         unsafe {
-            let lib = CString::new("libasound.so.2").unwrap();
-            let h = libc::dlopen(lib.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+            let h = crate::shared::dlopen_sys("libasound.so.2");
             if h.is_null() {
                 return Err("libasound.so.2 not found (install libasound2 / alsa-lib)".into());
             }

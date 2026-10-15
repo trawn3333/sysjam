@@ -64,6 +64,8 @@ static USE_SHARPS: AtomicBool = AtomicBool::new(false);
 /// C major / A minor: usual chromatic spellings (C# Eb F# G# Bb)
 static NATURAL: AtomicBool = AtomicBool::new(true);
 const NATURALS: [&str; 12] = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "G#", "A", "Bb", "B"];
+/// leading tone (raised 7th) of the current minor key, relative to the root; -1 in major
+static LEAD7: AtomicI32 = AtomicI32::new(-1);
 pub fn set_root_pc(midi: i32) {
     ROOT_PC.store(midi.rem_euclid(12), Ordering::Relaxed);
 }
@@ -71,13 +73,19 @@ fn spell_for(key: &Key) {
     // C-based tonic; sharp keys: G D A E B F# major and their relative minors
     let c = (key.tonic + ROOT_PC.load(Ordering::Relaxed)).rem_euclid(12);
     let maj = if key.minor { (c + 3) % 12 } else { c };
-    USE_SHARPS.store(matches!(maj, 7 | 2 | 9 | 4 | 11 | 6), Ordering::Relaxed);
+    // F#/Gb: sharps for the major key, flats for its relative (Eb minor, not D# minor)
+    USE_SHARPS.store(matches!(maj, 7 | 2 | 9 | 4 | 11) || (maj == 6 && !key.minor), Ordering::Relaxed);
     NATURAL.store(maj == 0, Ordering::Relaxed);
+    LEAD7.store(if key.minor { (key.tonic + 11).rem_euclid(12) } else { -1 }, Ordering::Relaxed);
 }
 
 /// pitch class relative to the global root (A = 0) -> name
 pub fn pc_name(pc: i32) -> &'static str {
     let i = (pc + ROOT_PC.load(Ordering::Relaxed)).rem_euclid(12) as usize;
+    // the raised 7th of a minor key is always a sharp/natural (C# in D minor, not Db)
+    if pc.rem_euclid(12) == LEAD7.load(Ordering::Relaxed) {
+        return SHARPS[i];
+    }
     if NATURAL.load(Ordering::Relaxed) {
         NATURALS[i]
     } else if USE_SHARPS.load(Ordering::Relaxed) {
@@ -145,11 +153,12 @@ impl Key {
         o
     }
     pub fn name(&self) -> String {
-        let prev = (USE_SHARPS.load(Ordering::Relaxed), NATURAL.load(Ordering::Relaxed));
+        let prev = (USE_SHARPS.load(Ordering::Relaxed), NATURAL.load(Ordering::Relaxed), LEAD7.load(Ordering::Relaxed));
         spell_for(self);
         let n = format!("{} {}", pc_name(self.tonic), if self.minor { "minor" } else { "major" });
         USE_SHARPS.store(prev.0, Ordering::Relaxed);
         NATURAL.store(prev.1, Ordering::Relaxed);
+        LEAD7.store(prev.2, Ordering::Relaxed);
         n
     }
     /// pentatonic subset (for sparse melodic material)
@@ -649,4 +658,118 @@ pub fn voice_lead(prev: &[i32], pcs: &[i32], n: usize, lo: i32, hi: i32) -> Vec<
     }
     out.sort();
     out
+}
+
+// ------------------------------------------------------------ player keys
+
+/// Church modes a player can think in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Mode {
+    Ionian,
+    Dorian,
+    Phrygian,
+    Lydian,
+    Mixolydian,
+    Aeolian,
+}
+impl Mode {
+    pub fn steps(self) -> [i32; 7] {
+        match self {
+            Mode::Ionian => [0, 2, 4, 5, 7, 9, 11],
+            Mode::Dorian => [0, 2, 3, 5, 7, 9, 10],
+            Mode::Phrygian => [0, 1, 3, 5, 7, 8, 10],
+            Mode::Lydian => [0, 2, 4, 6, 7, 9, 11],
+            Mode::Mixolydian => [0, 2, 4, 5, 7, 9, 10],
+            Mode::Aeolian => [0, 2, 3, 5, 7, 8, 10],
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Mode::Ionian => "major",
+            Mode::Dorian => "Dorian",
+            Mode::Phrygian => "Phrygian",
+            Mode::Lydian => "Lydian",
+            Mode::Mixolydian => "Mixolydian",
+            Mode::Aeolian => "minor",
+        }
+    }
+}
+
+/// How a player's key relates to the band key (so it follows modulations).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Rel {
+    Same,
+    Relative,
+    Parallel,
+    FifthUp,
+    FifthDown,
+    Brighter,
+    Darker,
+    FifthDorian,
+    /// bitonal: a tritone away
+    Tritone,
+    /// bitonal: a major third up
+    MajThird,
+}
+impl Rel {
+    pub fn bitonal(self) -> bool {
+        matches!(self, Rel::Tritone | Rel::MajThird)
+    }
+    pub fn describe(self) -> &'static str {
+        match self {
+            Rel::Same => "the band key",
+            Rel::Relative => "the relative key",
+            Rel::Parallel => "the parallel key",
+            Rel::FifthUp => "a fifth up",
+            Rel::FifthDown => "a fifth down",
+            Rel::Brighter => "a brighter mode",
+            Rel::Darker => "a darker mode",
+            Rel::FifthDorian => "Dorian a fifth up",
+            Rel::Tritone => "bitonal, a tritone away",
+            Rel::MajThird => "bitonal, a major third up",
+        }
+    }
+}
+
+/// A player's own key: tonic (relative to the global root) and mode.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PKey {
+    pub tonic: i32,
+    pub mode: Mode,
+}
+impl PKey {
+    pub fn of(band: Key, rel: Rel) -> PKey {
+        let t = band.tonic;
+        let bm = if band.minor { Mode::Aeolian } else { Mode::Ionian };
+        let (tonic, mode) = match rel {
+            Rel::Same => (t, bm),
+            Rel::Relative => if band.minor { (t + 3, Mode::Ionian) } else { (t + 9, Mode::Aeolian) },
+            Rel::Parallel => (t, if band.minor { Mode::Ionian } else { Mode::Aeolian }),
+            Rel::FifthUp => (t + 7, bm),
+            Rel::FifthDown => (t + 5, bm),
+            Rel::Brighter => (t, if band.minor { Mode::Dorian } else { Mode::Lydian }),
+            Rel::Darker => (t, if band.minor { Mode::Phrygian } else { Mode::Mixolydian }),
+            Rel::FifthDorian => (t + 7, Mode::Dorian),
+            Rel::Tritone => (t + 6, bm),
+            Rel::MajThird => (t + 4, bm),
+        };
+        PKey { tonic: tonic.rem_euclid(12), mode }
+    }
+    pub fn contains(&self, pc: i32) -> bool {
+        let d = (pc - self.tonic).rem_euclid(12);
+        self.mode.steps().contains(&d)
+    }
+    /// Name spelled for this key's own signature.
+    pub fn name(&self) -> String {
+        // approximate the signature by the mode's parent major / minor key
+        let k = Key { tonic: self.tonic, minor: matches!(self.mode, Mode::Aeolian | Mode::Dorian | Mode::Phrygian) };
+        let prev = (USE_SHARPS.load(Ordering::Relaxed), NATURAL.load(Ordering::Relaxed), LEAD7.load(Ordering::Relaxed));
+        spell_for(&k);
+        LEAD7.store(-1, Ordering::Relaxed);
+        let n = format!("{} {}", pc_name(self.tonic), self.mode.name());
+        USE_SHARPS.store(prev.0, Ordering::Relaxed);
+        NATURAL.store(prev.1, Ordering::Relaxed);
+        LEAD7.store(prev.2, Ordering::Relaxed);
+        n
+    }
 }

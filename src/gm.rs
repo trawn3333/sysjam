@@ -34,90 +34,91 @@ pub enum Role {
 }
 pub const ROLES: [Role; 5] = [Role::Pad, Role::Comp, Role::Lead, Role::Colour, Role::Bass];
 
-/// How well a program suits a role (0 = never). Everything gets a small
-/// weight somewhere so that, over time, every instrument can appear.
+/// How well a program suits a role. Every one of the 128 programs has a
+/// meaningful weight (>= 0.3) in at least two roles, so the whole GM set is in play.
 pub fn role_weight(role: Role, p: u8) -> f32 {
     let p = p as usize;
-    match role {
-        Role::Pad => match p {
-            88..=95 => 3.0,
-            48..=51 => 2.5,
-            52..=54 => 1.8,
-            44 => 1.2,
-            19 | 20 | 16 => 0.6,
-            60 | 61 => 0.5,
-            40..=43 => 0.6,
-            21 | 23 => 0.3,
-            97 | 99 | 100 | 102 => 0.8,
-            _ => 0.0,
-        },
-        Role::Comp => match p {
-            4 | 5 => 2.0,
-            0..=3 => 1.2,
-            6 | 7 => 0.5,
-            8..=13 => 1.6,
-            14 | 15 => 0.8,
-            24..=27 => 1.2,
-            28 | 31 => 0.6,
-            45 | 46 => 1.6,
-            104..=108 => 0.9,
-            114 => 0.6,
-            16 | 17 => 0.4,
-            29 | 30 => 0.1,
-            36 | 37 => 0.05,
-            _ => 0.0,
-        },
-        Role::Lead => match p {
-            73..=75 | 77 | 79 => 2.0,
-            72 | 76 | 78 => 1.0,
-            68..=71 => 1.2,
-            64..=67 => 0.6,
-            40 | 41 | 110 => 0.9,
-            42 => 0.8,
-            56 | 57 | 59 | 60 => 0.5,
-            80..=84 | 86 | 87 => 0.6,
-            22 => 0.4,
-            11 | 12 => 0.7,
-            85 => 1.0,
-            109 | 111 => 0.25,
-            58 | 61..=63 => 0.15,
-            _ => 0.0,
-        },
-        Role::Colour => match p {
-            96..=103 => 1.8,
-            52..=54 => 1.2,
-            8..=14 => 1.0,
-            91 | 92 | 94 => 1.0,
-            104..=108 => 0.9,
-            112..=119 => 0.5,
-            46 | 47 => 0.6,
-            31 => 0.6,
-            120..=123 => 0.25,
-            124..=127 => 0.04,
-            55 => 0.1,
-            _ => 0.05, // anything, very rarely
-        },
-        Role::Bass => match p {
-            32..=35 => 2.0,
-            38 | 39 => 1.5,
-            36 | 37 => 0.3,
-            43 => 0.6,
-            _ => 0.0,
-        },
+    // per GM family (8 programs each): [Pad, Comp, Lead, Colour, Bass]
+    const FAM: [[f32; 5]; 16] = [
+        [0.4, 1.5, 0.5, 0.5, 0.0], // piano
+        [0.3, 1.3, 0.7, 1.3, 0.0], // chromatic percussion
+        [1.2, 1.0, 0.6, 0.4, 0.0], // organ
+        [0.3, 1.3, 0.8, 0.6, 0.0], // guitar
+        [0.0, 0.4, 0.35, 0.3, 1.5], // bass
+        [1.4, 0.6, 1.0, 0.5, 0.0], // strings
+        [1.6, 0.4, 0.5, 0.8, 0.0], // ensemble
+        [0.8, 0.5, 1.0, 0.4, 0.0], // brass
+        [0.5, 0.4, 1.3, 0.4, 0.0], // reed
+        [0.4, 0.3, 1.4, 0.7, 0.0], // pipe
+        [0.4, 0.6, 1.3, 0.6, 0.0], // synth lead
+        [1.8, 0.3, 0.3, 0.8, 0.0], // synth pad
+        [1.0, 0.3, 0.3, 1.6, 0.0], // synth effects
+        [0.3, 1.2, 1.0, 0.8, 0.0], // ethnic
+        [0.0, 0.7, 0.3, 1.2, 0.0], // percussive
+        [0.5, 0.3, 0.3, 1.0, 0.0], // sound effects
+    ];
+    let r = match role {
+        Role::Pad => 0,
+        Role::Comp => 1,
+        Role::Lead => 2,
+        Role::Colour => 3,
+        Role::Bass => 4,
+    };
+    let mut w = FAM[p / 8][r];
+    // a few individual fits
+    match (role, p) {
+        (Role::Bass, 43 | 58 | 70 | 32..=39) => w = w.max(1.2),
+        (Role::Comp, 45 | 46) => w = 1.6,
+        (Role::Comp, 4 | 5) => w = 2.0,
+        (Role::Colour, 47 | 55 | 119) => w = 1.0,
+        (Role::Lead, 85 | 73 | 75 | 79) => w = 1.8,
+        (Role::Pad, 52 | 53 | 88..=95) => w = w.max(2.0),
+        _ => {}
     }
+    w
 }
 
-/// Per-program loudness trim so oddballs sit back in the mix.
+/// Per-player signature palettes (GM program ranges); players draw most of their
+/// instruments from one of these, plus occasional wildcards from anywhere.
+pub const PALETTES: [(&str, &[(u8, u8)]); 8] = [
+    ("ethnic plucks", &[(104, 108), (15, 15), (24, 25), (45, 46), (110, 111)]),
+    ("brass, reeds & organs", &[(16, 23), (56, 71)]),
+    ("synth leads & FX", &[(80, 87), (96, 103), (38, 39), (50, 51), (62, 63)]),
+    ("mallets & bells", &[(8, 15), (108, 108), (112, 114), (98, 98)]),
+    ("strings & voices", &[(40, 55), (85, 85), (91, 91)]),
+    ("keys & guitars", &[(0, 7), (24, 31)]),
+    ("winds & pipes", &[(64, 79), (109, 109)]),
+    ("oddballs & sound FX", &[(115, 127), (47, 47), (55, 55), (97, 97), (100, 103)]),
+];
+
+pub fn in_palette(pal: usize, p: u8) -> bool {
+    PALETTES[pal % PALETTES.len()].1.iter().any(|&(a, b)| p >= a && p <= b)
+}
+
+/// GM drum kits (bank 128): program, name
+pub const KITS: [(u8, &str); 8] = [(0, "Standard"), (8, "Room"), (16, "Power"), (24, "Electronic"), (25, "TR-808"), (32, "Jazz"), (40, "Brush"), (48, "Orchestra")];
+
+/// GM percussion colour sets the drummer can pick for its auxiliary hits.
+pub const PERC_SETS: [(&str, &[i32]); 5] = [
+    ("shakers", &[82, 70, 69]),
+    ("congas & bongos", &[62, 63, 64, 60, 61]),
+    ("agogo, claves & woodblocks", &[67, 68, 75, 76, 77]),
+    ("triangle & tambourine", &[81, 80, 54, 53]),
+    ("timbales & cowbell", &[65, 66, 56, 78, 79]),
+];
+
+/// Per-program loudness trim. Oddballs are only slightly trimmed now so they are audible.
 pub fn prog_gain(p: u8) -> f32 {
     match p {
-        120..=127 => 0.45,
-        55 | 29 | 30 | 84 | 87 => 0.5,
-        56..=67 => 0.65,
-        109 | 111 | 22 | 21 | 23 => 0.6,
-        16..=19 => 0.7,
-        80..=83 | 86 => 0.6,
-        112..=118 => 0.75,
-        _ => 0.9,
+        120..=127 => 0.8,
+        55 | 29 | 30 | 84 | 87 => 0.75,
+        56..=67 => 0.8,
+        109 | 111 | 22 | 21 | 23 => 0.8,
+        16..=19 => 0.8,
+        80..=83 | 86 => 0.75,
+        112..=118 => 0.9,
+        8..=15 | 104..=108 => 1.0,
+        _ => 0.92,
     }
 }
 
