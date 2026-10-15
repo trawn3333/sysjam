@@ -1,46 +1,46 @@
-┌ sysjam ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── input none ┐
-│ B major │ I B → vi G#m → IVadd9 Eadd9 → V F# → IIIsus2 D#sus2                                                                            │
-│ 97→76 bpm bar 10   ○○○●    chilling   energy ▎              0.02  agitation ▎              0.03  seed 3    24s                           │
-│ ♫ now quoting  █▍     colour (synth): The New Highland Laddie (trad., Aird vol. 4 no. 716) · Aird's Selection of Airs, 1782-97 · music21 │
-└ q quit · space pause display ────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-┌ the band ────────────────────────────────────────────────────────────────────────┐┌ conductor · 0 cues ──────────────────────────────────┐
-│drone    following           B major        sub drone + detuned pad               ││                                                      │
-│  ↳ colour (synth) is talking → the drone pulls way back                          ││  (°ᴗ°)      “nice — colour (synth) has The New       │
-│  ♪ E1 E4 F#4 G#4 B4               ⇢ screen warm · curious 0.8 eager 0.8 busy 0.6 ││ ╭┤▒├━━━━━▶  Highland Laddie · everyone support”      │
-│bassist  following           B major        synth warm saw bass                   ││  │▒│                                                 │
-│  ↳ only long roots — chilling, invite 0.30                                       ││  ╯ ╰        clutter █▎                               │
-│  ♪ E1                           ⇢ disk/files 1% · curious 0.5 eager 0.0 busy 0.5 │└──────────────────────────────────────────────────────┘
-│drummer  laying out          —              synth deep kick + GM Standard kit · co│┌ quoted themes · public domain ───────────────────────┐
-│  ↳ not invited yet (invite 0.05)                                                 ││00:19 colour (synth): The New Highland Laddie (trad., │
-│  ♪ ·                                   ⇢ cpu 5% · curious 0.0 eager 0.5 busy 0.4 ││Aird vol. 4 no. 716) · Aird's Selection of Airs,      │
-│keys     following           B major        synth wavetable vocal→soft saw morph 0││1782-97 · music21 corpus · public domain              │
-│  ↳ colour (synth) is up front → ducking under it, filter closed                  │└──────────────────────────────────────────────────────┘
-│  ♪ E4 F#4 B4                    ⇢ keys/mouse 0% · curious 0.4 eager 0.7 busy 0.6 │┌ machine ─────────────────────────────────────────────┐
-│lead     laying out          B major        synth glass bells                     ││cpu             1%        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│  ↳ listening                                                                     ││cores          0/8        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│  ♪ ·                                 ⇢ cores 0% · curious 0.7 eager 0.7 busy 0.3 ││net         2 kB/s        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│colour   quoting    ██▏      B major        synth wavetable sine→glass morph 0.08 ││disk         0 B/s        ▁▃▁▃▃▁▁▁▁▁▁▁▁▁▁▁▁▃▁▁▁▁▁▁    │
-│  ↳ ♫ quoting The New Highland Laddie (trad., Aird vol. 4 no. 716) · Aird's Select││files          0/s        ▁▃▁▃▃▁▁▁▁▁▁▁▁▁▁▁▁▃▁▁▁▁▁▁    │
-│  ♪ B4 B4 D#5 C#5 C#5 D#5               ⇢ net 0% · curious 0.6 eager 0.5 busy 0.5 ││keys          0.00        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│guest    laying out          —              —                                     ││mouse         0.00        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│  ↳ listening                                                                     ││screen        hue 1° bri 0.78                         │
-│  ♪ ·                                                            ⇢ busiest thread ││top threads                                           │
+╭ ♪ sysjam ♪ ─ ♪ style Blues  ← Country, changing over… ─────────────────────────────────────────────────────────────────────── input none ╮
+│ E major │ I7 E7 → IV A → I E → V7 B7                                                                                                     │
+│ 122→109 bpm tempo bias +14 bar 17   ○●○○    alive   energy ▓▓▓▓▓▓▓▓▓▓▓░░░ 0.75  agitation ▓▓▓▓▓▓▓▓▓▓▓░░░ 0.80  seed 3    45s             │
+│ ♫ no theme quoted right now                                                                                                              │
+╰ ↑↓ tempo  ←→ style  space pause  q quit ─────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ ♪ the band ♪ ────────────────────────────────────────────────────────────────────╮╭ ♪ conductor · Blues · 1 cue ♪ ───────────────────────╮
+│drone    stretching ▓░░░░░░░ E major        sub drone + detuned pad               ││  ▁███▁                                               │
+│  ↳ drums are out → letting the drone bloom a little                              ││  (-‿-)      “Lord have mercy… let's play the blues…” │
+│  ♪ E1 G#3 B3 B3 E4 E4             ⇢ screen warm · curious 0.8 eager 0.8 busy 0.6 ││ ╭┤▓├━━━━━                                            │
+│bassist  comping    ▓▓▓▓▓░░░ E major        synth warm saw bass + GM Fingered Bass││  │▓│                                                 │
+│  ↳ conductor went Blues → picking up a fingered bass                             ││  ╯ ╰        clutter ▓░░░░░░░                         │
+│  ♪ C#2 C#3 E1 E2 G#1 G#2       ⇢ disk/files 99% · curious 0.5 eager 0.0 busy 0.5 │╰──────────────────────────────────────────────────────╯
+│drummer  following  ░░░░░░░░ —              synth deep kick + GM Brush kit · trian│╭ ♪ quoted themes · public domain ♪ ───────────────────╮
+│  ↳ conductor went Blues → switching to the GM Brush kit with triangle & tambourin││none yet — themes come rarely                         │
+│  ♪ ·                                  ⇢ cpu 75% · curious 0.0 eager 0.5 busy 0.4 ││                                                      │
+│keys     comping    ▓▓▓▓░░░░ E Mixolydian   GM String Ensemble 1 (48) / GM Bird Tw││                                                      │
+│  ↳ conductor: keys → “ok, ok”, complying                                         │╰──────────────────────────────────────────────────────╯
+│  ♪ A4 C#5 E5 E3 G#3 B3               ⇢ input 0% · curious 0.4 eager 0.7 busy 0.6 │╭ ♪ machine ♪ ─────────────────────────────────────────╮
+│lead     comping    ▓▓░░░░░░ E major        GM Overdriven Guitar (29)             ││cpu            67% ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆    │
+│  ↳ inspired by the move to alive → picking up an overdriven guitar               ││cores          6/8 ▆▅▅▆▆▆▆▅▅▆▆▆▅▆▆▅▅▆▅▆▆▆▆▆▆▅▆▆▆▆▆    │
+│  ♪ E5                               ⇢ cores 74% · curious 0.7 eager 0.7 busy 0.3 ││net         2 kB/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│colour   holding    ░░░░░░░░ E Mixolydian   GM Recorder (74) + glass bells        ││disk     67.2 MB/s █████▁███████████████████▆█████    │
+│  ↳ conductor went Blues → picking up a recorder                                  ││files          0/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│  ♪ ·                                   ⇢ net 0% · curious 0.6 eager 0.5 busy 0.5 ││input         0.00 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│guest    soloing    ▓▓▓░░░░░ E major        saw/sine guest voice                  ││screen        hue 1° bri 0.78                         │
+│  ↳ thread sh at 100% cpu sits in → long D#4                                      ││top threads                                           │
+│  ♪ G#4 G#4 G#4 G#4 D#4                                         ⇢ its thread 100% ││  100% ▓▓▓▓▓▓ sh                                      │
+│                                                                                  ││  100% ▓▓▓▓▓▓ sh                                      │
+│                                                                                  ││  100% ▓▓▓▓▓▓ sh                                      │
+│                                                                                  ││  100% ▓▓▓▓▓▓ sh                                      │
 │                                                                                  ││                                                      │
 │                                                                                  ││                                                      │
-│                                                                                  ││                                                      │
-│                                                                                  ││                                                      │
-│                                                                                  ││                                                      │
-│                                                                                  │└──────────────────────────────────────────────────────┘
-│                                                                                  │┌ levels ──────────────────────────────────────────────┐
-│                                                                                  ││sub  ███████████████████████▉                 -26 dB  │
-│                                                                                  ││bass █████████████████████▏                   -30 dB  │
-│                                                                                  ││mid  █████████████████▌                       -35 dB  │
-│                                                                                  ││high ███████▏                                 -50 dB  │
-└──────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────┘
-┌ band events ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│colour (synth): “drums are out, my turn to stretch”                                                                                       │
-│~ tempo 100 → 76 bpm over 8 bars (chilling)                                                                                               │
-│bassist lays out                                                                                                                          │
-│♫ [00:19] colour (synth) quotes The New Highland Laddie (trad., Aird vol. 4 no. 716) · Aird's Selection of Airs, 1782-97 · music21 corpus │
-│♩ conductor: nice — colour (synth) has The New Highland Laddie · everyone support                                                         │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+│                                                                                  │╰──────────────────────────────────────────────────────╯
+│                                                                                  │╭ ♪ levels ♪ ──────────────────────────────────────────╮
+│                                                                                  ││sub  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░   -21 dB  │
+│                                                                                  ││bass ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░   -24 dB  │
+│                                                                                  ││mid  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░   -21 dB  │
+│                                                                                  ││high ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░   -30 dB  │
+╰──────────────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────╯
+╭ ♪ band events ♪ ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│♫ style: Country → Blues (you asked) — 12-bar form with quick-change and turnarounds, dominant sevenths, blue notes bent, shuffle, boogie │
+│~ tempo 122 → 109 bpm over 5 bars (alive, Blues, bias +14)                                                                                │
+│~ keys drifts to E Mixolydian over E major                                                                                                │
+│drummer joins                                                                                                                             │
+│+ GM Overdriven Guitar (29)  − GM Clean Guitar (27) [Lead]                                                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

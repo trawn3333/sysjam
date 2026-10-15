@@ -52,10 +52,8 @@ pub struct Signals {
     pub file: f32,
     pub fd: f32,
     pub screen_change: f32,
-    /// keyboard activity 0..1 (counts only)
-    pub keyboard: f32,
-    /// mouse / touchpad activity 0..1
-    pub mouse: f32,
+    /// combined keyboard + mouse activity 0..1 (counts only)
+    pub input: f32,
 }
 
 #[derive(Default)]
@@ -142,10 +140,10 @@ impl Leader {
     /// Fold the machine signals into energy/agitation; detect sustained events.
     pub fn listen(&mut self, s: &Signals, dt: f32, msgs: &mut Vec<String>) -> Requests {
         let mut req = Requests::default();
-        let n_hi = [s.cpu > 0.5, s.net > 0.5, s.file > 0.5, s.cores > 0.5, s.keyboard > 0.55].iter().filter(|&&b| b).count() as u32;
+        let n_hi = [s.cpu > 0.5, s.net > 0.5, s.file > 0.5, s.cores > 0.5, s.input > 0.55].iter().filter(|&&b| b).count() as u32;
         self.n_hi = n_hi;
-        // keyboard tips energy harder than mouse; both are capped so compositor chatter can't dominate
-        let input = (0.55 * s.keyboard + 0.2 * s.mouse).min(0.45);
+        // input activity tips energy; capped so compositor chatter can't dominate
+        let input = (0.55 * s.input).min(0.45);
         let mut inst = 0.40 * s.cpu + 0.12 * s.cores + 0.18 * s.net + 0.18 * s.file + 0.04 * s.fd + 0.08 * s.screen_change + input;
         if n_hi >= 2 {
             inst += 0.12 * (n_hi - 1) as f32;

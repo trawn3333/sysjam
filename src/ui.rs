@@ -16,6 +16,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{Frame, Terminal};
+use crate::theme::th;
 
 // ------------------------------------------------------------------ shared state
 
@@ -79,6 +80,15 @@ pub struct BandSnap {
     pub seed: u64,
     pub time: f32,
     pub version: u64,
+    /// conductor style ("auto · House Band"), previous style while changing over
+    pub style: String,
+    pub style_from: Option<String>,
+    /// user tempo bias in bpm (↑/↓, --tempo-bias)
+    pub tempo_bias: f32,
+    /// conductor costume for the style
+    pub hat: &'static str,
+    pub face: Option<&'static str>,
+    pub style_id: &'static str,
 }
 
 pub const HIST: usize = 120;
@@ -90,16 +100,16 @@ pub struct MonSnap {
     pub net: f64,
     pub write: f64,
     pub fd: f64,
-    pub keys: f32,
-    pub mouse: f32,
+    /// combined keyboard + mouse activity
+    pub input: f32,
     pub input_on: bool,
     /// short input source label ("evdev×3", "irq xhci≈", "none", "off")
     pub input_src: String,
     /// hue, saturation, brightness
     pub screen: Option<(f32, f32, f32)>,
     pub top: Vec<(String, f32)>,
-    /// cpu, cores, net, disk, files, keys, mouse — each 0..1
-    pub hist: [VecDeque<f32>; 7],
+    /// cpu, cores, net, disk, files, input — each 0..1
+    pub hist: [VecDeque<f32>; 6],
 }
 
 pub static TUI_ON: AtomicBool = AtomicBool::new(false);
@@ -170,6 +180,9 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
     let mut paused = false;
     let mut quitting = false;
     let mut last = Instant::now() - frame_dt;
+    // held arrows auto-repeat fast: accept one tempo nudge per 160 ms, one style step per 300 ms
+    let mut last_t = Instant::now() - Duration::from_secs(1);
+    let mut last_s = Instant::now() - Duration::from_secs(1);
     let (mut band, mut mon) = (BandSnap::default(), MonSnap::default());
     while !stop.load(Ordering::Relaxed) {
         let wait = frame_dt.saturating_sub(last.elapsed()).min(Duration::from_millis(100));
@@ -190,6 +203,16 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
                     }
                     KeyCode::Char(' ') => {
                         paused = !paused;
+                        last = Instant::now() - frame_dt;
+                    }
+                    KeyCode::Up | KeyCode::Down if last_t.elapsed() >= Duration::from_millis(160) => {
+                        last_t = Instant::now();
+                        crate::shared::KEY_TEMPO.fetch_add(if k.code == KeyCode::Up { 1 } else { -1 }, Ordering::Relaxed);
+                        last = Instant::now() - frame_dt;
+                    }
+                    KeyCode::Left | KeyCode::Right if last_s.elapsed() >= Duration::from_millis(300) => {
+                        last_s = Instant::now();
+                        crate::shared::KEY_STYLE.fetch_add(if k.code == KeyCode::Right { 1 } else { -1 }, Ordering::Relaxed);
                         last = Instant::now() - frame_dt;
                     }
                     _ => {}
@@ -222,8 +245,14 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
 const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 fn meter(v: f32, w: usize) -> String {
+    let (fc, ec) = crate::theme::meter_chars();
     let v = v.clamp(0.0, 1.0) * w as f32;
     let full = v.floor() as usize;
+    if fc != '█' {
+        // themed glyph meters: whole cells only
+        let n = (v.round() as usize).min(w);
+        return std::iter::repeat(fc).take(n).chain(std::iter::repeat(ec).take(w - n)).collect();
+    }
     let mut s = "█".repeat(full.min(w));
     if full < w {
         let part = ((v - full as f32) * 8.0) as usize;
@@ -270,31 +299,33 @@ fn hsv(h: f32, s: f32, v: f32) -> Color {
 
 fn state_color(s: &str) -> Color {
     match s {
-        "chilling" => Color::Cyan,
-        "awakening" => Color::Yellow,
-        "alive" => Color::LightRed,
-        "subsiding" => Color::Magenta,
-        _ => Color::Gray,
+        "chilling" => th(Color::Cyan),
+        "awakening" => th(Color::Yellow),
+        "alive" => th(Color::LightRed),
+        "subsiding" => th(Color::Magenta),
+        _ => th(Color::Gray),
     }
 }
 
 fn status_color(s: &str) -> Color {
     match s {
-        "soloing" => Color::LightRed,
-        "trading" => Color::LightYellow,
-        "comping" => Color::LightGreen,
-        "following" => Color::LightCyan,
-        "laying out" => Color::DarkGray,
-        "holding" => Color::Blue,
-        "stretching" => Color::LightMagenta,
-        "grooving" => Color::LightGreen,
-        "quoting" => Color::LightYellow,
-        _ => Color::Gray,
+        "soloing" => th(Color::LightRed),
+        "trading" => th(Color::LightYellow),
+        "comping" => th(Color::LightGreen),
+        "following" => th(Color::LightCyan),
+        "laying out" => th(Color::DarkGray),
+        "holding" => th(Color::Blue),
+        "stretching" => th(Color::LightMagenta),
+        "grooving" => th(Color::LightGreen),
+        "quoting" => th(Color::LightYellow),
+        _ => th(Color::Gray),
     }
 }
 
 fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, quitting: bool) {
     let area = f.area();
+    crate::theme::frame(b.style_id, b.beat);
+    f.render_widget(Block::default().style(Style::default().bg(crate::theme::bg()).fg(th(Color::Gray))), area);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(5), Constraint::Min(10), Constraint::Length(7)])
@@ -314,11 +345,20 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
     draw_machine(f, right[2], m);
     draw_levels(f, right[3], b);
     draw_log(f, rows[2], log);
+    if crate::theme::ascii() {
+        // plain-ASCII terminals: transliterate every cell that is still non-ASCII
+        for cell in f.buffer_mut().content.iter_mut() {
+            if !cell.symbol().is_ascii() {
+                let a = crate::theme::asciify(cell.symbol());
+                cell.set_symbol(&a);
+            }
+        }
+    }
 }
 
 fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, quitting: bool) {
-    let dim = Style::default().fg(Color::DarkGray);
-    let mut prog = vec![Span::styled(format!(" {} ", b.key), Style::default().fg(Color::White).add_modifier(Modifier::BOLD))];
+    let dim = Style::default().fg(th(Color::DarkGray));
+    let mut prog = vec![Span::styled(format!(" {} ", b.key), Style::default().fg(th(Color::White)).add_modifier(Modifier::BOLD))];
     if let Some(h) = &b.home {
         prog.push(Span::styled(format!("(home {h}) "), dim));
     }
@@ -328,9 +368,9 @@ fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, 
             prog.push(Span::styled(" → ", dim));
         }
         let st = match when {
-            0 => Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD),
+            0 => Style::default().fg(th(Color::Black)).bg(th(Color::LightYellow)).add_modifier(Modifier::BOLD),
             -1 => dim,
-            _ => Style::default().fg(Color::Gray),
+            _ => Style::default().fg(th(Color::Gray)),
         };
         prog.push(Span::styled(format!("{roman} {name}"), st));
         if *when == 0 {
@@ -340,19 +380,23 @@ fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, 
     let beat: String = (0..4).map(|i| if i == b.beat { '●' } else { '○' }).collect();
     let line2 = vec![
         match b.bpm_to {
-            Some(t) => Span::styled(format!(" {:.0}→{:.0} bpm ", b.bpm, t), Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)),
-            None => Span::styled(format!(" {:>3.0} bpm{} ", b.bpm, if b.bpm_locked { " (locked)" } else { "" }), Style::default().fg(Color::White)),
+            Some(t) => Span::styled(format!(" {:.0}→{:.0} bpm ", b.bpm, t), Style::default().fg(th(Color::LightYellow)).add_modifier(Modifier::BOLD)),
+            None => Span::styled(format!(" {:>3.0} bpm{} ", b.bpm, if b.bpm_locked { " (locked)" } else { "" }), Style::default().fg(th(Color::White))),
         },
-        Span::styled(if b.feel.is_empty() { String::new() } else { format!("{} ", b.feel) }, Style::default().fg(Color::LightMagenta)),
+        Span::styled(
+            if b.tempo_bias.abs() >= 0.5 { format!("tempo bias {:+.0} ", b.tempo_bias) } else { String::new() },
+            Style::default().fg(th(Color::LightCyan)).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(if b.feel.is_empty() { String::new() } else { format!("{} ", b.feel) }, Style::default().fg(th(Color::LightMagenta))),
         Span::styled(format!("bar {:<4} ", b.bar + 1), dim),
-        Span::styled(beat, Style::default().fg(Color::LightYellow)),
+        Span::styled(beat, Style::default().fg(th(Color::LightYellow))),
         Span::raw("   "),
-        Span::styled(format!(" {} ", b.state), Style::default().fg(Color::Black).bg(state_color(b.state)).add_modifier(Modifier::BOLD)),
+        Span::styled(format!(" {} ", b.state), Style::default().fg(th(Color::Black)).bg(state_color(b.state)).add_modifier(Modifier::BOLD)),
         Span::raw("  energy "),
-        Span::styled(meter(b.energy, 14), Style::default().fg(Color::LightGreen)),
+        Span::styled(meter(b.energy, 14), Style::default().fg(th(Color::LightGreen))),
         Span::styled(format!(" {:.2}", b.energy), dim),
         Span::raw("  agitation "),
-        Span::styled(meter(b.agitation, 14), Style::default().fg(Color::LightRed)),
+        Span::styled(meter(b.agitation, 14), Style::default().fg(th(Color::LightRed))),
         Span::styled(format!(" {:.2}", b.agitation), dim),
     ];
     let mut tail = format!("  seed {}  {:>4.0}s", b.seed, b.time);
@@ -367,43 +411,50 @@ fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, 
     // input source + live typing / mouse meters, top-right on the border
     let src = if m.input_src.is_empty() { "…" } else { m.input_src.as_str() };
     let live = m.input_on && src != "none";
-    let mut inp = vec![Span::styled(format!(" input {src} "), if live { Style::default().fg(Color::Gray) } else { dim })];
+    let mut inp = vec![Span::styled(format!(" input {src} "), if live { Style::default().fg(th(Color::Gray)) } else { dim })];
     if live {
-        inp.push(Span::styled("keys ", dim));
-        inp.push(Span::styled(meter(m.keys, 6), Style::default().fg(Color::LightGreen)));
-        inp.push(Span::styled(" mouse ", dim));
-        inp.push(Span::styled(meter(m.mouse, 6), Style::default().fg(Color::Green)));
+        inp.push(Span::styled("activity ", dim));
+        inp.push(Span::styled(meter(m.input, 8), Style::default().fg(th(Color::LightGreen))));
         inp.push(Span::raw(" "));
     }
     // persistent "now quoting" line while a theme is in the air
     let line3 = match &b.quote {
         Some((who, cite, what, prog)) => Line::from(vec![
-            Span::styled(" ♫ now quoting ", Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" {} ", meter(*prog, 6)), Style::default().fg(Color::LightYellow)),
-            Span::styled(format!("{who}: "), Style::default().fg(Color::LightYellow)),
-            Span::styled(cite.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" — {what}"), Style::default().fg(Color::Gray)),
+            Span::styled(" ♫ now quoting ", Style::default().fg(th(Color::Black)).bg(th(Color::LightYellow)).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" {} ", meter(*prog, 6)), Style::default().fg(th(Color::LightYellow))),
+            Span::styled(format!("{who}: "), Style::default().fg(th(Color::LightYellow))),
+            Span::styled(cite.clone(), Style::default().fg(th(Color::White)).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" — {what}"), Style::default().fg(th(Color::Gray))),
         ]),
         None => Line::from(Span::styled(" ♫ no theme quoted right now", dim)),
     };
     let p = Paragraph::new(vec![Line::from(prog), Line::from(line2), line3]).block(
         Block::default()
-            .borders(Borders::ALL)
-            .title(Span::styled(" sysjam ", Style::default().add_modifier(Modifier::BOLD)))
+            .borders(Borders::ALL).border_set(crate::theme::border_set()).border_style(Style::default().fg(crate::theme::border_color()))
+            .title(Span::styled(crate::theme::title(" sysjam "), Style::default().fg(th(Color::LightYellow)).add_modifier(Modifier::BOLD)))
+            .title(style_title(b))
             .title(Line::from(inp).right_aligned())
-            .title_bottom(Span::styled(" q quit · space pause display ", dim)),
+            .title_bottom(Span::styled(crate::theme::asciify(" ↑↓ tempo  ←→ style  space pause  q quit "), dim)),
     );
     f.render_widget(p, r);
 }
 
+fn style_title(b: &BandSnap) -> Line<'static> {
+    let mut v = vec![Span::styled(format!(" {} style {} ", crate::theme::icon(), b.style), Style::default().fg(th(Color::Black)).bg(th(Color::LightCyan)).add_modifier(Modifier::BOLD))];
+    if let Some(from) = &b.style_from {
+        v.push(Span::styled(crate::theme::asciify(&format!(" ← {from}, changing over… ")), Style::default().fg(th(Color::LightCyan))));
+    }
+    Line::from(v)
+}
+
 /// scrolling history of theme citations (newest at the bottom)
 fn draw_cites(f: &mut Frame, r: Rect, b: &BandSnap) {
-    let block = Block::default().borders(Borders::ALL).title(" quoted themes · public domain ");
+    let block = Block::default().borders(Borders::ALL).border_set(crate::theme::border_set()).border_style(Style::default().fg(crate::theme::border_color())).title(crate::theme::title(" quoted themes · public domain "));
     let inner = block.inner(r);
     f.render_widget(block, r);
     let h = inner.height as usize;
     let lines: Vec<Line> = if b.cites.is_empty() {
-        vec![Line::from(Span::styled("none yet — themes come rarely", Style::default().fg(Color::DarkGray)))]
+        vec![Line::from(Span::styled("none yet — themes come rarely", Style::default().fg(th(Color::DarkGray))))]
     } else {
         let n = b.cites.len();
         b.cites[n.saturating_sub(h)..]
@@ -411,7 +462,7 @@ fn draw_cites(f: &mut Frame, r: Rect, b: &BandSnap) {
             .enumerate()
             .map(|(i, c)| {
                 let last = n.saturating_sub(h) + i + 1 == n;
-                Line::from(Span::styled(c.clone(), Style::default().fg(if last { Color::LightYellow } else { Color::Gray })))
+                Line::from(Span::styled(c.clone(), Style::default().fg(if last { th(Color::LightYellow) } else { th(Color::Gray) })))
             })
             .collect()
     };
@@ -421,24 +472,26 @@ fn draw_cites(f: &mut Frame, r: Rect, b: &BandSnap) {
 fn draw_conductor(f: &mut Frame, r: Rect, b: &BandSnap) {
     use crate::conductor::{frame, Pose};
     let c = &b.cond;
-    let title = format!(" conductor · {} cue{} ", c.count, if c.count == 1 { "" } else { "s" });
-    let block = Block::default().borders(Borders::ALL).title(title);
+    let sn = b.style.rsplit(" · ").next().unwrap_or("");
+    let title = format!(" conductor · {sn} · {} cue{} ", c.count, if c.count == 1 { "" } else { "s" });
+    let block = Block::default().borders(Borders::ALL).border_set(crate::theme::border_set()).border_style(Style::default().fg(crate::theme::border_color())).title(crate::theme::title(&title));
     let inner = block.inner(r);
     f.render_widget(block, r);
     let col = match c.pose {
-        Pose::Calm => Color::LightYellow,
-        Pose::Shh => Color::LightMagenta,
-        Pose::Point => Color::LightCyan,
-        Pose::Surge => Color::LightRed,
-        Pose::Rest => Color::DarkGray,
+        Pose::Calm => th(Color::LightYellow),
+        Pose::Shh => th(Color::LightMagenta),
+        Pose::Point => th(Color::LightCyan),
+        Pose::Surge => th(Color::LightRed),
+        Pose::Rest => th(Color::DarkGray),
     };
-    let art = frame(c.pose, b.beat);
+    let art = crate::theme::conductor(frame(c.pose, b.beat), c.pose, b.beat, b.hat, b.face, b.style_id);
     let w = inner.width as usize;
     let tw = w.saturating_sub(13).max(8);
     // speech, word-wrapped beside the figure
     let mut said: Vec<String> = Vec::new();
     let mut cur = String::new();
-    let text = if c.speech.is_empty() { String::new() } else { format!("“{}”", c.speech) };
+    let (mo, mc) = crate::theme::marks();
+    let text = if c.speech.is_empty() { String::new() } else { format!("{mo}{}{mc}", c.speech) };
     for word in text.split_whitespace() {
         if cur.chars().count() + word.chars().count() + 1 > tw && !cur.is_empty() {
             said.push(std::mem::take(&mut cur));
@@ -456,10 +509,10 @@ fn draw_conductor(f: &mut Frame, r: Rect, b: &BandSnap) {
         let mut sp = vec![Span::styled(format!("{a:<12} "), Style::default().fg(col).add_modifier(Modifier::BOLD))];
         let row = k.checked_sub(1).and_then(|j| said.get(j));
         if let Some(t) = row {
-            sp.push(Span::styled(t.clone(), Style::default().fg(Color::White)));
+            sp.push(Span::styled(t.clone(), Style::default().fg(th(Color::White))));
         } else if k == 4 {
             let tgt = c.target.map(|t| format!("→ {t}  ")).unwrap_or_default();
-            sp.push(Span::styled(format!("{tgt}clutter {}", meter(c.clutter.min(1.5) / 1.5, 8)), Style::default().fg(Color::DarkGray)));
+            sp.push(Span::styled(format!("{tgt}clutter {}", meter(c.clutter.min(1.5) / 1.5, 8)), Style::default().fg(th(Color::DarkGray))));
         }
         lines.push(Line::from(sp));
     }
@@ -467,12 +520,12 @@ fn draw_conductor(f: &mut Frame, r: Rect, b: &BandSnap) {
 }
 
 fn draw_band(f: &mut Frame, r: Rect, b: &BandSnap) {
-    let block = Block::default().borders(Borders::ALL).title(" the band ");
+    let block = Block::default().borders(Borders::ALL).border_set(crate::theme::border_set()).border_style(Style::default().fg(crate::theme::border_color())).title(crate::theme::title(" the band "));
     let inner = block.inner(r);
     f.render_widget(block, r);
     let n = b.minds.len().max(1);
     let per = (inner.height as usize / n).clamp(1, 3);
-    let dim = Style::default().fg(Color::DarkGray);
+    let dim = Style::default().fg(th(Color::DarkGray));
     let w = inner.width as usize;
     let mut lines = Vec::new();
     for mi in &b.minds {
@@ -480,24 +533,24 @@ fn draw_band(f: &mut Frame, r: Rect, b: &BandSnap) {
         let mut l1 = vec![
             Span::styled(
                 format!("{:<9}", mi.name),
-                if mi.addressed { Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) },
+                if mi.addressed { Style::default().fg(th(Color::Black)).bg(th(Color::LightYellow)).add_modifier(Modifier::BOLD) } else { Style::default().fg(th(Color::White)).add_modifier(Modifier::BOLD) },
             ),
             Span::styled(format!("{:<11}", mi.status), Style::default().fg(st)),
             Span::styled(meter(mi.activity, 8), Style::default().fg(st)),
             Span::raw(" "),
             Span::styled(
                 format!("{:<14}", mi.key),
-                if mi.away { Style::default().fg(Color::Black).bg(Color::LightMagenta).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::Gray) },
+                if mi.away { Style::default().fg(th(Color::Black)).bg(th(Color::LightMagenta)).add_modifier(Modifier::BOLD) } else { Style::default().fg(th(Color::Gray)) },
             ),
             Span::raw(" "),
         ];
         let used = 9 + 11 + 8 + 1 + 15;
         let inst: String = mi.instrument.chars().take(w.saturating_sub(used)).collect();
-        l1.push(Span::styled(inst, Style::default().fg(Color::LightBlue)));
+        l1.push(Span::styled(inst, Style::default().fg(th(Color::LightBlue))));
         lines.push(Line::from(l1));
         if per >= 2 {
             let t: String = format!("  ↳ {}", mi.think).chars().take(w).collect();
-            let ts = if mi.addressed { Style::default().fg(Color::LightYellow).add_modifier(Modifier::ITALIC) } else { Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC) };
+            let ts = if mi.addressed { Style::default().fg(th(Color::LightYellow)).add_modifier(Modifier::ITALIC) } else { Style::default().fg(th(Color::Gray)).add_modifier(Modifier::ITALIC) };
             lines.push(Line::from(Span::styled(t, ts)));
         }
         if per >= 3 {
@@ -515,7 +568,7 @@ fn draw_band(f: &mut Frame, r: Rect, b: &BandSnap) {
             let lw = left.chars().count();
             if lw + rw <= w {
                 left.push_str(&" ".repeat(w - lw - rw));
-                lines.push(Line::from(vec![Span::styled(left, dim), Span::styled(right, Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM))]));
+                lines.push(Line::from(vec![Span::styled(left, dim), Span::styled(right, Style::default().fg(th(Color::Cyan)).add_modifier(Modifier::DIM))]));
             } else {
                 lines.push(Line::from(Span::styled(left, dim)));
             }
@@ -525,46 +578,45 @@ fn draw_band(f: &mut Frame, r: Rect, b: &BandSnap) {
 }
 
 fn draw_machine(f: &mut Frame, r: Rect, m: &MonSnap) {
-    let block = Block::default().borders(Borders::ALL).title(" machine ");
+    let block = Block::default().borders(Borders::ALL).border_set(crate::theme::border_set()).border_style(Style::default().fg(crate::theme::border_color())).title(crate::theme::title(" machine "));
     let inner = block.inner(r);
     f.render_widget(block, r);
     let w = inner.width as usize;
     let sw = w.saturating_sub(23).clamp(4, HIST);
-    let dim = Style::default().fg(Color::DarkGray);
+    let dim = Style::default().fg(th(Color::DarkGray));
     let row = |label: &str, val: String, h: &VecDeque<f32>, c: Color| {
         Line::from(vec![
-            Span::styled(format!("{label:<7}"), Style::default().fg(Color::White)),
+            Span::styled(format!("{label:<7}"), Style::default().fg(th(Color::White))),
             Span::styled(format!("{val:>11} "), Style::default().fg(c)),
             Span::styled(spark(h, sw), Style::default().fg(c)),
         ])
     };
     let mut lines = vec![
-        row("cpu", format!("{:.0}%", m.cpu * 100.0), &m.hist[0], Color::LightRed),
-        row("cores", format!("{}/{}", m.cores.0, m.cores.1), &m.hist[1], Color::Red),
-        row("net", human(m.net), &m.hist[2], Color::LightCyan),
-        row("disk", human(m.write), &m.hist[3], Color::LightBlue),
-        row("files", format!("{:.0}/s", m.fd), &m.hist[4], Color::LightMagenta),
+        row("cpu", format!("{:.0}%", m.cpu * 100.0), &m.hist[0], th(Color::LightRed)),
+        row("cores", format!("{}/{}", m.cores.0, m.cores.1), &m.hist[1], th(Color::Red)),
+        row("net", human(m.net), &m.hist[2], th(Color::LightCyan)),
+        row("disk", human(m.write), &m.hist[3], th(Color::LightBlue)),
+        row("files", format!("{:.0}/s", m.fd), &m.hist[4], th(Color::LightMagenta)),
     ];
     if m.input_on {
-        lines.push(row("keys", format!("{:.2}", m.keys), &m.hist[5], Color::LightGreen));
-        lines.push(row("mouse", format!("{:.2}", m.mouse), &m.hist[6], Color::Green));
+        lines.push(row("input", format!("{:.2}", m.input), &m.hist[5], th(Color::LightGreen)));
     } else {
-        lines.push(Line::from(Span::styled("keys   input activity off", dim)));
+        lines.push(Line::from(Span::styled("input  activity off", dim)));
     }
     match m.screen {
         Some((h, s, v)) => lines.push(Line::from(vec![
-            Span::styled(format!("{:<7}", "screen"), Style::default().fg(Color::White)),
+            Span::styled(format!("{:<7}", "screen"), Style::default().fg(th(Color::White))),
             Span::styled("      ", Style::default().bg(hsv(h, s.max(0.15), v.max(0.25)))),
             Span::styled(format!(" hue {h:.0}° bri {v:.2}"), dim),
         ])),
         None => lines.push(Line::from(Span::styled("screen colour off", dim))),
     }
-    lines.push(Line::from(Span::styled("top threads", Style::default().fg(Color::White))));
+    lines.push(Line::from(Span::styled("top threads", Style::default().fg(th(Color::White)))));
     for (name, cpu) in m.top.iter().take(inner.height.saturating_sub(lines.len() as u16) as usize) {
         let n: String = name.chars().take(w.saturating_sub(16)).collect();
         lines.push(Line::from(vec![
-            Span::styled(format!(" {:>4.0}% ", cpu * 100.0), Style::default().fg(Color::LightRed)),
-            Span::styled(meter(*cpu, 6), Style::default().fg(Color::Red)),
+            Span::styled(format!(" {:>4.0}% ", cpu * 100.0), Style::default().fg(th(Color::LightRed))),
+            Span::styled(meter(*cpu, 6), Style::default().fg(th(Color::Red))),
             Span::raw(" "),
             Span::styled(n, dim),
         ]));
@@ -573,20 +625,20 @@ fn draw_machine(f: &mut Frame, r: Rect, m: &MonSnap) {
 }
 
 fn draw_levels(f: &mut Frame, r: Rect, b: &BandSnap) {
-    let block = Block::default().borders(Borders::ALL).title(" levels ");
+    let block = Block::default().borders(Borders::ALL).border_set(crate::theme::border_set()).border_style(Style::default().fg(crate::theme::border_color())).title(crate::theme::title(" levels "));
     let inner = block.inner(r);
     f.render_widget(block, r);
     let w = (inner.width as usize).saturating_sub(16).max(4);
     let names = ["sub", "bass", "mid", "high"];
-    let cols = [Color::Magenta, Color::LightMagenta, Color::LightYellow, Color::LightCyan];
+    let cols = [th(Color::Magenta), th(Color::LightMagenta), th(Color::LightYellow), th(Color::LightCyan)];
     let lines: Vec<Line> = (0..4)
         .map(|i| {
             let db = b.levels[i];
             let v = ((db + 60.0) / 54.0).clamp(0.0, 1.0);
             Line::from(vec![
-                Span::styled(format!("{:<5}", names[i]), Style::default().fg(Color::White)),
+                Span::styled(format!("{:<5}", names[i]), Style::default().fg(th(Color::White))),
                 Span::styled(meter(v, w), Style::default().fg(cols[i])),
-                Span::styled(format!(" {:>5.0} dB", db.max(-99.0)), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!(" {:>5.0} dB", db.max(-99.0)), Style::default().fg(th(Color::DarkGray))),
             ])
         })
         .collect();
@@ -594,7 +646,7 @@ fn draw_levels(f: &mut Frame, r: Rect, b: &BandSnap) {
 }
 
 fn draw_log(f: &mut Frame, r: Rect, log: &[String]) {
-    let block = Block::default().borders(Borders::ALL).title(" band events ");
+    let block = Block::default().borders(Borders::ALL).border_set(crate::theme::border_set()).border_style(Style::default().fg(crate::theme::border_color())).title(crate::theme::title(" band events "));
     let inner = block.inner(r);
     f.render_widget(block, r);
     let n = inner.height as usize;
@@ -604,17 +656,17 @@ fn draw_log(f: &mut Frame, r: Rect, log: &[String]) {
         .rev()
         .map(|m| {
             let c = if m.starts_with('~') {
-                Color::LightYellow
+                th(Color::LightYellow)
             } else if m.contains("key change") || m.contains("modulation") {
-                Color::LightMagenta
+                th(Color::LightMagenta)
             } else if m.contains("industrial") {
-                Color::LightRed
+                th(Color::LightRed)
             } else if m.starts_with('+') || m.starts_with('\u{2212}') {
-                Color::LightBlue
+                th(Color::LightBlue)
             } else if m.contains("solo") || m.contains("joins") || m.contains("breakdown") {
-                Color::LightGreen
+                th(Color::LightGreen)
             } else {
-                Color::Gray
+                th(Color::Gray)
             };
             Line::from(Span::styled(m.clone(), Style::default().fg(c)))
         })

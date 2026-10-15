@@ -11,11 +11,18 @@ around the circle of fifths. Players pick up a new General MIDI instrument or
 design a new synth patch whenever something inspires them. Under everything sits
 a continuous deep sub drone and bass. No two runs are the same unless you pass `--seed`.
 
+You can steer it from the terminal UI. **↑/↓** nudge the tempo; **←/→** change the conductor's
+**style**: House Band, Ambient Monk, Jazz Cat, Blues, Country, Biker, Baroque, Celtic Session,
+Industrial, Techno, Space Cadet, Tribal/Gamelan, or *auto* (the default: it wanders between them).
+Each style changes the band's instruments, tempo, drum feel, harmony, bass line and theme quotes,
+and it restyles the whole UI (palette, borders, icons, meters, and the conductor's outfit and voice).
+See [Steering](#steering-tempo-and-conductor-styles).
+
 (Formerly developed under the working name *sysmusic*.) Listen: [`docs/sample.mp3`](docs/sample.mp3) is a 75 s demo at 192 kbps. It starts calm with no hiss, then hits chaos (CPU + network + disk load plus simulated fast typing), where a short burst of industrial noise comes in, then settles again. Its verbose log is `docs/sample-render.log`. [`docs/sample-tempo.mp3`](docs/sample-tempo.mp3) is a 90 s demo (seed 5, made with `tools/demo_tempo.sh`). It starts in A major at 84 bpm, and the tempo eases down to 73 while the band is chilling. Under load (from 18 s) the band comes alive and ramps toward 97 bpm. At about 60 s a **surge** opens the throttle from 85 to 133 bpm with the V-twin lope, while the band modulates to D minor. The surge winds down to 109 bpm at about 75 s, and the band then subsides. Its log is `docs/sample-tempo-render.log`.
 
-![sysjam's live terminal UI: the colour player quotes "The New Highland Laddie" (Aird's Airs) while the keys duck under it](docs/tui.png)
+![sysjam's live terminal UI mid-transition: two ↑ presses gave tempo bias +14, then ← switched Country to Blues; the players change over one by one ("conductor went Blues → picking up a fingered bass")](docs/tui.png)
 
-One static-ish binary (`sysjam`, ~1.7 MB, x86_64, needs glibc ≥ 2.29). It
+One static-ish binary (`sysjam`, ~1.8 MB, x86_64, needs glibc ≥ 2.29). It
 links only libc, libm, libpthread and libdl. ALSA, D-Bus and PipeWire are
 loaded at run time with `dlopen`, so it starts even when one of them is missing.
 
@@ -36,6 +43,9 @@ loaded at run time with `dlopen`, so it starts even when one of them is missing.
 | `--sub L` | sub-drone level 0–2 (default 1.2). The sub is never high-passed; a gentle limiter guards the output |
 | `--scale minor\|major`, `--root NOTE` | home key. Default: random each run (all 12 roots, major or minor, root in D#2–D3). Given flags are used exactly. Older scale names still work: dorian etc. map to minor, lydian etc. to major |
 | `--bpm N` | lock the tempo at N. Default: a random start of 60–100 bpm, after which the bandleader moves it |
+| `--style NAME` | conductor style: `auto` (default), `house`, `monk`, `jazz`, `blues`, `country`, `biker`, `baroque`, `celtic`, `industrial`, `techno`, `space`, `tribal` (names and unique prefixes work). ←/→ in the TUI |
+| `--tempo-bias N` | sticky bpm offset on the living tempo (±70, the tempo stays within 50–160). ↑/↓ in the TUI nudge it by 7 |
+| `--ascii` | plain ASCII TUI: no emoji, box drawing or symbols. Automatic on `TERM=linux` |
 | `--chord-bars N` | base bars per chord (default 2). Chilling stretches this, peaks tighten it |
 | `--seed N` | repeat a run exactly (same input → same music) |
 | `--soundfont PATH`, `--no-gm`, `--gm-layers N` | General MIDI layer (see below); N = 1–4 simultaneous layers (default 3, +1 at peaks) |
@@ -58,8 +68,11 @@ crossterm) that shows how the band is thinking. Piped or redirected output, or
   band is away from it, e.g. `D minor (home A major)`, the tempo with an arrow while it is
   ramping (`105→98 bpm`; `(locked)` with `--bpm`), any half-time, double-time or `surge — V-twin lope` feel, bar and beat,
   the arrangement state (chilling / awakening / alive / subsiding) and the
-  bandleader's energy and agitation meters. Top right: the input source
-  (`evdev×2`, `evdev×2 setgid`, `usb-hid`, `irq i8042`, `irq xhci≈`, `none`) with live keys and mouse meters.
+  bandleader's energy and agitation meters, and `tempo bias +14` while you have nudged the tempo.
+  The top border carries the style badge (`🐎 style Country`, `♪ style auto · Blues`, or
+  `♪ style Blues ← Country, changing over…` during a switch). Top right: the input source
+  (`evdev×2`, `evdev×2 setgid`, `usb-hid`, `irq i8042`, `irq xhci≈`, `none`) with one combined activity meter.
+  The bottom border shows the key hint `↑↓ tempo  ←→ style  space pause  q quit`.
   The third line is the persistent **`♫ now quoting`** line: while a player quotes a
   theme it shows a progress meter, the player and the full citation, e.g.
   `♫ now quoting ██▍ lead: Wachet auf, ruft uns die Stimme (J.S. Bach, BWV 140.7) · music21 corpus (Bach chorales) · public domain — a straight quote`.
@@ -90,8 +103,8 @@ crossterm) that shows how the band is thinking. Piped or redirected output, or
   interventions so far.
 - **Quoted themes** (right, under the conductor): a scrolling history of the recent
   citations with their time, newest highlighted.
-- **Machine**: CPU, busy cores, network, disk writes, file churn, keyboard and
-  mouse rates, each with a sparkline of the last two minutes. Below them sit a
+- **Machine**: CPU, busy cores, network, disk writes, file churn and input
+  activity (keyboard and mouse combined), each with a sparkline of the last two minutes. Below them sit a
   swatch of the sampled screen colour and the busiest threads.
 - **Levels**: sub (< 60 Hz), bass, mid and high meters of the output.
 - **Band events**: a rate-limited log of instrument changes, band moves,
@@ -101,14 +114,93 @@ Keys:
 
 | key | action |
 |---|---|
+| `↑` / `↓` | tempo bias ±7 bpm, ramped over one bar (hold to repeat, ~6 per second) |
+| `←` / `→` | previous / next conductor style (auto → House Band → … → Tribal → auto) |
 | `q`, `Esc`, `Ctrl-C` | fade out and quit (press again to quit immediately) |
 | `space` | pause / resume the display (the music keeps playing) |
+
+The arrow keys only work in the TUI; `--style` and `--tempo-bias` are the command-line equivalents.
 
 The UI runs in its own thread at nice 5 and redraws at 5 fps. The audio thread
 publishes a small snapshot about every 100 ms with a non-blocking `try_lock`, so
 a slow or stalled terminal can never hold up the audio. The terminal is restored
-on exit and also when sysjam panics. Colours follow `NO_COLOR`. The UI needs a
-terminal of about 100×30 or larger; 130×36 is comfortable.
+on exit and also when sysjam panics. Colours follow `NO_COLOR` (crossterm drops all
+colour codes). Theme colours are truecolor when `COLORTERM` is `truecolor`/`24bit`, otherwise
+they are mapped to the nearest xterm-256 entry. `--ascii` (automatic on the Linux console)
+transliterates every glyph to ASCII. The UI needs a terminal of about 100×30 or larger; 130×36 is comfortable.
+
+## Steering: tempo and conductor styles
+
+**Tempo (↑/↓).** Each press adds ±7 bpm of *user bias* on top of the living tempo, and the
+band ramps there smoothly over one bar. The conductor acknowledges it in its style's voice
+(`“picking it up!”`, `“giddy-up!”`, `“more BPM!”`) and the drummer's thinking line shows the new
+target. The bandleader keeps moving the tempo with the arrangement; the bias rides on top, and the
+result is clamped to 50–160 bpm. Key-press bias **holds for a minute after the last press, then
+fades** with a ~90 s half-life (gone after about 5 minutes), so the band drifts back to its own
+feel. `--tempo-bias N` is **sticky** (it never fades). With `--bpm` the locked tempo plus the bias
+is used.
+
+**Styles (←/→).** A style is a conductor personality. It changes the instruments (inspired swaps
+favour the style's GM programs and synth patch kinds), the tempo range, density and strictness,
+the drum kit and feel, the bass line, harmony templates, modes, synth vs GM preference, and which
+theme collections get quoted. The core rules hold in every style. The deep sub and bass are always
+there. There is no hiss except Industrial's deliberate gated texture. The synth sits back while the
+drums play (Space Cadet and Techno loosen this). Restraint and CPU stay as before.
+
+| style | one line |
+|---|---|
+| **auto** (default) | starts as House Band and wanders to another style every 5–9 minutes, at a phrase boundary |
+| **House Band** | the balanced default: a bit of everything, nothing pushed |
+| **Ambient Monk** | 50–84 bpm drones, sparse, strict hush, Lydian/major drone harmony, pads and choirs, almost no drums |
+| **Jazz Cat** | swing, ii–V–I and turnarounds with sevenths everywhere, walking upright bass, brushes and ride, EP/vibes/sax, more quotes, a loose conductor |
+| **Blues** | 12-bar form (standard, quick-change, VI7–ii–V and I–IV turnarounds), dominant sevenths, the blues scale with b3/b5/b7 on lead and colour (GM blue notes scooped up with pitch bend), triplet shuffle at 60–100 bpm, boogie bass 1-3-5-6-b7-6-5-3, harmonica/overdrive/organ/piano, call and response between lead and colour |
+| **Country** | I–IV–V, I–vi–IV–V and mixolydian I–bVII–IV, 80–120 bpm, train beat (brushed sixteenths) or two-step, boom-chick bass with walk-ups, chick strums on 2 and 4, steel and nylon guitars, fiddle, banjo, harmonica |
+| **Biker** | V-twin surges four times as likely, heavy low kick, distorted guitars and organ, Mixolydian rock changes, faster |
+| **Baroque** | chorale cadences and Pachelbel-ish progressions, harpsichord, strings, church organ, contrabass, Bach/Handel/Mozart/Haydn quotes favoured, a steady tempo |
+| **Celtic Session** | fiddle, whistle, pipes and harp, hand-drum figures, Dorian/Mixolydian modal changes, O'Neill's/Ryan's/Aird's tunes favoured |
+| **Industrial** | metallic synth patches (FM-heavy), deliberate gated noise in alive moments, machine kits, minor/Phrygian |
+| **Techno** | 120–135 bpm even while chilling (minimal/dub techno), four-on-the-floor deep synthesized sub kick (~50 Hz), off-beat open hats, claps on 2 and 4, an acid 303-style line (resonant filter, accents, slides, a slow sweep over 32 bars), dub chord stabs on the off-beat into the echo, and 16/32-bar grooves → breakdowns → builds (snare roll, filter opening) → drops driven by the machine's intensity. The drums stay in and the synth isn't pushed back, but there is a hard cap of 4–5 layers and no hiss |
+| **Space Cadet** | synth-forward (wavetable/FM, +4 dB allowance), slow, evolving, Lydian and major-third colours |
+| **Tribal / Gamelan** | hand percussion carries a 3+3+2 cycle, pelog-ish five-note melodies in minor and pentatonic in major, kalimba, steel drums, marimba, taiko |
+
+**Transitions are musical.** The conductor announces the switch (`“alright folks, jazz club
+tonight — swing it”`, `“Howdy folks! grab a partner — country night”`, `“Lord have mercy… let's play
+the blues”`, `“lights down… the system is the DJ tonight”`). Every player first thinks
+`conductor went Jazz Cat → listening, changing over at the phrase`. Bass and drums change over at
+the next phrase, and the others over one or two phrases, each with its reason, e.g.
+`conductor went Blues → picking up a fingered bass`,
+`conductor went Blues → switching to the GM Brush kit with triangle & tambourine`. The tempo
+ramps to the new style's range (at most 24 bpm per ramp) and the harmony picks up the new
+templates at the next phrase. The UI fades to the new theme over about a second.
+
+**The UI restyles with the style.** Each style has its own palette, border style, panel title
+decorations and icons, meter glyphs, conductor outfit and props with their own animation, and
+speech marks. A few examples:
+
+- Country: sandy tan, brown and dusty orange; rope borders (`@~~~@`, `┊`); 🌵 ★ 🐎; a cowboy hat with a lasso spinning on the baton.
+- Blues: deep indigo and smoky blue; a fedora; ♪.
+- Techno: neon black with cyan and magenta; borders and meters pulse on the kick; headphones and a DJ deck with spinning platters instead of a baton.
+- Jazz: warm amber; a beret; 🎷.
+- Biker: black and chrome orange; a bandana; flame meters.
+- Baroque: cream and gold; a powdered wig with curls; ornate double borders.
+- Celtic: greens; knotwork-ish borders (`✠∞∞✠`, `§`); ☘.
+- Industrial: rust grey; ⚙ gears; hazard-stripe borders.
+- Ambient Monk: soft lavender; a hood and robe; minimal borders.
+- Space Cadet: deep-space palette; a helmet; ✦ ✧.
+- Gamelan: batik browns and golds; ◈.
+
+| | | |
+|---|---|---|
+| ![Country](docs/styles/country.png) Country | ![Techno](docs/styles/techno.png) Techno | ![Blues](docs/styles/blues.png) Blues |
+| ![Jazz Cat](docs/styles/jazz.png) Jazz Cat | ![Biker](docs/styles/biker.png) Biker | ![Baroque](docs/styles/baroque.png) Baroque |
+| ![Celtic Session](docs/styles/celtic.png) Celtic Session | ![Industrial](docs/styles/industrial.png) Industrial | ![Ambient Monk](docs/styles/monk.png) Ambient Monk |
+| ![Space Cadet](docs/styles/space.png) Space Cadet | ![Tribal / Gamelan](docs/styles/tribal.png) Tribal / Gamelan | ![House Band](docs/styles/house.png) House Band |
+
+**Scripted key presses** (tests): `SYSJAM_KEYS="20:right,45:up,46:up,150:left"` presses arrows at
+the given seconds. In the offline bench (`SYSJAM_BENCH=1`) these are seconds of music time and the
+bench prints a `bench steering:` summary (switches, nudges, techno sections, blue-note bends). In
+a live run they are wall-clock seconds. The real keys were tested through tmux `send-keys Up/Left`
+(crossterm raw mode).
 
 ## The band
 
@@ -478,13 +570,17 @@ speakers, raise `--sub` (up to 2) or lower `--volume`.
 
 ## Keyboard / mouse activity
 
+Keyboard and mouse are one combined **input activity** signal and meter. On most machines both
+counts come from the same source anyway, so two meters would only show the same thing twice. The
+header shows which source feeds it.
+
 Intense typing makes the band pick up (and can trigger a surge), and mouse
 bursts nudge it more gently. These are improvisational cues, not one click per
 keypress. sysjam only counts **how many** input events happen. It never reads
 which keys, and key codes are never stored or logged.
 
 At startup sysjam logs which source it uses, and the TUI header shows it with
-live keys and mouse meters (top right: `input evdev×2 keys ███▌ mouse █`):
+the combined activity meter (top right: `input evdev×2 activity ███▌`):
 
 ```
 input: evdev (2 devices: AT Translated Set 2 keyboard, ELAN0712:00 04F3:30FD Touchpad)
@@ -505,7 +601,7 @@ Sources, best first:
 4. Otherwise **none**. The music carries on.
 
 Dedicated fallback counters get the same baseline, but with a smaller margin and a ~30-minute creep, so long typing sessions aren't absorbed into it.
-Rates are smoothed over about 3 s and mapped to 0–1; about 6 keystrokes/s saturates the keyboard meter. The two together can add at most 0.45 to the bandleader's energy input, so they push but never dominate. `--no-input` turns all of it off, and nothing is opened.
+Key presses and pointer motion are added into one rate, smoothed over about 3 s and mapped to 0–1; about 6 keystrokes/s saturates it. It can add at most 0.45 to the bandleader's energy input, so they push but never dominate. `--no-input` turns all of it off, and nothing is opened.
 
 ### Giving sysjam evdev access, and the security tradeoff
 
@@ -605,6 +701,9 @@ Measured exactly (schedstat, all threads) on an 8-vCPU Xeon VM:
 | idle, TimGM6mb, restraint + conductor, **UI on with the conductor panel** vs `--no-tui` (side by side, 60 s) | 1.81% vs 1.61% (UI thread 0.28%, audio thread 1.28%) | |
 | idle, TimGM6mb, synth ducking + drum restraint + 371 embedded themes, **UI on** (now-quoting line + citation panel) vs `--no-tui` (side by side, 60 s) | 2.10% vs 1.72% (UI thread 0.31%) | |
 | offline bench, seeds 1–4, busy phase: previous release vs this one (same box, sequential) | 1.31–1.86% → 1.57–2.07% (longer pad-like synth notes keep more pool voices sounding) | |
+| idle, TimGM6mb, styles + themed UI, **UI on** vs `--no-tui` (auto, side by side, 60 s, truecolor) | 1.82% vs 1.35% (UI thread 0.30%) | |
+| idle, themed UI per style, whole process (60 s, truecolor): Techno / Country / Baroque | 2.16% / 2.08% / 1.53% (UI thread 0.31% / 0.28% / 0.27%, fades included) | |
+| offline bench with scripted style switches and tempo nudges (13 key presses through 10 styles, incl. Techno build/drop) | 1.06% / 1.66% / 1.63% (idle / busy / idle) | |
 | alive under heavy load (busy thread as guest, ~400 MB/s writes, ~40 MB/s downloads, file churn), UI on, X11 screen sampling, 60 s | 3.05% | |
 
 ## Troubleshooting
@@ -641,6 +740,7 @@ Tools:
 - `tools/demo_short.sh` renders the 75 s calm → chaos → calm demo. Typing is simulated through a fake `/proc/interrupts` (`SYSJAM_INTERRUPTS`).
 - `tools/demo.sh` renders a 3-minute idle → spike → busy → idle demo.
 - `tools/bands.py` prints band energies.
+- `tools/shot.sh` screenshots the TUI in tmux (optionally sending arrow keys) and renders it with `tools/ansi2png.py`, which carries tmux's SGR state across lines, draws double-width emoji, and falls back to Noto Sans Symbols and a monochrome Noto Emoji font (`SYSJAM_EMOJI_FONT`, OFL, not shipped) for glyphs DejaVu lacks. `LOAD=75 tools/shot.sh country 55 "--seed 3 --style country"` made the gallery.
 - `tools/measure.py SECS ./sysjam --null` measures sysjam's own CPU.
 - `tools/portal_test.sh BIN COLOR ARGS…` runs the end-to-end portal test. It uses a private D-Bus, pipewire, wireplumber, a GStreamer test source and `tools/mock_portal.py`.
 - `SYSJAM_BENCH=1 SYSJAM_BENCH_LOG=1 ./sysjam --seed 1` gives an offline 200 s timeline with CPU figures, per-player note density per state, the conductor's intervention count and the list of theme quotes. Add `SYSJAM_RMS=1` for RMS per source (synth patches, pad bed, bells, sub, synth bass/kick, GM melodic, GM drums) split by drums playing/resting, and `SYSJAM_BENCH_SCALE=5` for a 5× longer timeline.

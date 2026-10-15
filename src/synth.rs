@@ -16,6 +16,8 @@ use std::sync::{Arc, Mutex};
 use crate::ui::Mind;
 use crate::harmony::{pc_name, roman_of, Mode, PKey, Rel};
 use crate::conductor::{Conductor, Order, Pose};
+use crate::style::{BassFeel, DrumFeel, Harm, Scale, Style, STYLES};
+use std::sync::atomic::Ordering::Relaxed;
 
 const CR: usize = 32; // control-rate block
 const CHUNK: usize = 64; // GM/event chunk
@@ -39,6 +41,10 @@ pub struct EngineCfg {
     pub ui: Option<Arc<Mutex<crate::ui::BandSnap>>>,
     /// --bpm given: never change the tempo
     pub bpm_lock: bool,
+    /// --style: None = auto (wanders, starts at House Band)
+    pub style: Option<usize>,
+    /// --tempo-bias: sticky bpm offset on the living tempo
+    pub tempo_bias: f32,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -269,6 +275,37 @@ pub struct Engine {
     pub_ver: u64,
     // living tempo
     bpm_lock: bool,
+    lock_bpm: f32,
+    // conductor style (←/→) and the user's tempo bias (↑/↓)
+    style: usize,
+    style_auto: bool,
+    /// ring position: 0 = auto, 1.. = STYLES
+    style_sel: usize,
+    style_from: Option<usize>,
+    style_left: u32,
+    swap_at: [u32; 6],
+    style_kit: bool,
+    auto_next: u64,
+    cli_bias: f32,
+    key_bias: f32,
+    bias_last: u64,
+    bias_applied: f32,
+    bias_ack: u64,
+    n_style: u32,
+    n_nudge: u32,
+    // style feels: techno section (0 groove, 1 breakdown, 2 build, 3 drop), acid line, train/two-step
+    tsec: u8,
+    tsec_left: u32,
+    tsec_ph: u32,
+    tsec_len: u32,
+    acid_pat: [(i8, u8); 16],
+    acid_cut: f32,
+    acid_cut_t: f32,
+    acid_env: f32,
+    acid_on: bool,
+    train: bool,
+    n_tsec: [u32; 4],
+    n_bends: u32,
     bpm_from: f32,
     bpm_to: f32,
     ramp_len: u32,
@@ -576,6 +613,34 @@ impl Engine {
             last_pub: 0,
             pub_ver: 0,
             bpm_lock: c.bpm_lock,
+            lock_bpm: c.bpm - c.tempo_bias,
+            style: c.style.unwrap_or(0),
+            style_auto: c.style.is_none(),
+            style_sel: c.style.map(|x| x + 1).unwrap_or(0),
+            style_from: None,
+            style_left: 0,
+            swap_at: [0; 6],
+            style_kit: false,
+            auto_next: (c.sr * 360.0) as u64,
+            cli_bias: c.tempo_bias,
+            key_bias: 0.0,
+            bias_last: 0,
+            bias_applied: c.tempo_bias,
+            bias_ack: 0,
+            n_style: 0,
+            n_nudge: 0,
+            tsec: 0,
+            tsec_left: 0,
+            tsec_ph: 0,
+            tsec_len: 1,
+            acid_pat: [(-1, 0); 16],
+            acid_cut: 0.3,
+            acid_cut_t: 0.3,
+            acid_env: 0.0,
+            acid_on: false,
+            train: false,
+            n_tsec: [0; 4],
+            n_bends: 0,
             bpm_from: c.bpm,
             bpm_to: c.bpm,
             ramp_len: 0,
@@ -671,6 +736,7 @@ impl Engine {
             e.palette[pl] = k;
         }
         e.perc_set = e.rng.below(PERC_SETS.len());
+        e.style_harmony();
         let ch = e.harm.cur;
         e.on_chord(ch, None, true);
         e
@@ -775,7 +841,8 @@ impl Engine {
     /// where player `pl`'s synth voices sit (pl 0 = the drone pad bed)
     fn space_for(&self, pl: usize) -> Space {
         if self.front_of(pl).is_some() {
-            Space::Duck
+            // techno relaxes synth-in-back: never ducked below the back level
+            if self.sty().relax { Space::Back } else { Space::Duck }
         } else if self.drums_playing() {
             Space::Back
         } else {
@@ -787,10 +854,14 @@ impl Engine {
         let sr = self.sr;
         let coef = |fc: f32| 1.0 - (-std::f32::consts::TAU * fc / sr).exp();
         let surge = self.feel == Feel::Surge;
+        let front = 10f32.powf(self.sty().syn_front / 20.0);
         for o in 0..5 {
             let pl = OWNER_PL[o];
             let sp = self.space_for(pl);
             let mut g = SYN_TRIM * SPACE_GAIN[sp as usize];
+            if sp != Space::Stretch {
+                g *= front;
+            }
             if surge {
                 g = SYN_TRIM * 1.25; // surges keep their energy
             }
@@ -975,7 +1046,7 @@ impl Engine {
             if self.ctl.screen_valid { format!("screen {}", if self.ctl.warmth >= 0.0 { "warm" } else { "cool" }) } else { "screen colour".into() },
             format!("disk/files {}", pct(sig.file)),
             format!("cpu {}", pct(sig.cpu)),
-            format!("keys/mouse {}", pct(sig.keyboard.max(sig.mouse))),
+            format!("input {}", pct(sig.input)),
             format!("cores {}", pct(sig.cores)),
             format!("net {}", pct(sig.net)),
             if self.guest_on { format!("its thread {}", pct(self.guest_cpu)) } else { "busiest thread".into() },
@@ -1034,7 +1105,579 @@ impl Engine {
             seed: self.seed,
             time: self.time(),
             version: self.pub_ver,
+            style: self.style_name(),
+            style_from: self.style_from.map(|k| STYLES[k].name.to_string()),
+            tempo_bias: self.tempo_bias(),
+            hat: self.sty().hat,
+            face: self.sty().face,
+            style_id: self.sty().id,
         };
+    }
+
+    fn sty(&self) -> &'static Style {
+        &STYLES[self.style]
+    }
+
+    pub fn steer_stats(&self) -> String {
+        format!(
+            "{} style switches, {} tempo nudges; now {}, tempo bias {:+.0}, {:.0} bpm; techno sections groove/breakdown/build/drop {:?}; {} blue-note bends",
+            self.n_style, self.n_nudge, self.style_name(), self.tempo_bias(), self.bpm, self.n_tsec, self.n_bends
+        )
+    }
+
+    pub fn style_name(&self) -> String {
+        format!("{}{}", if self.style_auto { "auto · " } else { "" }, self.sty().name)
+    }
+
+    pub fn tempo_bias(&self) -> f32 {
+        self.cli_bias + self.key_bias
+    }
+
+    /// style → harmony flavour
+    fn style_harmony(&mut self) {
+        let st = self.sty();
+        self.harm.flavour = match st.harm {
+            Harm::Pop => None,
+            Harm::Drone => Some(0),
+            Harm::Jazz => Some(1),
+            Harm::Rock => Some(2),
+            Harm::Chorale => Some(3),
+            Harm::Modal => Some(4),
+            Harm::Blues => Some(5),
+            Harm::Country => Some(6),
+            Harm::Loop => Some(7),
+        };
+        self.harm.sevenths = st.harm == Harm::Jazz;
+        self.harm.major_bias = st.major;
+        self.harm.mod_rate = st.mod_rate;
+    }
+
+    /// keyboard steering from the TUI (or SYSJAM_KEYS): drained every step
+    fn steer(&mut self) {
+        let t = crate::shared::KEY_TEMPO.swap(0, Relaxed);
+        if t != 0 {
+            self.nudge(t);
+        }
+        let k = crate::shared::KEY_STYLE.swap(0, Relaxed);
+        if k != 0 {
+            self.cycle_style(k);
+        }
+    }
+
+    /// ↑/↓: ±7 bpm of user bias on the living tempo, ramped over a bar.
+    fn nudge(&mut self, n: i32) {
+        self.n_nudge += 1;
+        let old = self.tempo_bias();
+        self.key_bias = (self.key_bias + 7.0 * n as f32).clamp(-70.0 - self.cli_bias, 70.0 - self.cli_bias);
+        self.bias_last = self.now;
+        let d = self.tempo_bias() - old;
+        let base = if self.ramp_pos < self.ramp_len { self.bpm_to } else { self.bpm };
+        let to = (base + d).clamp(50.0, 160.0).round();
+        let sty = self.sty();
+        let ack = self.now >= self.bias_ack;
+        if (to - base).abs() < 0.5 {
+            if ack {
+                self.cond_say(if to >= 159.0 { "that's as fast as we go!".into() } else { "that's as slow as we go…".into() }, Pose::Calm, None);
+                self.bias_ack = self.now + (self.sr * 1.5) as u64;
+            }
+            return;
+        }
+        self.bpm_from = self.bpm;
+        self.bpm_to = to;
+        self.ramp_len = 16;
+        self.ramp_pos = 0;
+        self.bias_applied = self.tempo_bias();
+        let b = self.tempo_bias();
+        self.say(format!("~ you: tempo {} → bias {b:+.0}, {:.0} → {to:.0} bpm over a bar", if d > 0.0 { "up" } else { "down" }, self.bpm));
+        if ack {
+            let line = if d > 0.0 { sty.faster } else { sty.slower };
+            self.cond_say(line.to_string(), if d > 0.0 { Pose::Surge } else { Pose::Calm }, None);
+            self.bias_ack = self.now + (self.sr * 1.5) as u64;
+        }
+        self.hold[2] = 0;
+        let st = self.minds[2].status;
+        self.think(2, st, format!("conductor: “{}” → taking it to {to:.0} bpm", if d > 0.0 { sty.faster } else { sty.slower }));
+        self.hold[2] = self.now + (self.sr * 4.0) as u64;
+    }
+
+    /// key bias holds for a minute after the last press, then fades (half-life ~90 s)
+    fn bias_decay(&mut self) {
+        if self.key_bias == 0.0 || self.now < self.bias_last + (self.sr * 60.0) as u64 {
+            return;
+        }
+        let dt = 16.0 * self.step_len / self.sr;
+        self.key_bias *= (-dt / 130.0).exp();
+        if self.key_bias.abs() < 0.5 {
+            self.key_bias = 0.0;
+        }
+    }
+
+    /// ←/→: step through auto + the styles
+    fn cycle_style(&mut self, n: i32) {
+        let ring = STYLES.len() as i32 + 1;
+        if self.style_auto {
+            // leaving auto: step from the style it is currently playing, never back onto auto
+            let mut p = (self.style as i32 + 1 + n).rem_euclid(ring);
+            if p == 0 {
+                p = (p + n.signum()).rem_euclid(ring);
+            }
+            self.style_sel = p as usize;
+        } else {
+            self.style_sel = (self.style_sel as i32 + n).rem_euclid(ring) as usize;
+        }
+        if self.style_sel == 0 {
+            self.style_auto = true;
+            self.auto_next = self.now + (self.sr * self.rng.range(90.0, 150.0)) as u64;
+            let nm = self.sty().name;
+            self.cond_say(format!("conductor's choice — I'll steer from here ({nm} for now)"), Pose::Calm, None);
+            self.say(format!("♫ style: auto (the conductor wanders between styles; {nm} for now)"));
+            return;
+        }
+        self.style_auto = false;
+        let to = self.style_sel - 1;
+        if to == self.style {
+            let nm = self.sty().name;
+            self.cond_say(format!("{nm} it is — we're already there"), Pose::Calm, None);
+            return;
+        }
+        self.switch_style(to, "you asked");
+    }
+
+    fn switch_style(&mut self, to: usize, why: &str) {
+        let from = self.style;
+        self.n_style += 1;
+        self.style = to;
+        self.style_from = Some(from);
+        self.style_left = 3;
+        self.style_harmony();
+        let s = self.sty();
+        self.cond_say(s.hello.to_string(), Pose::Point, None);
+        self.cond.pose_until = self.now + (self.sr * 6.0) as u64;
+        self.say(format!("♫ style: {} → {} ({why}) — {}", STYLES[from].name, s.name, s.desc));
+        // staggered handover: rhythm section at the next phrase, the rest over 1-2
+        for i in 1..6 {
+            self.swap_at[i] = if i <= 2 { 1 } else { 1 + self.rng.below(2) as u32 };
+            self.hold[i] = 0;
+            let st = self.minds[i].status;
+            self.think(i, st, format!("conductor went {} → listening, changing over at the phrase", s.name));
+            self.hold[i] = self.now + (self.sr * 5.0) as u64;
+        }
+    }
+
+    fn has_slot(&self, pl: usize) -> bool {
+        self.slots.iter().any(|s| s.on && Self::player_of(s.role) == pl)
+    }
+
+    /// phrase boundary: style transitions and auto wandering
+    fn style_phrase(&mut self) {
+        let name = self.sty().name;
+        if self.style_left > 0 {
+            self.style_left -= 1;
+            if self.style_left == 0 {
+                self.style_from = None;
+                self.say(format!("~ the band has settled into {name}"));
+            }
+        }
+        for i in 1..6 {
+            if self.swap_at[i] == 0 {
+                continue;
+            }
+            self.swap_at[i] -= 1;
+            if self.swap_at[i] > 0 {
+                continue;
+            }
+            let why = format!("conductor went {name}");
+            self.hold[i] = 0;
+            let st = self.minds[i].status;
+            match i {
+                1 => {
+                    let gm_bass = self.sty().gm_bass && self.gm.is_some();
+                    self.bass_gm_ok = gm_bass;
+                    if gm_bass && !self.slot_on(Role::Bass) {
+                        self.think(1, st, format!("{why} → bringing a GM bass in over the deep sub"));
+                    } else {
+                        self.insp[1] = Some(why);
+                        self.dwell[1] = 0;
+                    }
+                }
+                3 | 4 if !self.has_slot(i) => {
+                    self.think(i, st, format!("{why} → I'll come in with something from the {name} palette"));
+                }
+                2 => {
+                    self.style_kit = !self.sty().kits.is_empty();
+                    self.insp[2] = Some(why);
+                    self.dwell[2] = 0;
+                    self.make_drum_pattern();
+                }
+                _ => {
+                    self.insp[i] = Some(why);
+                    self.dwell[i] = 0;
+                }
+            }
+        }
+        self.techno_phrase();
+        if self.style_auto && self.style_left == 0 && self.now >= self.auto_next && self.leader.breakdown == 0 {
+            let cur = self.style;
+            let w: Vec<f32> = (0..STYLES.len()).map(|k| if k == cur { 0.0 } else if k == 0 { 1.5 } else { 1.0 }).collect();
+            let to = self.rng.weighted(&w);
+            self.auto_next = self.now + (self.sr * self.rng.range(300.0, 540.0)) as u64;
+            self.switch_style(to, "auto: the conductor's mood wandered");
+        }
+    }
+
+    /// Techno arrangement on phrase boundaries: 16/32-bar grooves, breakdowns, builds and
+    /// drops, driven by the system's intensity. Also keeps the acid patch in place.
+    fn techno_phrase(&mut self) {
+        let acid = self.sty().bass_feel == BassFeel::Acid;
+        if acid != self.acid_on {
+            self.acid_on = acid;
+            if acid {
+                self.bass_saw_t = 1.0;
+                self.bass_drive_t = 1.7;
+                self.make_acid();
+            } else {
+                self.bass_saw_t = BASS_PATCHES[self.bass_patch].1;
+                self.bass_drive_t = BASS_PATCHES[self.bass_patch].2;
+            }
+        }
+        if !self.sty().relax {
+            self.tsec = 0;
+            self.tsec_left = 0;
+            return;
+        }
+        self.tsec_ph += 1;
+        if self.tsec_left > 1 {
+            self.tsec_left -= 1;
+            if self.tsec == 2 && self.tsec_left == 1 {
+                self.cond_say("here it comes…".into(), Pose::Surge, None);
+            }
+            if self.acid_on && self.rng.chance(0.3) {
+                self.make_acid();
+            }
+            return;
+        }
+        let e = (0.6 * self.leader.energy + 0.4 * self.leader.agitation).clamp(0.0, 1.0);
+        let hot = e > 0.55;
+        let (next, len, line): (u8, u32, &str) = match self.tsec {
+            0 | 3 if e > 0.3 && self.rng.chance(0.25 + 0.6 * e) => (1, if hot { 2 } else { 4 }, "breakdown — kick out, let it breathe"),
+            0 | 3 => (0, if self.rng.chance(0.5) { 4 } else { 8 }, ""),
+            1 => (2, if hot { 4 } else { 8 }, "build it up…"),
+            _ => (3, if hot { 8 } else { 4 }, "DROP!"),
+        };
+        let was = self.tsec;
+        self.tsec = next;
+        self.tsec_left = len;
+        self.tsec_len = len;
+        self.tsec_ph = 0;
+        self.n_tsec[next as usize] += 1;
+        self.make_acid();
+        let name = ["groove", "breakdown", "build", "drop"][next as usize];
+        if next != was || next != 0 {
+            self.say(format!("~ techno: {name} for {} bars (intensity {e:.2})", len * 4));
+            if !line.is_empty() {
+                self.cond_say(line.into(), if next == 3 { Pose::Surge } else { Pose::Point }, None);
+            }
+            let st = self.minds[2].status;
+            self.hold[2] = 0;
+            let t = match next {
+                1 => "breakdown → kick out, just the pad and the stabs".to_string(),
+                2 => format!("build → kick back in, snare roll rising over {} bars", len * 4),
+                3 => "the drop → full four-on-the-floor, claps on 2 and 4".to_string(),
+                _ => format!("groove → four-on-the-floor for {} bars", len * 4),
+            };
+            self.think(2, st, t);
+            self.hold[2] = self.now + (self.sr * 6.0) as u64;
+            self.hold[1] = 0;
+            let st = self.minds[1].status;
+            let cut = ["filter half open", "filter closed down, dub roots", "filter sweeping open", "filter wide, accents"][next as usize];
+            self.think(1, st, format!("acid line: {cut}"));
+        }
+    }
+
+    /// a new 303-style 16-step line: roots, octaves, b7 / b3 / 5ths, accents (bit 1) and slides (bit 2)
+    fn make_acid(&mut self) {
+        let mut p = [(-1i8, 0u8); 16];
+        let notes = [0i8, 0, 0, 12, 7, 10, 3, 0, 12];
+        let dens = match self.tsec {
+            1 => 0.2,
+            3 => 0.75,
+            _ => 0.55,
+        };
+        for (i, x) in p.iter_mut().enumerate() {
+            if i == 0 || self.rng.chance(dens) {
+                let n = notes[self.rng.below(notes.len())];
+                let mut fl = 0u8;
+                if i % 4 == 0 || self.rng.chance(0.2) {
+                    fl |= 1;
+                }
+                if i > 0 && self.rng.chance(0.22) {
+                    fl |= 2;
+                }
+                *x = (if i == 0 { 0 } else { n }, fl);
+            }
+        }
+        self.acid_pat = p;
+    }
+
+    /// techno: drone, bass, drums + at most two melodic layers (4-5 layers, no clutter)
+    fn layer_cap(&mut self) {
+        if !self.sty().relax {
+            return;
+        }
+        let mut n = (3..6).filter(|&i| self.on[i] && self.rmode[i] != RMode::Rest).count();
+        for i in [5usize, 4] {
+            if n <= 2 {
+                break;
+            }
+            if self.on[i] && self.rmode[i] != RMode::Rest {
+                self.rmode[i] = RMode::Rest;
+                n -= 1;
+                let st = self.minds[i].status;
+                self.hold[i] = 0;
+                self.think(i, st, "techno keeps it to 4-5 layers → sitting out, the stabs and the acid have it");
+            }
+        }
+    }
+
+    /// style bass lines; true when handled
+    fn style_bass(&mut self, s: usize, bar: u64) -> bool {
+        let feel = self.sty().bass_feel;
+        if feel == BassFeel::Band || (feel != BassFeel::Acid && self.bass_mode == BassMode::Sustain) {
+            return false;
+        }
+        let c = self.chord();
+        let root = Self::fold(c.root, -17 + self.reg, -6 + self.reg);
+        let third = if c.pcs().contains(&(c.root + 3).rem_euclid(12)) { 3 } else { 4 };
+        let change_next = self.bars_since_change + 1 >= self.cur_bpc;
+        match feel {
+            BassFeel::Walk if s % 4 == 0 => {
+                let beat = s / 4;
+                let semi = match beat {
+                    0 => root,
+                    1 => root + if self.rng.chance(0.5) { third } else { 7 },
+                    2 => root + if self.rng.chance(0.6) { 7 } else { 12 },
+                    _ => {
+                        let next = self.harm.peek_next(self.meander());
+                        let nr = Self::fold(next.root, -17 + self.reg, -6 + self.reg);
+                        if change_next { nr + if self.rng.chance(0.5) { -1 } else { 1 } } else { root + if self.rng.chance(0.5) { 9 } else { 5 } }
+                    }
+                };
+                if beat == 3 && change_next {
+                    self.set_think(1, "walking: chromatic approach into the next chord");
+                }
+                self.heard_semi(1, semi, 0.8);
+                self.bass_sound(semi, if beat == 0 { 0.85 } else { 0.72 }, 0.01, 0.32, 3.6);
+            }
+            BassFeel::Boogie if s % 4 == 0 => {
+                let idx = (bar % 2) as usize * 4 + s / 4;
+                let deg = [0, third, 7, 9, 10, 9, 7, third][idx];
+                let semi = root + deg;
+                self.heard_semi(1, semi, 0.8);
+                self.bass_sound(semi, if s == 0 { 0.88 } else { 0.74 }, 0.008, 0.28, 3.4);
+            }
+            BassFeel::BoomChick if s == 0 || s == 8 || (s == 12 && change_next) => {
+                let semi = match s {
+                    0 => root,
+                    8 => root + if bar % 2 == 0 { -5 } else { 7 },
+                    _ => root + 2, // walk-up into the change
+                };
+                self.heard_semi(1, semi, 0.8);
+                self.bass_sound(semi, if s == 0 { 0.9 } else { 0.72 }, 0.006, 0.3, 3.0);
+            }
+            BassFeel::Acid => {
+                if self.tsec == 1 {
+                    // breakdown: dub roots every other bar
+                    if s == 0 && bar % 2 == 0 {
+                        self.heard_semi(1, root, 0.7);
+                        self.bass_sound(root, 0.7, 0.02, 2.5, 8.0);
+                    }
+                    return true;
+                }
+                let (n, fl) = self.acid_pat[s];
+                if n < 0 {
+                    return true;
+                }
+                let semi = root + n as i32;
+                let acc = fl & 1 != 0;
+                if fl & 2 != 0 && self.bass_env > 0.05 {
+                    // slide: glide the pitch, no retrigger
+                    self.bass_inc = semi_to_freq(self.root, semi as f32) / self.sr;
+                } else {
+                    self.heard_semi(1, semi, 0.7);
+                    self.bass_sound(semi, if acc { 0.85 } else { 0.62 }, 0.003, 0.13, 0.6);
+                }
+                self.acid_env = if acc { 1.0 } else { 0.55 };
+            }
+            _ => {}
+        }
+        true
+    }
+
+    /// style drum feels; true when handled
+    fn style_drums(&mut self, s: usize, bar: u64) {
+        let full = self.rmode[2] == RMode::Play;
+        match self.sty().drum_feel {
+            DrumFeel::Band => {}
+            DrumFeel::Shuffle => {
+                // triplet shuffle: the "and" of each beat lands 2/3 of the way through it
+                let sh = 0.667;
+                let ride = if full { 51 } else { 42 };
+                if s % 4 == 0 {
+                    self.drum(ride, if full { 30 } else { 20 }, 0.0);
+                }
+                if s % 4 == 2 {
+                    self.drum(ride, if full { 20 } else { 13 }, sh);
+                }
+                if s == 0 || (full && s == 8) {
+                    self.drum(36, if s == 0 { 62 } else { 50 }, 0.0);
+                    self.kick(if s == 0 { 0.6 } else { 0.48 });
+                }
+                if full && s == 10 && self.rng.chance(0.3) {
+                    self.drum(36, 34, sh);
+                }
+                if s == 4 || s == 12 {
+                    self.drum(38, if full { 44 } else { 22 }, 0.0);
+                }
+            }
+            DrumFeel::Train => {
+                if s == 0 || s == 8 {
+                    self.drum(36, if s == 0 { 62 } else { 52 }, 0.0);
+                    self.kick(if s == 0 { 0.6 } else { 0.5 });
+                }
+                if !full {
+                    if s == 4 || s == 12 {
+                        self.drum(37, 24, 0.0);
+                    }
+                } else if self.train {
+                    // train beat: brushed sixteenths on the snare, accents on 2 and 4
+                    let v = match s {
+                        4 | 12 => 38,
+                        _ if s % 2 == 0 => 18,
+                        _ => 12,
+                    };
+                    self.drum(38, v, 0.0);
+                } else {
+                    // two-step: snare on 2 and 4, eighth-note hats
+                    if s == 4 || s == 12 {
+                        self.drum(38, 42, 0.0);
+                    }
+                    if s % 2 == 0 {
+                        self.drum(42, if s % 4 == 0 { 22 } else { 16 }, 0.0);
+                    }
+                }
+            }
+            DrumFeel::FourFloor => {
+                let sec = self.tsec;
+                if sec == 1 {
+                    // breakdown: no kick; a soft off-beat hat in its last phrase only
+                    if self.tsec_left == 1 && s % 4 == 2 {
+                        self.drum(42, 14, 0.0);
+                    }
+                    return;
+                }
+                if s % 4 == 0 {
+                    // deep synthesized sub kick, ~50 Hz
+                    self.kick_with(if full { 1.0 } else { 0.82 }, 50.0, 0.34);
+                    self.last_drum = self.now.max(1);
+                    if self.ui.is_none() {
+                        self.count(2);
+                    } else {
+                        self.heard(2, "sub kick".into(), 0.9);
+                    }
+                }
+                if s % 4 == 2 {
+                    if full {
+                        self.drum(46, 28, 0.0);
+                    } else {
+                        self.drum(42, 16, 0.0);
+                    }
+                }
+                if full && (s == 4 || s == 12) {
+                    self.drum(39, 40, 0.0);
+                }
+                if sec == 3 && s % 2 == 1 {
+                    self.drum(42, 10, 0.0);
+                }
+                if sec == 2 {
+                    // build: a snare roll that tightens over the build's final phrase
+                    let last = self.tsec_left <= 1;
+                    let b = bar % 4;
+                    let every = if !last { if s % 8 == 0 { 1 } else { 0 } } else { [4, 2, 1, 1][b as usize] };
+                    if every > 0 && s % every == 0 {
+                        let ramp = if last { (b as i32 * 16 + s as i32) / 2 } else { 0 };
+                        self.drum(38, (16 + ramp).min(60), 0.0);
+                    }
+                }
+            }
+        }
+    }
+
+    /// style comping (techno dub stabs, country chick, blues shuffle comp); true when handled
+    fn style_comp(&mut self, s: usize, bar: u64) -> bool {
+        let sty = self.sty();
+        let c = self.chord();
+        let pcs = c.pcs();
+        let base = Self::fold(c.root, 12, 23);
+        let mut tones: Vec<i32> = pcs.iter().map(|&pc| base + (pc - c.root).rem_euclid(12)).collect();
+        tones.sort();
+        let hold = self.rmode[3] == RMode::Hold;
+        if sty.relax {
+            // dub chord stabs on the off-beat, into the echo
+            let hit = s == 6 && (!hold || bar % 2 == 0) || (s == 14 && self.tsec == 3 && self.rng.chance(0.4));
+            if hit && self.tsec != 2 || (self.tsec == 2 && s == 6) {
+                let v = if hold { 38 } else { 50 };
+                for &t in tones.iter().take(4) {
+                    self.role_note(Role::Comp, t, v, 0.6, 0.0);
+                }
+                if s == 6 && bar % 8 == 0 {
+                    self.set_think(3, "dub stab on the off-beat → the echo answers");
+                }
+            }
+            return true;
+        }
+        if hold {
+            return false;
+        }
+        match sty.drum_feel {
+            DrumFeel::Train if s == 4 || s == 12 => {
+                // the chick: a quick strum on 2 and 4
+                for (k, &t) in tones.iter().enumerate() {
+                    self.role_note(Role::Comp, t + 12, 42, 1.5, k as f32 * 0.05);
+                }
+                true
+            }
+            DrumFeel::Train => true,
+            DrumFeel::Shuffle => {
+                if s == 4 || s == 12 || (s == 10 && self.rng.chance(0.35)) {
+                    let d = if s == 10 { 0.667 } else { 0.0 };
+                    for &t in tones.iter() {
+                        self.role_note(Role::Comp, t, if s == 10 { 30 } else { 40 }, 1.2, d);
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// pentatonic / pelog styles: snap a melodic note into the five-note scale
+    fn scale_snap(&self, semi: i32) -> i32 {
+        let k = self.key();
+        let set: &[i32] = match self.sty().scale {
+            Scale::Diatonic => return semi,
+            Scale::Blues if k.minor => &[0, 3, 5, 6, 7, 10],
+            Scale::Blues => &[0, 3, 4, 5, 6, 7, 10],
+            Scale::Penta if k.minor => &[0, 3, 5, 7, 10],
+            Scale::Penta => &[0, 2, 4, 7, 9],
+            Scale::Pelog if k.minor => &[0, 1, 3, 7, 8],
+            Scale::Pelog => &[0, 2, 4, 7, 9],
+        };
+        for d in [0, -1, 1, -2, 2] {
+            if set.contains(&(semi + d - k.tonic).rem_euclid(12)) {
+                return semi + d;
+            }
+        }
+        semi
     }
 
     /// A player hears something that might make it reach for a new sound.
@@ -1075,6 +1718,10 @@ impl Engine {
 
     fn changed_sound(&mut self, i: usize, what: String) {
         let why = self.insp[i].take().unwrap_or_else(|| "felt like it".into());
+        if why.starts_with("conductor went") {
+            let who = self.pname(i);
+            self.say(format!("~ {who}: {why} → {what}"));
+        }
         self.since[i] = self.now;
         self.dwell[i] = (self.sr * self.rng.range(8.0, 10.0)) as u64;
         let st = self.minds[i].status;
@@ -1101,7 +1748,8 @@ impl Engine {
             self.changed_sound(1, format!("designing a new patch: {}", BASS_PATCHES[p].0));
             self.say(format!("~ bassist designs a new patch: {}", BASS_PATCHES[p].0));
         }
-        if self.ready(2) && self.gm.is_some() && !self.rng.chance(self.persona[2].synth) {
+        let forced = std::mem::take(&mut self.style_kit) && self.ready(2);
+        if self.ready(2) && self.gm.is_some() && (forced || !self.rng.chance(self.persona[2].synth * self.sty().synth.min(1.5))) {
             // GM kit variation + a percussion colour set
             let st = self.leader.state;
             let w: Vec<f32> = KITS
@@ -1114,11 +1762,13 @@ impl Engine {
                         (State::Awaken, "Room" | "Standard" | "TR-808" | "Jazz") => 1.2,
                         _ => 0.3,
                     };
-                    if k == self.kit { 0.0 } else { base }
+                    let fav = self.sty().kits.contains(&k);
+                    if k == self.kit && !(forced && fav) { 0.0 } else if fav { f32::max(base, 0.5) * 10.0 } else { base }
                 })
                 .collect();
             self.kit = self.rng.weighted(&w);
-            self.perc_set = self.rng.below(PERC_SETS.len());
+            let pf = self.sty().perc;
+            self.perc_set = if !pf.is_empty() && self.rng.chance(0.8) { pf[self.rng.below(pf.len())] } else { self.rng.below(PERC_SETS.len()) };
             let (prog, name) = KITS[self.kit];
             if let Some(g) = self.gm.as_mut() {
                 g.program(9, prog, 0.9);
@@ -1185,13 +1835,15 @@ impl Engine {
             self.bass_drive_t = BASS_PATCHES[self.bass_patch].2;
             self.rev(false);
             if !self.bpm_lock {
+                let t = self.sty().tempo;
                 let (lo, hi) = match self.leader.state {
-                    State::Chill => (58.0, 76.0),
-                    State::Awaken => (72.0, 96.0),
-                    State::Alive => (90.0, 128.0),
-                    State::Subside => (64.0, 90.0),
+                    State::Chill => t[0],
+                    State::Awaken => t[1],
+                    State::Alive => t[2],
+                    State::Subside => (t[0].0 + 6.0, t[1].1 - 6.0),
                 };
-                let to = ((lo + hi) * 0.5f32).round();
+                let to = ((lo + hi) * 0.5f32 + self.tempo_bias()).clamp(50.0, 160.0).round();
+                self.bias_applied = self.tempo_bias();
                 self.bpm_from = self.bpm;
                 self.bpm_to = to;
                 self.ramp_len = 6 * 16;
@@ -1210,7 +1862,7 @@ impl Engine {
         if self.step < 16 * 4 * 3 || self.now < self.surge_cool || self.leader.breakdown > 0 {
             return false;
         }
-        let kb = self.ctl.sig.keyboard;
+        let kb = self.ctl.sig.input;
         let st = self.leader.state;
         // never out of a calm band, unless the typing is racing
         if matches!(st, State::Chill | State::Subside) && kb <= 0.6 && !self.surge_test {
@@ -1226,6 +1878,7 @@ impl Engine {
         if self.leader.chaos {
             p += 0.03;
         }
+        p *= self.sty().surge;
         if self.surge_test {
             p = 1.0;
         }
@@ -1241,7 +1894,7 @@ impl Engine {
         self.bass_saw_t = 0.45;
         self.bass_drive_t = 2.0;
         self.rev(true);
-        let to = if self.bpm_lock { self.bpm } else { self.rng.range(120.0, 150.0).round() };
+        let to = if self.bpm_lock { self.bpm } else { (self.rng.range(120.0, 150.0) + self.tempo_bias() * 0.5).clamp(60.0, 160.0).round() };
         if !self.bpm_lock {
             self.bpm_from = self.bpm;
             self.bpm_to = to;
@@ -1288,28 +1941,49 @@ impl Engine {
                 self.think(2, "following", format!("{n} feel for a phrase or two"));
             }
         }
-        if self.bpm_lock || self.ramp_pos < self.ramp_len {
+        if self.ramp_pos < self.ramp_len {
+            return;
+        }
+        let bias = self.tempo_bias();
+        if self.bpm_lock {
+            // --bpm: the living tempo is fixed, the user's bias still rides on it
+            let to = (self.lock_bpm + bias).clamp(50.0, 160.0).round();
+            if (to - self.bpm).abs() >= 1.0 {
+                self.bpm_from = self.bpm;
+                self.bpm_to = to;
+                self.ramp_len = 2 * 16;
+                self.ramp_pos = 0;
+                self.say(format!("~ tempo {:.0} → {to:.0} bpm (locked {:.0}, bias {bias:+.0})", self.bpm, self.lock_bpm));
+            }
+            self.bias_applied = bias;
             return;
         }
         let st = self.leader.state;
+        let sty = self.sty();
+        // the living tempo, without the user's bias
+        let cur = self.bpm - self.bias_applied;
+        let t = sty.tempo;
         let (lo, hi) = match st {
-            State::Chill => (58.0, 76.0),
-            State::Awaken => (72.0, 96.0),
-            State::Alive => (90.0, 128.0),
-            State::Subside => ((self.bpm - 14.0).max(60.0), (self.bpm - 4.0).max(62.0)),
+            State::Chill => t[0],
+            State::Awaken => t[1],
+            State::Alive => t[2],
+            State::Subside => ((cur - 14.0).max(t[0].0), (cur - 4.0).max(t[0].0 + 2.0)),
         };
-        let outside = self.bpm < lo - 1.0 || self.bpm > hi + 1.0;
+        let outside = cur < lo - 1.0 || cur > hi + 1.0;
+        let drift = (bias - self.bias_applied).abs() >= 3.0;
         // let the run's random starting tempo breathe for a couple of phrases
-        if self.step < 16 * 4 * 2 && !changed {
+        if self.step < 16 * 4 * 2 && !changed && !drift {
             return;
         }
-        if !(changed || outside || self.rng.chance(0.25)) {
+        if !(changed || outside || drift || self.rng.chance(0.25 * sty.tempo_rate)) {
             return;
         }
         let mood = (0.2 + 0.5 * self.leader.agitation + 0.3 * self.rng.f()).clamp(0.0, 1.0);
         let mut to = (lo + (hi - lo) * mood).round();
         // never more than ~24 bpm in one ramp
-        to = to.clamp(self.bpm - 24.0, self.bpm + 24.0);
+        to = to.clamp(cur - 24.0, cur + 24.0);
+        to = (to + bias).clamp(50.0, 160.0).round();
+        self.bias_applied = bias;
         let d = (to - self.bpm).abs();
         if d < 3.0 {
             return;
@@ -1319,7 +1993,8 @@ impl Engine {
         self.bpm_to = to;
         self.ramp_len = bars * 16;
         self.ramp_pos = 0;
-        self.say(format!("~ tempo {:.0} → {:.0} bpm over {bars} bars ({})", self.bpm, to, st.name()));
+        let tag = if bias.abs() >= 0.5 { format!(", bias {bias:+.0}") } else { String::new() };
+        self.say(format!("~ tempo {:.0} → {:.0} bpm over {bars} bars ({}, {}{tag})", self.bpm, to, st.name(), sty.name));
     }
 
     fn say(&mut self, m: String) {
@@ -1350,7 +2025,7 @@ impl Engine {
         let spikes = [
             (1, a.file, b.file, "disk/file activity spiked"),
             (2, a.cpu, b.cpu, "the CPU spiked"),
-            (3, a.keyboard.max(a.mouse), b.keyboard.max(b.mouse), "someone started typing"),
+            (3, a.input, b.input, "someone started typing"),
             (4, a.cores, b.cores, "more cores woke up"),
             (5, a.net, b.net, "a network burst"),
         ];
@@ -1504,6 +2179,20 @@ impl Engine {
             self.mel_until[who] = self.mel_until[who].max(at + dur);
         } else if let Some(ch) = self.slot_ch(r) {
             self.note(ch, semi, vel, steps, delay);
+            // blues: scoop up into the blue notes (b3, b5) with a pitch bend
+            if matches!(r, Role::Lead | Role::Colour) && self.sty().scale == Scale::Blues {
+                let pc = (semi - self.key().tonic).rem_euclid(12);
+                if (pc == 3 || pc == 6) && self.rng.chance(0.7) {
+                    let at = self.now + (delay.max(0.0) * self.step_len) as u64;
+                    let span = (self.step_len * 0.9) as u64;
+                    self.n_bends += 1;
+                    // ±2 semitone range: start a semitone flat, glide up over ~a step
+                    for k in 0..=4u64 {
+                        let v = 4096 + (4096 * k / 4) as i32;
+                        self.evs.push(Ev { at: at + span * k / 4, ch, key: 0, vel: -(v + 1) });
+                    }
+                }
+            }
             let end = self.now + ((delay.max(0.0) + steps.max(0.25)) * self.step_len) as u64;
             self.gm_until[who] = self.gm_until[who].max(end);
             self.mel_until[who] = self.mel_until[who].max(end);
@@ -1516,6 +2205,8 @@ impl Engine {
     /// Map a band-key pitch into player `i`'s own key (transposed if bitonal,
     /// then snapped to its mode) and listen for roughness against bass and pad.
     fn in_key(&mut self, i: usize, semi: i32, vel: i32) -> i32 {
+        // five-note / blues scales shape the melody players; chords stay intact
+        let semi = if i >= 4 { self.scale_snap(semi) } else { semi };
         let rel = self.rel[i];
         if rel == Rel::Same {
             return semi;
@@ -1600,6 +2291,7 @@ impl Engine {
                 (Rel::Tritone, bit * 0.5),
                 (Rel::MajThird, bit * 0.5),
             ];
+            let opts: Vec<(Rel, f32)> = if self.style == 0 { opts.to_vec() } else { self.sty().rels.to_vec() };
             let w: Vec<f32> = opts.iter().map(|o| o.1).collect();
             let rel = opts[self.rng.weighted(&w)].0;
             self.rel[i] = rel;
@@ -1680,6 +2372,7 @@ impl Engine {
     // ------------------------------------------------------------- the clock
 
     fn on_step(&mut self) {
+        self.steer();
         if self.ramp_pos < self.ramp_len {
             // smooth tempo ramp, one tiny change per step (the clock never jumps)
             self.ramp_pos += 1;
@@ -1694,6 +2387,7 @@ impl Engine {
         self.step += 1;
         if s == 0 {
             self.leader.on_bar();
+            self.bias_decay();
             self.msg_budget = (self.msg_budget + 0.7).min(3.0);
             if bar % 4 == 0 {
                 self.on_phrase();
@@ -1732,8 +2426,11 @@ impl Engine {
         if s != 0 || self.ind_cd > 0.0 {
             return;
         }
-        let deliberate = std::mem::take(&mut self.leader.industrial_move) && self.leader.state == State::Alive && self.leader.agitation > 0.4;
-        if self.leader.chaos || deliberate {
+        let ind = self.sty().industrial;
+        let st = self.leader.state;
+        let deliberate = (std::mem::take(&mut self.leader.industrial_move) && st == State::Alive && self.leader.agitation > 0.4)
+            || (ind >= 2.0 && matches!(st, State::Awaken | State::Alive) && self.rng.chance(0.03));
+        if ind > 0.0 && (self.leader.chaos || deliberate) {
             let bars = 1 + self.rng.below(3) as u32;
             self.ind_steps = 16 * bars;
             // 4-7 hits per bar, always one on the downbeat
@@ -1772,6 +2469,7 @@ impl Engine {
             }
             c.drone_cue = c.drone_cue.saturating_sub(1);
         }
+        self.style_phrase();
         let mut msgs = Vec::new();
         let req = self.leader.on_phrase(&mut msgs);
         if req.modulate {
@@ -1825,6 +2523,11 @@ impl Engine {
                 self.band_say(m);
             }
         }
+        // techno: kick and acid bass never leave (the arrangement does the dynamics)
+        if self.sty().relax {
+            self.on[1] = true;
+            self.on[2] = true;
+        }
         // bassist mode (always present, never silent)
         let inv = self.leader.invite(P::Bass) + (self.persona[1].eager - 0.5) * 0.1;
         let mode = if self.cond.drone_cue > 0 || inv < 0.45 { BassMode::Sustain } else if inv < 0.8 { BassMode::Pulse } else { BassMode::Groove };
@@ -1859,6 +2562,7 @@ impl Engine {
         }
         self.phrase_minds();
         self.restraint_phrase();
+        self.layer_cap();
         if let Some(q) = self.quote.as_ref() {
             let pl = q.player;
             self.rmode[pl] = RMode::Play; // keep the quoting player on
@@ -1878,12 +2582,13 @@ impl Engine {
         if self.feel == Feel::Surge {
             return 5.0;
         }
-        match self.leader.state {
-            State::Chill => 1.5,
-            State::Awaken => 4.0,
-            State::Alive => 8.0,
-            State::Subside => 2.5,
-        }
+        self.sty().density
+            * match self.leader.state {
+                State::Chill => 1.5,
+                State::Awaken => 4.0,
+                State::Alive => 8.0,
+                State::Subside => 2.5,
+            }
     }
 
     /// Each melodic player asks itself: do I have something useful to add?
@@ -1923,7 +2628,8 @@ impl Engine {
                     State::Awaken => -0.12,
                     State::Alive => 0.12,
                     State::Subside => -0.3,
-                } - if surge { 0.1 } else { 0.0 };
+                } - if surge { 0.1 } else { 0.0 }
+                    + 0.4 * (self.sty().density - 1.0);
                 let pe = self.persona[i];
                 let want = base + 0.45 * tied + sig_new + fresh + 0.25 * self.leader.invite(p) + 0.2 * (pe.eager - 0.5) - fatigue - crowd - redundant + self.rng.bi() * 0.08;
                 mode = if want > 0.1 { RMode::Play } else if want > -0.22 { RMode::Hold } else { RMode::Rest };
@@ -1968,7 +2674,7 @@ impl Engine {
     fn ctl_tied_name(&self, i: usize) -> String {
         let g = self.ctl.sig;
         match i {
-            3 => format!("keys/mouse {:.0}%", g.keyboard.max(g.mouse) * 100.0),
+            3 => format!("input {:.0}%", g.input * 100.0),
             4 => format!("cores {:.0}%", g.cores * 100.0),
             5 => format!("net {:.0}%", g.net * 100.0),
             _ => String::new(),
@@ -2013,7 +2719,7 @@ impl Engine {
     fn order_say(&mut self, i: usize, o: Order, bar: u64, speech: Option<String>) {
         let who = self.pname(i);
         let (what, ok) = match o {
-            Order::Hush(_) => ("bring it down", "ok, quieter"),
+            Order::Hush(_) => (self.sty().hush, "ok, quieter"),
             Order::LayOut(n) => (if n == 1 { "lay out a phrase" } else { "lay out 2 phrases" }, "ok, resting"),
         };
         let pose = if matches!(o, Order::Hush(_)) { Pose::Shh } else { Pose::Point };
@@ -2173,7 +2879,7 @@ impl Engine {
                 return;
             }
         }
-        if clutter > 1.3 && phrase {
+        if clutter > 1.3 / self.sty().strict && phrase {
             // way too much: a cue to the whole band
             self.cond.n_cue += 1;
             self.cond.cool = now + (self.sr * 25.0) as u64;
@@ -2199,7 +2905,7 @@ impl Engine {
             }
             return;
         }
-        if clutter > 0.45 {
+        if clutter > 0.45 / self.sty().strict {
             // pick the player doing the most damage
             let mut best: Option<(usize, f32)> = None;
             for i in 3..6 {
@@ -2222,7 +2928,7 @@ impl Engine {
             }
             return;
         }
-        if clutter < 0.12 && phrase && st != State::Chill && !surge && self.rng.chance(0.5) {
+        if clutter < 0.12 / self.sty().strict && phrase && st != State::Chill && !surge && self.rng.chance(0.5) {
             // space opened up: invite someone back
             let cand: Vec<usize> = (3..6).filter(|&i| self.on[i] && self.rest_run[i] >= 2 && self.cond.lay[i] == 0).collect();
             if !cand.is_empty() {
@@ -2413,6 +3119,10 @@ impl Engine {
             State::Alive => if self.rng.chance(0.5) { (cb / 2).max(1) } else { cb },
             State::Subside => cb + self.rng.below(2) as u32,
         };
+        // 12-bar blues: one bar per chord, always
+        if self.sty().harm == Harm::Blues {
+            self.cur_bpc = 1;
+        }
         self.history.push_back(c.name());
         while self.history.len() > 4 {
             self.history.pop_front();
@@ -2594,7 +3304,7 @@ impl Engine {
         self.bass_peak = vel;
         self.bass_att = 1.0 - (-1.0 / (self.sr * att)).exp();
         self.bass_dec = (-1.0 / (self.sr * dec)).exp();
-        if self.bass_mode == BassMode::Groove && self.slot_ch(Role::Bass).is_some() {
+        if (self.bass_mode == BassMode::Groove || (self.sty().gm_bass && self.bass_mode == BassMode::Pulse)) && self.slot_ch(Role::Bass).is_some() {
             let v = (vel * 80.0) as i32;
             self.role_note(Role::Bass, semi + 12, v, gm_len, 0.0);
         }
@@ -2619,6 +3329,9 @@ impl Engine {
             return;
         }
         if self.entry_wait > 0 {
+            return;
+        }
+        if self.style_bass(s, self.step / 16) {
             return;
         }
         let v = self.bass_pat[s];
@@ -2657,6 +3370,20 @@ impl Engine {
             RMode::Rest
         } else if surge {
             RMode::Play
+        } else if self.sty().relax {
+            // techno: the kick stays (minimal while chilling), out only in breakdowns
+            why = match self.tsec {
+                1 => "breakdown → kick out".into(),
+                2 => "build → kick back, rolling".into(),
+                3 => "the drop → full four-on-the-floor".into(),
+                _ if st == State::Chill => "minimal techno: sub kick and a soft off-beat hat".into(),
+                _ => "four-on-the-floor, off-beat hats, claps on 2 and 4".into(),
+            };
+            match self.tsec {
+                1 => RMode::Rest,
+                0 if st == State::Chill => RMode::Hold,
+                _ => RMode::Play,
+            }
         } else {
             let tied = self.tied_level(2);
             let fatigue = 0.25 * self.play_run[2].saturating_sub(2) as f32;
@@ -2668,6 +3395,13 @@ impl Engine {
                 State::Alive => [0.18, 0.32, 0.5],
             };
             w[2] += 0.25 * (tied - 0.5).max(0.0) * (st == State::Alive) as i32 as f32;
+            let dm = self.sty().drums;
+            w[2] *= dm;
+            if dm < 1.0 {
+                w[1] *= dm.sqrt();
+            } else {
+                w[0] /= dm;
+            }
             w[0] += fatigue;
             let m = [RMode::Rest, RMode::Hold, RMode::Play][self.rng.weighted(&w)];
             why = match m {
@@ -2691,6 +3425,12 @@ impl Engine {
         }
         self.rmode[2] = mode;
         self.drum_minimal = mode == RMode::Hold;
+        if self.sty().drum_feel == DrumFeel::Train && self.rng.chance(0.3) {
+            self.train = !self.train;
+            if mode == RMode::Play {
+                why = if self.train { "train beat: brushed sixteenths, accents on 2 and 4".into() } else { "two-step: kick on 1 and 3, snare on 2 and 4".into() };
+            }
+        }
         if self.on[2] && !why.is_empty() && (mode != was || self.rng.chance(0.3)) {
             let status = match mode {
                 RMode::Rest => "laying out",
@@ -2755,6 +3495,19 @@ impl Engine {
                 a[6] = 13;
                 a[14] = 13;
             }
+            let sty = self.sty();
+            if sty.perc_heavy && d > 0.3 {
+                // hand drums carry the cycle: a 3+3+2 figure, quietly
+                for (i, v) in [(0usize, 16), (3, 12), (6, 14), (10, 12), (12, 13)] {
+                    a[i] = v;
+                }
+                h = [0; 16];
+            }
+            if sty.id == "biker" && d > 0.4 {
+                // heavy low end: big kick on 1 and the "and" of 3
+                k[0] = 80;
+                k[10] = k[10].max(52);
+            }
         }
         self.drum_pat = [k, sn, h, a];
     }
@@ -2765,7 +3518,7 @@ impl Engine {
             self.make_drum_pattern(); // thin out bar by bar
         }
         let last_bar = bar % 4 == 3;
-        let swing = if s % 2 == 1 { self.persona[2].swing * 0.33 } else { 0.0 };
+        let swing = if s % 2 == 1 { (self.persona[2].swing * 0.33 + self.sty().swing).min(0.4) } else { 0.0 };
         let resting = self.rmode[2] == RMode::Rest && self.feel != Feel::Surge;
         if resting {
             self.fill = false;
@@ -2808,6 +3561,10 @@ impl Engine {
             }
             return;
         }
+        if self.sty().drum_feel != DrumFeel::Band {
+            self.style_drums(s, bar);
+            return;
+        }
         // half-time stretches the bar's pattern over two bars, double-time plays it twice
         let s = match self.feel {
             Feel::Surge | Feel::Normal => s,
@@ -2830,7 +3587,7 @@ impl Engine {
             self.drum(key, sn[s], swing);
         }
         if h[s] > 0 {
-            let key = if self.persona[2].eager > 0.65 { 51 } else { 42 };
+            let key = if self.sty().ride { if s % 4 == 0 { 51 } else { 59 } } else if self.persona[2].eager > 0.65 { 51 } else { 42 };
             self.drum(key, h[s], swing);
             if self.gm.is_none() {
                 self.hat_env = 1.0;
@@ -2881,6 +3638,9 @@ impl Engine {
             return;
         }
         if self.entry_wait > 0 || self.cond.lay[3] > 0 || self.rmode[3] == RMode::Rest {
+            return;
+        }
+        if self.sty().id != "house" && self.style_comp(s, bar) {
             return;
         }
         if self.rmode[3] == RMode::Hold {
@@ -2998,11 +3758,12 @@ impl Engine {
         }
         if s == 0 && phase == 2 && !soloing {
             // the colour player may answer the call
-            if self.on[5] && self.rng.chance(0.25 + 0.5 * self.persona[5].reply) {
+            let blues = self.sty().harm == Harm::Blues;
+            if self.on[5] && self.rng.chance(if blues { 0.9 } else { 0.25 + 0.5 * self.persona[5].reply }) {
                 let (m, _) = self.motif.develop(&mut self.rng, 0.4);
                 self.reply = Some((m, bar));
                 self.band_say("colour player answers the lead".into());
-                self.think(5, "trading", "heard the lead's call → answering it a 3rd up");
+                self.think(5, "trading", if blues { "blues call-and-response → answering the lead's lick" } else { "heard the lead's call → answering it a 3rd up" });
                 self.inspire(4, "liked the colour player's answer".into(), 0.25);
             }
         }
@@ -3093,12 +3854,13 @@ impl Engine {
         let p = if self.quote_test {
             1.0
         } else {
-            match st {
-                State::Chill => 0.025,
-                State::Awaken => 0.11,
-                State::Alive => 0.09,
-                State::Subside => 0.035,
-            }
+            self.sty().quote
+                * match st {
+                    State::Chill => 0.025,
+                    State::Awaken => 0.11,
+                    State::Alive => 0.09,
+                    State::Subside => 0.035,
+                }
         };
         if !self.rng.chance(p) {
             return;
@@ -3125,7 +3887,7 @@ impl Engine {
         // which theme: one the player's key suits (major/minor), not heard recently
         let k = self.player_key(pl);
         let minor = matches!(k.mode, Mode::Aeolian | Mode::Dorian | Mode::Phrygian);
-        let w: Vec<f32> = th.iter().enumerate().map(|(i, t)| if self.recent_themes.contains(&i) { 0.0 } else { t.fame() * if t.minorish() == minor { 2.0 } else { 1.0 } }).collect();
+        let w: Vec<f32> = th.iter().enumerate().map(|(i, t)| if self.recent_themes.contains(&i) { 0.0 } else { t.fame() * if t.minorish() == minor { 2.0 } else { 1.0 } * if self.sty().quote_src.iter().any(|q| t.composer.contains(q) || t.coll.contains(q)) { 4.0 } else { 1.0 } }).collect();
         let ti = self.rng.weighted(&w);
         self.recent_themes.push_back(ti);
         if self.recent_themes.len() > 40 {
@@ -3247,6 +4009,7 @@ impl Engine {
         let kname = self.player_key(pl).name();
         let what = if pass == 0 { var.desc().to_string() } else { format!("{} (passed on)", var.desc()) };
         self.quote = Some(Quote { theme: ti, player: pl, var, ev, next: 0, start, end, pass, cite: cite.clone(), what: what.clone() });
+
         self.n_quotes += 1;
         // the quoting player is featured for the duration
         self.rmode[pl] = RMode::Play;
@@ -3273,7 +4036,7 @@ impl Engine {
             self.quote_hist.pop_front();
         }
         let speech = if pass == 0 {
-            format!("nice — {who} has {} · everyone support", th.name())
+            format!("{} — {who} has {} · everyone support", self.sty().praise, th.name())
         } else {
             format!("{who} picks it up — keep it soft")
         };
@@ -3375,12 +4138,23 @@ impl Engine {
     fn pick_program(&mut self, role: Role) -> (u8, bool) {
         let pl = Self::player_of(role);
         let pal = self.palette[pl];
-        let wild = role != Role::Bass && self.rng.chance(0.12);
+        let wild = role != Role::Bass && self.rng.chance(if self.style == 0 { 0.12 } else { 0.04 });
         let si = self.slots.iter().position(|s| s.role == role).unwrap();
+        let ri = match role {
+            Role::Pad => 0,
+            Role::Comp => 1,
+            Role::Lead => 2,
+            Role::Colour => 3,
+            Role::Bass => 4,
+        };
+        let sp = self.sty().progs[ri];
         let w: Vec<f32> = (0..128u8)
             .map(|p| {
                 let rw = role_weight(role, p);
                 let mut w = if wild { rw.max(0.25) } else { rw * if in_palette(pal, p) { 4.0 } else { 1.0 } };
+                if !wild && sp.contains(&p) {
+                    w = rw.max(0.3) * 60.0;
+                }
                 if self.slots[si].recent.contains(&p) || self.recent_global.contains(&p) {
                     w *= 0.05;
                 }
@@ -3400,7 +4174,7 @@ impl Engine {
             0 => s.screen_change,
             1 => s.file,
             2 => s.cpu,
-            3 => s.keyboard.max(s.mouse),
+            3 => s.input,
             4 => s.cores,
             5 => s.net,
             _ => self.guest_cpu,
@@ -3409,7 +4183,7 @@ impl Engine {
     }
 
     fn want_synth(&mut self, pl: usize) -> bool {
-        self.gm.is_none() || self.rng.chance(self.persona[pl.min(5)].synth)
+        self.gm.is_none() || self.rng.chance((self.persona[pl.min(5)].synth * self.sty().synth).clamp(0.02, 0.95))
     }
 
     /// A player designs its own synth patch from its personality and tied signal.
@@ -3423,6 +4197,8 @@ impl Engine {
             Role::Colour => [0.3, 1.2, 1.0, 0.8],
             Role::Bass => [1.0, 0.2, 0.0, 0.0],
         };
+        let kw = self.sty().kinds;
+        let w = [w[0] * kw[0], w[1] * kw[1], w[2] * kw[2], w[3] * kw[3]];
         let kind = [Kind::Sub, Kind::Fm, Kind::Wave, Kind::Pluck][self.rng.weighted(&w)];
         // background voices by default: slow attacks, long releases
         let (a, d, s, r) = match role {
@@ -3632,7 +4408,10 @@ impl Engine {
                 Role::Comp => self.on[3] && (self.leader.invite(P::Keys) > 0.45 || lone == Some(P::Keys) || self.leader.soloist == Some(P::Keys)),
                 Role::Lead => self.on[4],
                 Role::Colour => self.on[5],
-                Role::Bass => self.gm.is_some() && self.bass_gm_ok && self.bass_mode == BassMode::Groove && self.persona[1].eager > 0.35,
+                Role::Bass => {
+                    let sb = self.sty().gm_bass;
+                    self.gm.is_some() && self.bass_gm_ok && (self.bass_mode == BassMode::Groove || (sb && self.bass_mode == BassMode::Pulse)) && (sb || self.persona[1].eager > 0.35)
+                }
             };
             self.slots[i].want = want;
         }
@@ -3808,7 +4587,23 @@ impl Engine {
         let sg = 1.0 - (-(CR as f32) / (sr * 1.2)).exp();
         self.sub_semi += (self.sub_target - self.sub_semi) * sg;
         // bass filter follows its envelope
-        self.bass_f.set(140.0 + 520.0 * self.bass_env * (0.4 + e), 0.8, sr);
+        if self.acid_on {
+            // 303: resonant lowpass, slow sweep over 32 bars + accent envelope
+            let lfo = 0.18 * (std::f32::consts::TAU * (self.step as f32 / (32.0 * 16.0))).sin();
+            let base = match self.tsec {
+                1 => 0.1,
+                2 => 0.2 + 0.7 * (self.tsec_ph as f32 / self.tsec_len.max(1) as f32),
+                3 => 0.8,
+                _ => 0.35 + 0.3 * self.leader.energy,
+            };
+            self.acid_cut_t = (base + lfo).clamp(0.05, 1.0);
+            self.acid_cut += (self.acid_cut_t - self.acid_cut) * 0.01;
+            self.acid_env *= (-(CR as f32) / (sr * 0.12)).exp();
+            let fc = 110.0 * (5.0 * self.acid_cut).exp2() * (1.0 + 1.6 * self.acid_env);
+            self.bass_f.set(fc.min(5000.0), 3.2 + 3.0 * self.acid_cut, sr);
+        } else {
+            self.bass_f.set(140.0 + 520.0 * self.bass_env * (0.4 + e), 0.8, sr);
+        }
         // air layer: silent by default (kept only as a hook)
         self.air += (self.air_target - self.air) * k * 0.5;
         self.air_f.set(9000.0 + 2500.0 * d3, 0.6, sr);
@@ -3899,7 +4694,7 @@ impl Engine {
                     if self.evs[i].at < end {
                         let e = self.evs.swap_remove(i);
                         let g = self.gm.as_mut().unwrap();
-                        if e.vel > 0 { g.note_on(e.ch, e.key, e.vel, now) } else { g.note_off(e.ch, e.key, now) }
+                        if e.vel > 0 { g.note_on(e.ch, e.key, e.vel, now) } else if e.vel < 0 { g.bend(e.ch, -(e.vel + 1)) } else { g.note_off(e.ch, e.key, now) }
                     } else {
                         i += 1;
                     }
@@ -4060,7 +4855,7 @@ impl Engine {
                     (0.0, 0.0)
                 };
                 // fx
-                let dly_in = (bl + br) * 0.5 + (gl + gr) * 0.3;
+                let dly_in = (bl + br) * 0.5 + (gl + gr) * 0.3 + if self.acid_on { (self.pool.l[j] + self.pool.r[j]) * 0.18 } else { 0.0 };
                 // echo time follows the tempo, gliding one sample at a time (tape-like, no clicks)
                 if self.dlen != self.dlen_target && (self.now as usize + j) % 4 == 0 {
                     if self.dlen < self.dlen_target { self.dlen += 1 } else { self.dlen -= 1 }

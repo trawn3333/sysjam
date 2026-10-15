@@ -19,11 +19,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 
-/// Keyboard + mouse rates, each ~0..1 after a few seconds of smoothing.
+/// Combined keyboard + mouse activity, ~0..1 after a few seconds of smoothing.
+/// (One signal: on most machines the two counts come from the same source anyway.)
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Activity {
-    pub keyboard: f32,
-    pub mouse: f32,
+    pub input: f32,
 }
 
 struct Dev {
@@ -213,7 +213,6 @@ pub struct Tracker {
     label: String,
     note: Option<String>,
     kb_e: f32,
-    ms_e: f32,
     last: Instant,
     /// USB disks / NICs whose traffic also lands on the xhci line
     usb_io: Vec<PathBuf>,
@@ -328,7 +327,7 @@ impl Tracker {
     /// Picks the input source and logs which one (always: it explains the keys meter).
     pub fn open(_verbose: bool) -> Tracker {
         let early = EARLY.lock().unwrap().take();
-        let mut t = Tracker { src: None, label: "none".into(), note: None, kb_e: 0.0, ms_e: 0.0, last: Instant::now(), usb_io: Vec::new(), usb_io_prev: 0 };
+        let mut t = Tracker { src: None, label: "none".into(), note: None, kb_e: 0.0, last: Instant::now(), usb_io: Vec::new(), usb_io_prev: 0 };
         let (devs, denied, setgid) = match early {
             Some(e) => (e.devs, e.denied, e.setgid),
             None => {
@@ -494,13 +493,11 @@ impl Tracker {
             }
             None => return Activity::default(),
         }
-        let kb_raw = (kb / kdiv).clamp(0.0, 1.0);
-        let ms_raw = (ms / mdiv).clamp(0.0, 1.0);
+        let raw = (kb / kdiv + ms / mdiv).clamp(0.0, 1.0);
         // ~3 s smoothing so a pause doesn't instantly drop, and a burst doesn't spike
         let a = 1.0 - (-dt / 3.0).exp();
-        self.kb_e += (kb_raw - self.kb_e) * a;
-        self.ms_e += (ms_raw - self.ms_e) * a;
-        Activity { keyboard: self.kb_e, mouse: self.ms_e }
+        self.kb_e += (raw - self.kb_e) * a;
+        Activity { input: self.kb_e }
     }
 }
 

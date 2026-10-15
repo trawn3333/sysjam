@@ -237,6 +237,11 @@ impl Gm {
         self.chans[ch].last_note = now;
         self.chans[ch].active += 1;
     }
+    /// pitch bend, 0..16383 (8192 = centre; default range ±2 semitones)
+    pub fn bend(&mut self, ch: usize, v: i32) {
+        let v = v.clamp(0, 16383);
+        self.sy(ch as i32).process_midi_message(ch as i32, 0xE0, v & 0x7F, v >> 7);
+    }
     pub fn note_off(&mut self, ch: usize, key: i32, now: u64) {
         if !(0..128).contains(&key) {
             return;

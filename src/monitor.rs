@@ -309,7 +309,7 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
     let mut tick: u64 = 0;
     let tui = cfg.ui.is_some();
     let mut top: Vec<(String, f32)> = Vec::new();
-    let mut hist: [std::collections::VecDeque<f32>; 7] = Default::default();
+    let mut hist: [std::collections::VecDeque<f32>; 6] = Default::default();
     let tickd = Duration::from_millis(500);
 
     while !stop.load(Ordering::Relaxed) {
@@ -438,7 +438,7 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
             prev_raw = raw_score;
             started = true;
             let act = input.as_mut().map(|t| t.poll()).unwrap_or_default();
-            c.sig = crate::band::Signals { cpu: cpu_e, cores: cores_e, net: net_e, file: file_e, fd: fl, screen_change, keyboard: act.keyboard, mouse: act.mouse };
+            c.sig = crate::band::Signals { cpu: cpu_e, cores: cores_e, net: net_e, file: file_e, fd: fl, screen_change, input: act.input };
             c.warmth = score_e.clamp(-1.0, 1.0);
             c.brightness = sc.brightness;
             c.screen_valid = sc.valid;
@@ -448,7 +448,7 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
             *ctl.lock().unwrap() = c.clone();
             if let Some(ui) = &cfg.ui {
                 let ncpu = cpus.len().saturating_sub(1);
-                let v = [cpu_s, cores_busy as f32 / ncores, raw_net, wl.max(fl), fl, act.keyboard, act.mouse];
+                let v = [cpu_s, cores_busy as f32 / ncores, raw_net, wl.max(fl), fl, act.input];
                 for (h, x) in hist.iter_mut().zip(v) {
                     h.push_back(x.clamp(0.0, 1.0));
                     while h.len() > crate::ui::HIST {
@@ -461,8 +461,7 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
                     net: net_r,
                     write: wr_r,
                     fd: fd_r,
-                    keys: act.keyboard,
-                    mouse: act.mouse,
+                    input: act.input,
                     input_on: input.is_some(),
                     input_src: input.as_ref().map(|t| t.label().to_string()).unwrap_or_else(|| "off".into()),
                     screen: if sc.valid { Some((sc.hue, sc.saturation, sc.brightness)) } else { None },
@@ -481,7 +480,7 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
                     "off".into()
                 };
                 say!(
-                    "[{:5.0}s] cpu {:3.0}% cores {}/{} | net {} | write {} | fds {:.0}/s | keys {:.2} mouse {:.2} | screen {} | signals cpu {:.2} net {:.2} file {:.2} | guest: {}",
+                    "[{:5.0}s] cpu {:3.0}% cores {}/{} | net {} | write {} | fds {:.0}/s | input {:.2} | screen {} | signals cpu {:.2} net {:.2} file {:.2} | guest: {}",
                     start.elapsed().as_secs_f32(),
                     cpu_s * 100.0,
                     cores_busy,
@@ -489,8 +488,7 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
                     human(net_r),
                     human(wr_r),
                     fd_r,
-                    act.keyboard,
-                    act.mouse,
+                    act.input,
                     scr,
                     cpu_e,
                     net_e,

@@ -1,14 +1,31 @@
 #!/usr/bin/env python3
 """Render a `tmux capture-pane -p -e` dump (ANSI SGR colours) to a PNG.
 usage: ansi2png.py in.ans out.png [cols rows]"""
-import re, sys
+import os, re, sys, unicodedata
 from PIL import Image, ImageDraw, ImageFont
+from fontTools.ttLib import TTFont
 
 src, out = sys.argv[1], sys.argv[2]
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
 SIZE = 15
 font, bold = ImageFont.truetype(FONT, SIZE), ImageFont.truetype(BOLD, SIZE)
+# fallbacks for glyphs DejaVu lacks (symbols, monochrome emoji)
+FALLBACK = [f for f in ["/usr/share/fonts/truetype/sand-box/google/Noto Sans Symbols/NotoSansSymbols-VariableFont_wght.ttf",
+                        "/usr/share/fonts/truetype/libreoffice/opens___.ttf",
+                        os.environ.get("SYSJAM_EMOJI_FONT", "/workspace/fonts/NotoEmoji.ttf")] if os.path.exists(f)]
+def cmap(path):
+    try: return set(TTFont(path, lazy=True).getBestCmap().keys())
+    except Exception: return set()
+BASE = cmap(FONT)
+FB = [(ImageFont.truetype(f, SIZE - 1), cmap(f)) for f in FALLBACK]
+def font_for(c, b):
+    if ord(c) in BASE: return bold if b else font
+    for f, cm in FB:
+        if ord(c) in cm: return f
+    return bold if b else font
+def wide(c):
+    return unicodedata.east_asian_width(c) in "WF"
 cw = round(font.getlength("M"))
 ch = SIZE + 4
 BG, FG = (24, 24, 30), (205, 205, 210)
@@ -29,8 +46,9 @@ pad = 12
 img = Image.new("RGB", (cols * cw + 2 * pad, rows * ch + 2 * pad), BG)
 d = ImageDraw.Draw(img)
 tok = re.compile(r"\x1b\[([0-9;:]*)m")
+fg, bg, b, dim, rev = FG, None, False, False, False
 for y, line in enumerate(lines[:rows]):
-    fg, bg, b, dim, rev = FG, None, False, False, False
+    # tmux carries SGR state across lines
     x, pos = 0, 0
     for m in list(tok.finditer(line)) + [None]:
         text = line[pos:m.start()] if m else line[pos:]
@@ -54,8 +72,9 @@ for y, line in enumerate(lines[:rows]):
                     y0 = my if c in "┌┐" else py; y1 = my if c in "└┘" else py + ch - 1
                     d.line([mx, y0, mx, y1], fill=f)
             elif c != " ":
-                d.text((px, py + 1), c, font=bold if b else font, fill=f)
-            x += 1
+                if wide(c) and g: d.rectangle([px + cw, py, px + 2 * cw - 1, py + ch - 1], fill=g)
+                d.text((px, py + 1), c, font=font_for(c, b), fill=f)
+            x += 2 if wide(c) else 1
         if not m: break
         pos = m.end()
         p = [int(v) if v else 0 for v in re.split("[;:]", m.group(1))] if m.group(1) else [0]
@@ -76,6 +95,7 @@ for y, line in enumerate(lines[:rows]):
             elif v == 49: bg = None
             elif v in (38, 48):
                 if p[i + 1] == 5: col = c256(p[i + 2]); i += 2
+                elif ":2::" in m.group(1): col = tuple(p[i + 3:i + 6]); i += 5
                 else: col = tuple(p[i + 2:i + 5]); i += 4
                 if v == 38: fg = col
                 else: bg = col

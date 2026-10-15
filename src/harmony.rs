@@ -283,7 +283,63 @@ pub struct Change {
     pub note: Option<String>,
 }
 
+/// style-flavoured phrase templates (0 drone, 1 jazz, 2 rock, 3 chorale, 4 modal,
+/// 5 12-bar blues (one bar per chord), 6 country, 7 techno loops)
+pub const STYLE_TEMPLATES: &[(u8, Template)] = &[
+    (5, Template { minor: false, chords: &["I7", "I7", "I7", "I7", "IV7", "IV7", "I7", "I7", "V7", "IV7", "I7", "V7"], w: 3.0 }),
+    (5, Template { minor: false, chords: &["I7", "IV7", "I7", "I7", "IV7", "IV7", "I7", "I7", "V7", "IV7", "I7", "V7"], w: 2.5 }), // quick change
+    (5, Template { minor: false, chords: &["I7", "IV7", "I7", "I7", "IV7", "IV7", "I7", "VI7", "ii7", "V7", "I7", "V7"], w: 1.5 }), // turnaround via VI7–ii–V
+    (5, Template { minor: false, chords: &["I7", "I7", "I7", "I7", "IV7", "IV7", "I7", "I7", "V7", "IV7", "I7", "IV7"], w: 1.0 }), // I–IV turnaround
+    (5, Template { minor: true, chords: &["i7", "i7", "i7", "i7", "iv7", "iv7", "i7", "i7", "VI7", "V7", "i7", "V7"], w: 3.0 }),
+    (5, Template { minor: true, chords: &["i7", "iv7", "i7", "i7", "iv7", "iv7", "i7", "i7", "VI7", "V7", "i7", "V7"], w: 2.0 }),
+    (6, Template { minor: false, chords: &["I", "IV", "V", "I"], w: 3.0 }),
+    (6, Template { minor: false, chords: &["I", "vi", "IV", "V"], w: 2.5 }),
+    (6, Template { minor: false, chords: &["I", "I", "IV", "I", "V", "V", "I", "I"], w: 2.0 }),
+    (6, Template { minor: false, chords: &["I", "IV", "I", "V7"], w: 1.5 }),
+    (6, Template { minor: false, chords: &["I", "bVII", "IV", "I"], w: 1.0 }), // mixolydian
+    (6, Template { minor: true, chords: &["VI", "VII", "III", "III"], w: 1.0 }), // relative-major I–IV–V from the minor side
+    (7, Template { minor: true, chords: &["i7", "i7", "i7", "i7"], w: 3.0 }),
+    (7, Template { minor: true, chords: &["i7", "i7", "VII", "VII"], w: 2.0 }),
+    (7, Template { minor: true, chords: &["i7", "iv7", "i7", "iv7"], w: 2.0 }),
+    (7, Template { minor: true, chords: &["i7", "VI", "i7", "VII"], w: 1.5 }),
+    (7, Template { minor: false, chords: &["vi7", "vi7", "IV", "IV"], w: 1.5 }),
+    (7, Template { minor: false, chords: &["Imaj7", "Imaj7", "ii7", "ii7"], w: 1.5 }),
+    (0, Template { minor: false, chords: &["I", "I", "II", "I"], w: 2.0 }), // Lydian II
+    (0, Template { minor: false, chords: &["Iadd9", "IVmaj7", "Iadd9", "Isus2"], w: 1.5 }),
+    (0, Template { minor: true, chords: &["i", "i", "VI", "i"], w: 2.0 }),
+    (0, Template { minor: true, chords: &["isus2", "iv", "isus2", "VII"], w: 1.2 }),
+    (1, Template { minor: false, chords: &["ii7", "V7", "Imaj7", "Imaj7"], w: 3.0 }),
+    (1, Template { minor: false, chords: &["Imaj7", "vi7", "ii7", "V7"], w: 2.5 }),
+    (1, Template { minor: false, chords: &["iii7", "vi7", "ii7", "V7"], w: 2.0 }),
+    (1, Template { minor: false, chords: &["Imaj7", "IV7", "iii7", "VI7", "ii7", "V7", "Imaj7", "Imaj7"], w: 1.5 }),
+    (1, Template { minor: true, chords: &["ii°", "V7", "i7", "i7"], w: 2.5 }),
+    (1, Template { minor: true, chords: &["i7", "iv7", "VII7", "IIImaj7"], w: 2.0 }),
+    (2, Template { minor: false, chords: &["I", "bVII", "IV", "I"], w: 3.0 }), // Mixolydian
+    (2, Template { minor: false, chords: &["I", "I", "bVII", "IV"], w: 2.0 }),
+    (2, Template { minor: false, chords: &["I", "IV", "I", "V"], w: 1.5 }),
+    (2, Template { minor: true, chords: &["i", "VII", "VI", "VII"], w: 2.0 }),
+    (2, Template { minor: true, chords: &["i", "i", "VII", "IV"], w: 1.5 }), // Dorian IV
+    (3, Template { minor: false, chords: &["I", "IV", "V", "I"], w: 3.0 }),
+    (3, Template { minor: false, chords: &["I", "vi", "ii", "V7", "I", "IV", "V7", "I"], w: 2.5 }),
+    (3, Template { minor: false, chords: &["I", "V", "vi", "iii", "IV", "I", "ii", "V7"], w: 2.0 }), // Pachelbel-ish
+    (3, Template { minor: false, chords: &["I", "ii", "V7", "I"], w: 2.0 }),
+    (3, Template { minor: true, chords: &["i", "iv", "V7", "i"], w: 3.0 }),
+    (3, Template { minor: true, chords: &["i", "VI", "ii°", "V7"], w: 2.0 }),
+    (4, Template { minor: false, chords: &["I", "bVII", "I", "bVII"], w: 2.5 }),
+    (4, Template { minor: false, chords: &["I", "IV", "bVII", "I"], w: 2.0 }),
+    (4, Template { minor: true, chords: &["i", "IV", "i", "IV"], w: 2.0 }), // Dorian
+    (4, Template { minor: true, chords: &["i", "bII", "i", "VII"], w: 2.0 }), // Phrygian
+    (4, Template { minor: true, chords: &["i", "VII", "i", "v"], w: 1.5 }),
+];
+
 pub struct Harmony {
+    /// style flavour: None = plain templates; Some(f) favours STYLE_TEMPLATES of f
+    pub flavour: Option<u8>,
+    /// jazz: turn triads into sevenths
+    pub sevenths: bool,
+    /// style's major/minor lean (−1..1) and modulation rate
+    pub major_bias: f32,
+    pub mod_rate: f32,
     rng: Rng,
     pub key: Key,
     home: Key,
@@ -308,6 +364,10 @@ impl Harmony {
         spell_for(&key);
         let cur = roman(if minor { "i" } else { "I" }, key);
         Harmony {
+            flavour: None,
+            sevenths: false,
+            major_bias: 0.0,
+            mod_rate: 1.0,
             rng: Rng::seeded(seed ^ 0x4841524d),
             key,
             home: key,
@@ -391,6 +451,15 @@ impl Harmony {
     }
 
     fn plan(&mut self, meander: bool) {
+        // form-driven styles never meander off their form
+        let meander = meander && !matches!(self.flavour, Some(5) | Some(6) | Some(7));
+        // 12-bar blues and techno loops hold their form: no modulations or cadential detours
+        let locked = matches!(self.flavour, Some(5) | Some(7));
+        if locked {
+            self.modulate = false;
+            self.resolve = false;
+            self.home = self.key;
+        }
         let key = self.key;
         let tonic = roman(if key.minor { "i" } else { "I" }, key);
         let dom = roman("V7", key); // major V even in minor (harmonic minor)
@@ -424,9 +493,9 @@ impl Harmony {
         // a gentle pull back home only after a long time away
         let away_pull = if self.key != self.home { (self.phrases_away as f32 - 6.0).max(0.0) * 0.03 } else { 0.0 };
         self.settle = self.settle.saturating_sub(1);
-        if self.modulate || (self.settle == 0 && self.rng.chance(if meander { 0.03 } else { 0.05 } + away_pull)) {
+        if !locked && (self.modulate || (self.settle == 0 && self.rng.chance((if meander { 0.03 } else { 0.05 }) * self.mod_rate + away_pull))) {
             self.modulate = false;
-            let p_major = (0.5 + 0.35 * self.warmth).clamp(0.1, 0.9);
+            let p_major = (0.5 + 0.35 * self.warmth + 0.4 * self.major_bias).clamp(0.08, 0.92);
             let target = if self.key != self.home && self.rng.chance(0.15 + away_pull) {
                 self.home
             } else {
@@ -452,6 +521,7 @@ impl Harmony {
             for _ in 0..4 {
                 c = self.markov_next(c);
                 let mut cc = self.colourise(c, 0.35);
+                cc = self.seventh(cc);
                 let mut note = None;
                 if self.rng.chance(0.06) {
                     cc = self.borrowed();
@@ -461,6 +531,23 @@ impl Harmony {
             }
             self.phrases_away += (self.key != self.home) as u32;
             return;
+        }
+        // a style's own phrase shapes
+        if let Some(f) = self.flavour {
+            if locked || self.rng.chance(0.7) {
+                let idx: Vec<usize> = (0..STYLE_TEMPLATES.len()).filter(|&i| STYLE_TEMPLATES[i].0 == f && STYLE_TEMPLATES[i].1.minor == key.minor).collect();
+                if !idx.is_empty() {
+                    let w: Vec<f32> = idx.iter().map(|&i| STYLE_TEMPLATES[i].1.w * if roman(STYLE_TEMPLATES[i].1.chords[0], key).root == self.cur.root { 0.6 } else { 1.0 }).collect();
+                    let t = &STYLE_TEMPLATES[idx[self.rng.weighted(&w)]].1;
+                    let mut first = true;
+                    for c in t.chords {
+                        let ch = self.seventh(roman(c, key));
+                        self.queue.push_back((ch, if std::mem::take(&mut first) { Some(format!("{} phrase", ["drone", "jazz", "rock", "chorale", "modal", "12-bar blues", "country", "loop"][f as usize % 8])) } else { None }));
+                    }
+                    self.phrases_away += (self.key != self.home) as u32;
+                    return;
+                }
+            }
         }
         // template phrase, chosen with Markov-ish affinity to the current chord
         let idx: Vec<usize> = (0..TEMPLATES.len()).filter(|&i| TEMPLATES[i].minor == key.minor).collect();
@@ -509,9 +596,25 @@ impl Harmony {
         }
         for p in phrase {
             let c = self.colourise(p.0, 0.1);
+            let c = self.seventh(c);
             self.queue.push_back((c, p.1));
         }
         self.phrases_away += (self.key != self.home) as u32;
+    }
+
+    /// jazz: every triad grows a seventh (dominant on V)
+    fn seventh(&self, c: Chord) -> Chord {
+        if !self.sevenths {
+            return c;
+        }
+        let deg = (c.root - self.key.tonic).rem_euclid(12);
+        let q = match c.q {
+            Q::Maj if deg == 7 || !self.key.contains(&Chord { root: c.root, q: Q::Maj7 }) => Q::Dom7,
+            Q::Maj | Q::Add9 => Q::Maj7,
+            Q::Min | Q::MinAdd9 => Q::Min7,
+            q => q,
+        };
+        Chord { root: c.root, q }
     }
 
     fn borrowed(&mut self) -> Chord {

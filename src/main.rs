@@ -24,6 +24,8 @@ mod portal;
 mod pwcap;
 mod screen;
 mod shared;
+mod style;
+mod theme;
 mod synth;
 mod themes;
 mod ui;
@@ -50,6 +52,10 @@ USAGE: sysjam [OPTIONS]
                       (minor-pentatonic, dorian, ... map to minor; major-pentatonic, lydian, ... to major)
   --root NOTE         home key root, note or Hz, e.g. A2, C3, 98 (default: random of all 12)
   --bpm N             lock the tempo (default: random start 60-100, then it follows the band)
+  --style NAME        conductor style: auto (default: wanders, starts as House Band), house, monk,
+                      jazz, biker, baroque, celtic, industrial, space, tribal (←/→ in the TUI)
+  --ascii             plain ASCII glyphs in the TUI (no emoji / box drawing); automatic on TERM=linux
+  --tempo-bias N      sticky bpm offset on the living tempo, e.g. 14 or -21 (↑/↓ nudge ±7 in the TUI)
   --chord-bars N      base bars per chord (default 2; chilling plays slower, peaks faster)
   --seed N            reproducible run (instrument picks, motifs, voicings, personalities)
   --soundfont PATH    General MIDI .sf2 to use (default: search system paths, then next to the binary)
@@ -59,7 +65,7 @@ USAGE: sysjam [OPTIONS]
   --no-leads          never let a busy thread sit in as a guest musician
   --verbose           band events, chords, instruments, and metrics every 5 s (with --no-tui)
   --no-tui            plain log output instead of the live terminal UI
-                      (the UI is the default when stdout is a terminal; keys: q quit, space pause display)
+                      (the UI is the default when stdout is a terminal; keys: ↑↓ tempo, ←→ style, space pause, q quit)
   --device NAME       ALSA device (default \"default\"; e.g. pipewire, pulse, hw:0)
   --wav FILE          render to a WAV file instead of the sound card (real time)
   --null              run without any audio output (testing)
@@ -72,6 +78,35 @@ USAGE: sysjam [OPTIONS]
   -h, --help          this help
 
 Ctrl-C fades out and exits (press twice to quit immediately).";
+
+/// SYSJAM_KEYS="30:right,45:up,50:up" — scripted arrow presses (seconds of music time)
+fn parse_keys() -> Vec<(f32, u8)> {
+    let Ok(v) = std::env::var("SYSJAM_KEYS") else { return Vec::new() };
+    v.split(',')
+        .filter_map(|e| {
+            let (t, k) = e.trim().split_once(':')?;
+            let t: f32 = t.trim().parse().ok()?;
+            let k = match k.trim().to_ascii_lowercase().as_str() {
+                "up" => 1,
+                "down" => 2,
+                "left" => 3,
+                "right" => 4,
+                _ => return None,
+            };
+            Some((t, k))
+        })
+        .collect()
+}
+
+fn press(k: u8) {
+    use std::sync::atomic::Ordering::Relaxed;
+    match k {
+        1 => shared::KEY_TEMPO.fetch_add(1, Relaxed),
+        2 => shared::KEY_TEMPO.fetch_add(-1, Relaxed),
+        3 => shared::KEY_STYLE.fetch_add(-1, Relaxed),
+        _ => shared::KEY_STYLE.fetch_add(1, Relaxed),
+    };
+}
 
 fn dsp_rng(seed: u64) -> dsp::Rng {
     dsp::Rng::seeded(seed ^ 0x5354_4152_54)
@@ -112,6 +147,8 @@ fn main() {
     let mut scale: Option<&'static music::ScalePair> = None;
     let mut root: Option<f32> = None;
     let mut bpm: Option<f32> = None;
+    let mut style: Option<usize> = None;
+    let mut tempo_bias = 0f32;
     let mut clicks = 0.25f32;
     let mut sub = 1.2f32;
     let mut chord_bars = 2u32;
@@ -149,6 +186,12 @@ fn main() {
                 root = Some(music::parse_root(&s).unwrap_or_else(|| die(&format!("bad root {s}"))))
             }
             "--bpm" => bpm = Some(num(val(&mut i), "--bpm").clamp(30.0, 200.0)),
+            "--style" => {
+                let v = val(&mut i);
+                style = style::find(&v).unwrap_or_else(|e| die(&e))
+            }
+            "--ascii" => theme::set_ascii(true),
+            "--tempo-bias" => tempo_bias = num(val(&mut i), "--tempo-bias").clamp(-70.0, 70.0).round(),
             "--clicks" => clicks = num(val(&mut i), "--clicks").clamp(0.0, 1.0),
             "--verbose" | "-v" => verbose = true,
             "--no-tui" => no_tui = true,
@@ -192,6 +235,9 @@ fn main() {
         duration = Some(30.0);
     }
 
+    if std::env::var("TERM").as_deref() == Ok("linux") {
+        theme::set_ascii(true); // the Linux console has no emoji and few symbols
+    }
     unsafe {
         libc::signal(libc::SIGINT, on_sig as libc::sighandler_t);
         libc::signal(libc::SIGTERM, on_sig as libc::sighandler_t);
@@ -207,6 +253,15 @@ fn main() {
     let mut pick = dsp_rng(seed);
     let bpm_lock = bpm.is_some();
     let bpm = bpm.unwrap_or_else(|| (60.0 + pick.f() * 40.0).round());
+    // a chosen style starts inside its own chilling tempo range
+    let bpm = match style {
+        Some(si) if !bpm_lock => {
+            let (lo, hi) = style::STYLES[si].tempo[0];
+            (lo + (hi - lo) * pick.f()).round()
+        }
+        _ => bpm,
+    };
+    let bpm = (bpm + tempo_bias).clamp(if tempo_bias != 0.0 { 50.0 } else { 30.0 }, if tempo_bias != 0.0 { 160.0 } else { 200.0 });
     let scale = scale.unwrap_or_else(|| music::find_scale(if pick.chance(0.5) { "major-pentatonic" } else { "minor-pentatonic" }).unwrap());
     let root = root.unwrap_or_else(|| {
         // any of the 12 roots, in the octave D#2..D3 (the sub then sits at ~31-58 Hz)
@@ -257,6 +312,8 @@ fn main() {
             tx,
             ui,
             bpm_lock,
+            style,
+            tempo_bias,
         })
     };
     if bench {
@@ -267,6 +324,7 @@ fn main() {
         let mut raw = std::env::var("SYSJAM_BENCH_RAW").ok().and_then(|p| std::fs::File::create(p).ok());
         let show = std::env::var_os("SYSJAM_BENCH_LOG").is_some();
         let mut ver = 0;
+        let mut keys = parse_keys();
         let scale: usize = std::env::var("SYSJAM_BENCH_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1).max(1);
         for (phase, secs, busy) in [("idle", 40usize * scale, false), ("busy", 80 * scale, true), ("idle again", 80 * scale, false)] {
             let t = std::time::Instant::now();
@@ -278,9 +336,18 @@ fn main() {
                     ver += 1;
                     c.version = ver;
                     if busy {
-                        c.sig = band::Signals { cpu: 0.85, cores: 0.8, net: 0.75, file: 0.75, fd: 0.5, screen_change: 0.0, keyboard: 0.0, mouse: 0.0 };
+                        c.sig = band::Signals { cpu: 0.85, cores: 0.8, net: 0.75, file: 0.75, fd: 0.5, screen_change: 0.0, input: 0.0 };
                     }
                     en.set_control(&c);
+                    let now = en.time();
+                    keys.retain(|&(t, k)| {
+                        if t > now {
+                            return true;
+                        }
+                        say!("  [{now:5.1}s] key: {}", ["", "up", "down", "left", "right"][k as usize]);
+                        press(k);
+                        false
+                    });
                     if show {
                         while let Ok(m) = rx.try_recv() {
                             say!("  [{:5.1}s] {m}", en.time());
@@ -297,6 +364,7 @@ fn main() {
             let e = t.elapsed().as_secs_f64();
             say!("bench {phase} ({:.0}-{:.0}s): {secs} s audio in {e:.3} s = {:.2}% of one core", t_base, en.time(), e / secs as f64 * 100.0);
         }
+        say!("bench steering: {}", en.steer_stats());
         for l in en.density_report().lines() {
             say!("bench {l}");
         }
@@ -384,6 +452,21 @@ fn main() {
         if synth.has_gm() { "" } else { ", oscillators only" }
     );
     say!("palettes: {}", synth.palettes());
+    say!("style: {}{}", synth.style_name(), if tempo_bias != 0.0 { format!(", tempo bias {tempo_bias:+.0}") } else { String::new() });
+    // scripted arrow presses for live tests (wall-clock seconds)
+    let keys = parse_keys();
+    if !keys.is_empty() {
+        let _ = std::thread::Builder::new().name("sysjam-keys".into()).spawn(move || {
+            let t0 = std::time::Instant::now();
+            for (t, k) in keys {
+                let d = t - t0.elapsed().as_secs_f32();
+                if d > 0.0 {
+                    std::thread::sleep(std::time::Duration::from_secs_f32(d));
+                }
+                press(k);
+            }
+        });
+    }
     let mut fbuf = vec![0f32; BLOCK * 2];
     let mut ibuf = vec![0i16; BLOCK * 2];
     let mut local = Control::default();
