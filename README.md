@@ -13,9 +13,9 @@ a continuous deep sub drone and bass. No two runs are the same unless you pass `
 
 (Formerly developed under the working name *sysmusic*.) Listen: [`docs/sample.mp3`](docs/sample.mp3) is a 75 s demo at 192 kbps. It starts calm with no hiss, then hits chaos (CPU + network + disk load plus simulated fast typing), where a short burst of industrial noise comes in, then settles again. Its verbose log is `docs/sample-render.log`. [`docs/sample-tempo.mp3`](docs/sample-tempo.mp3) is a 90 s demo (seed 5, made with `tools/demo_tempo.sh`). It starts in A major at 84 bpm, and the tempo eases down to 73 while the band is chilling. Under load (from 18 s) the band comes alive and ramps toward 97 bpm. At about 60 s a **surge** opens the throttle from 85 to 133 bpm with the V-twin lope, while the band modulates to D minor. The surge winds down to 109 bpm at about 75 s, and the band then subsides. Its log is `docs/sample-tempo-render.log`.
 
-![sysjam's live terminal UI](docs/tui.png)
+![sysjam's live terminal UI: the colour player quotes "The New Highland Laddie" (Aird's Airs) while the keys duck under it](docs/tui.png)
 
-One static-ish binary (`sysjam`, ~1.4 MB, x86_64, needs glibc ≥ 2.29). It
+One static-ish binary (`sysjam`, ~1.7 MB, x86_64, needs glibc ≥ 2.29). It
 links only libc, libm, libpthread and libdl. ALSA, D-Bus and PipeWire are
 loaded at run time with `dlopen`, so it starts even when one of them is missing.
 
@@ -60,9 +60,13 @@ crossterm) that shows how the band is thinking. Piped or redirected output, or
   the arrangement state (chilling / awakening / alive / subsiding) and the
   bandleader's energy and agitation meters. Top right: the input source
   (`evdev×2`, `evdev×2 setgid`, `usb-hid`, `irq i8042`, `irq xhci≈`, `none`) with live keys and mouse meters.
+  The third line is the persistent **`♫ now quoting`** line: while a player quotes a
+  theme it shows a progress meter, the player and the full citation, e.g.
+  `♫ now quoting ██▍ lead: Wachet auf, ruft uns die Stimme (J.S. Bach, BWV 140.7) · music21 corpus (Bach chorales) · public domain — a straight quote`.
 - **The band**: one panel per member: drone, bassist, drummer, keys, lead,
   colour/FX, plus the guest voice when a busy thread sits in. Each panel shows:
-  - the member's status: laying out, comping, following, soloing or trading;
+  - the member's status: laying out, holding, comping, following, soloing, trading, grooving (drums),
+    stretching (a synth voice coming forward while the drums are out) or quoting;
   - an activity meter and the current GM instrument or synth patch;
   - a "thinking" line explaining the latest decision, e.g. `heard a network burst (98%) → adding shimmer`,
     `resolving the motif to the root (A4), then resting`,
@@ -84,6 +88,8 @@ crossterm) that shows how the band is thinking. Piped or redirected output, or
   lights up yellow for a few seconds, and its thinking line shows the exchange:
   `conductor: keys, bring it down → “ok, quieter”`. The panel title counts the
   interventions so far.
+- **Quoted themes** (right, under the conductor): a scrolling history of the recent
+  citations with their time, newest highlighted.
 - **Machine**: CPU, busy cores, network, disk writes, file churn, keyboard and
   mouse rates, each with a sparkline of the last two minutes. Below them sit a
   swatch of the sampled screen colour and the busiest threads.
@@ -115,7 +121,7 @@ the bandleader's invitation, the shared energy and what the others are doing.
 |---|---|---|
 | **Drone / landscape** | Continuous sub drone (detuned sine pair at 30–60 Hz plus 2nd/3rd harmonics, gliding to each chord root), and a voice-led detuned pad (low-mids). Never lays out. There is no constant hiss/air bed | energy, screen brightness |
 | **Bassist** | Roots and fifths at 40–120 Hz, in three styles: long notes, pulsing roots, or a syncopated groove. Plays approach notes into the next chord. Heavy file/disk activity makes it busier | file + disk writes, the drummer |
-| **Drummer** | Synth kick, plus the GM kit (channel 10) when a SoundFont is loaded. Locks onto the bassist's syncopations, adds fills and risers before section changes, crashes on entries | CPU, cores, the bassist |
+| **Drummer** | Synth kick, plus the GM kit (channel 10) when a SoundFont is loaded. **Minimal by default**: decides every phrase to rest, play a minimal part (soft downbeat and a tick or shaker pair) or groove — groove mostly when alive, always in surges. Locks onto the bassist's syncopations, occasional fills before section changes, crashes on entries | CPU, cores, the bassist |
 | **Keys** | GM pads hold chord tones (common tones are kept between chords). Keys/plucks play arps, broken chords or offbeat comping, and take solos when invited | energy, the lead (trading) |
 | **Lead / melody** | Sparse two-bar call phrases built from a motif it develops (repeat, sequence, invert, vary, fragment, new idea). Rests between phrases, and resolves the melody before laying out | agitation, colour player, keys |
 | **Colour / FX** | Bells, shimmer clouds driven by network traffic, swells, odd GM colours (FX Atmosphere, Seashore, …). Answers the lead's phrases. **Industrial texture:** only when the band hears real chaos, i.e. agitation above 0.68 for 6 s, or alive with 3+ hot signals at once, or a rare deliberate colour move while alive. It is 1–3 bars of gated, rhythmic band-passed noise with a metallic resonance (peak ≈ 0.018, about −12 dB under the old continuous air bed and gated, so it averages far lower). It fades out as soon as things calm down, then waits 25 s before it can come back | network, the lead, chaos |
@@ -139,10 +145,49 @@ Patterns are sparser overall:
 - lead: one bar of call per phrase, two when alive;
 - colour: a few shimmer bells per bar at most;
 - drone: rarer landscape bells;
-- drums: hats in eighths, auxiliary percussion on the off-beats only.
+- drums: see below — rest or minimal unless alive; hats in quarters, eighths only when really alive, no sixteenths outside surges.
 
-**Synth patches** are thinned the hardest: short notes are dropped 40% of the time and the rest are lengthened 1.7×.
 Surges and alive moments stay energetic, mostly through the bass and drums.
+
+**The synth stays in the background, and trades space with the drums.** The
+self-designed synth patches and the drone's detuned pad bed are background voices:
+- they sit **10 dB under GM** (`SYN_TRIM`), with slow attacks, long releases, lower
+  cutoffs, gentler resonance and FM index;
+- at control rate every synth voice (per player) and the pad bed pick a *space*:
+  - **duck** while a GM instrument, the lead or a theme quote is sounding: a further
+    −8 dB and the filter closes (≈900 Hz on the patches, the pad's cutoff ×0.45);
+    short notes are dropped, only long tones remain;
+  - **back** while the drummer is grooving: −2 dB, filter at ≈2.6 kHz, notes become
+    pad-like (short ones mostly dropped, the rest doubled in length);
+  - **stretch** when the drums are resting or minimal and nobody else is up front:
+    +4 dB, filter open, and more notes get through — `“drums are out, my turn to stretch”`.
+- The drummer rests far more: chilling never, subsiding mostly out, awakening rest or
+  minimal, alive groove about half the time (more with a hot CPU signal); after three
+  phrases of playing it gets tired and drops out to “let the synth have a go”.
+
+The thinking lines say what is happening, e.g. `drums are back → sinking into a soft pad`,
+`lead is up front → ducking under it, filter closed`, `drums are out → letting the drone bloom a little`,
+`minimal: a soft downbeat and a tick, nothing more`.
+
+**Mix before vs after** (offline 200 s bench with `SYSJAM_RMS=1`, seeds 1–4, RMS in dBFS
+per source over the time the drums were playing or resting; ranges across the seeds):
+
+| source | drums playing, before → after | drums resting, before → after |
+|---|---|---|
+| **synth bus** (patches + pad bed + bells) | −21.4…−22.0 → **−33.5…−34.8** | −20.1…−20.3 → **−27.9…−29.3** |
+| drone pad bed | −22.0…−22.3 → −34.3…−37.0 | −20.4…−20.6 → −28.0…−29.9 |
+| synth patches | −30.0…−35.6 → −36.4…−42.9 | −32.0…−35.2 → −38.1…−48.5 |
+| GM melodic voices | −17.8…−26.7 → −17.5…−26.0 | −40.9…−54.2 → −23.1…−31.1 |
+| GM drums | −20.4…−24.0 → −23.1…−27.5 ¹ | — |
+| synth bus relative to GM melodic | −4…+5 dB → **−9…−16 dB** | |
+
+¹ −13 dB in one run where a surge played a TR-808 kit; surges stay loud on purpose.
+With the drums playing, the synth now sits 9–16 dB under the GM instruments, where it
+used to be level with them. When the drums rest it comes forward by about 6 dB, still
+8 dB under its old level. Drums rest for 104–145 s of the 200 s, up from 97–105 s.
+
+**Drum density** (notes/min, same benches): alive 321–560 (mean 405) → 160–234 (mean 190, −53%);
+awakening 120–201 → 0 (rest or minimal); subsiding 49–63 → 0–17.
 
 **The conductor.** Every bar the conductor listens to the whole band:
 - note density of keys + lead + colour against a state target (about 1.5 notes/bar chilling, 4 awakening, 8 alive, 2.5 subsiding, 5 in a surge);
@@ -154,6 +199,13 @@ When the mix gets out of control it steps in, at most every 8 s and never naggin
 - tell it to **lay out** for 1–2 phrases (repeat offenders, or bad clutter);
 - **cue** the band when things are badly out of hand: `everyone drop to the drone` (chilling/subsiding; the bassist goes to long notes) or `bass and drums only`;
 - **invite** a resting player back (`keys, come back in — softly`) when space opens up.
+
+It also enforces the synth/drums trade:
+- the **synth is the first to be hushed** when others play: `keys (synth), back to the pad — let the lead through`,
+  or `colour (synth), sit back under the drums` (synth players score extra as offenders whenever a GM voice, the lead or the drums are going);
+- outside alive moments and surges, a grooving drummer is told `drums, give it some air — synth, take the space` (lay out 2 phrases);
+- when the drums lay out it **invites the synth in**: `drums are out — keys (synth), stretch a little`;
+- during a theme quote it backs the quoting player: `nice — lead has Wachet auf, ruft uns die Stimme · everyone support`, and afterwards `lovely. back to it`.
 
 Players respect it, but stubborn ones (high eagerness/busyness) grumble first and comply a bar later:
 `conductor: keys (synth), lay out 2 phrases → “one more lick? …ok, ok”`.
@@ -254,6 +306,78 @@ drummer joins
 Key: E major | A7 → Dm7 → B7 → E   (modulation: A minor -> E major)
 keys takes a solo
 ```
+
+## Themes: public-domain quotes, always cited
+
+Every now and then a player gets inspired and quotes a well-known tune, woven into
+whatever the band is playing. It happens rarely: on average a couple of times in 10–15
+minutes, more likely when the band is awakening or alive, with a 100–200 s pause after
+each episode. Only one theme is in the air at a time.
+
+- **Transposed and adapted**: the theme is stored as scale degrees, so the player maps it
+  into its *own* key and mode. A major tune turns minor in a minor key, Dorian in a Dorian
+  key, and so on. Chromatic notes are kept only when the modes match. Durations are in
+  beats, so it follows the band's tempo.
+- **Variations**: a straight quote; a fragment (the first half); augmented, as a slow
+  pad melody (keys/colour); diminution, twice as fast (lead, only when alive); inversion;
+  call and response (the lead plays the first phrase, someone else answers with the
+  second); or the bassist plays it low.
+- **Passed around**: when a quote ends, another player may pick up a fragment, an
+  inversion or the bass line of the same theme (at most two passes).
+- **Woven in**: quotes are played softly (velocity ≈45–55). The quoting player is
+  featured for the duration. The others are hushed to support it, and the synth voices
+  duck under it.
+- **Cited, every time**, in the terminal:
+  - the quoting player's thinking line: `♫ quoting Wachet auf, ruft uns die Stimme (J.S. Bach, BWV 140.7) · music21 corpus (Bach chorales) · public domain — augmented, as a slow pad melody, in Eb major`;
+  - the persistent `♫ now quoting` header line, for as long as the quote lasts;
+  - the *quoted themes* panel (a scrolling history);
+  - the band-event log. Citation lines start with `♫` and are **also printed with `--no-tui`**, even without `--verbose`:
+    ```
+    ♫ [04:13] lead (synth) quotes Kathleen O'Moore (trad., O'Neill no. 110) · O'Neill's Music of Ireland, 1903 · music21 corpus · public domain — a straight quote, in G# minor
+    ♫ [04:21] bass picks up Kathleen O'Moore (trad., O'Neill no. 110) · O'Neill's Music of Ireland, 1903 · music21 corpus · public domain — low in the bass (passed on), in G# minor
+    ```
+
+**Where the themes come from.** `tools/extract_themes.py` reads a curated selection
+from the corpus bundled with [music21](https://github.com/cuthbertLab/music21) 10.5.0. For each tune it
+keeps only a 2–8 bar incipit (Bach chorales: up to the first fermata) as melodic facts:
+scale degrees relative to the tonic, durations, mode, meter, pickup, title and citation.
+It writes them to `assets/themes/themes.txt` (371 themes, 78 KB), which is embedded in the
+binary with `include_str!`. **The binary does not need Python or music21.**
+
+**Licensing: public domain only.** A source is used only if the composition is public
+domain *and* the corpus files carry no restrictive notice. No encoding text is copied.
+Details, transcriber credits and the reasons for every exclusion are in
+[`assets/themes/LICENSE`](assets/themes/LICENSE).
+
+| source | themes | status |
+|---|---|---|
+| J.S. Bach chorales (BWV numbers from music21's chorale lists) | 120 | composition PD; files have no rights notice (credit for Margaret Greentree's PDF edition noted) |
+| Beethoven string quartets (Op. 18, 59, 74, 132, 133) | 15 | PD; no rights notice |
+| Haydn string quartets (Op. 1 No. 1, Op. 74 No. 1) | 9 | PD; no rights notice |
+| Mozart (K. 80, 155, 156, 458 “Hunt”, 545) | 16 | PD; no rights notice |
+| Handel, “Lascia ch'io pianga” (Rinaldo, HWV 7) | 1 | PD; no rights notice |
+| Ryan's Mammoth Collection (Boston, 1883) | 110 | traditional, PD; ABC transcriber credits only |
+| O'Neill's Music of Ireland (Chicago, 1903) | 60 | traditional, PD; ABC transcriber credits only |
+| Aird's Selection of Airs (Glasgow, 1782–97) | 40 | traditional, PD; ABC transcriptions credited to Jack Campin |
+| **total** | **371** | |
+
+**Excluded:**
+- Essen folksongs: non-commercial permission only;
+- Ciconia and Luca: CC-BY-SA 3.0 editorial transcriptions, not GPL-3 compatible;
+- Trecento: editorial transcriptions with no stated licence;
+- Palestrina: John Miller copyright;
+- Monteverdi: Ut Orpheus ©;
+- Beach: CC-BY-SA engraving;
+- Schubert and Clara Schumann: bare © notices;
+- the lead sheets: one is “All Rights Reserved”;
+- Joplin: an unverifiable musescore.com upload.
+
+Regenerate with:
+```bash
+pip install --user --break-system-packages music21
+python3 tools/extract_themes.py            # → assets/themes/themes.txt
+```
+`SYSJAM_QUOTE_TEST=1` makes quotes come every ~25 s, for demos and screenshots.
 
 ## General MIDI instruments (SoundFont)
 
@@ -479,6 +603,8 @@ Measured exactly (schedstat, all threads) on an 8-vCPU Xeon VM:
 | idle, FluidR3, **live terminal UI on** vs `--no-tui` (same seed, side by side, 120 s, /proc utime+stime) | 2.22% vs 1.89% (the UI thread itself: 0.27%) | |
 | idle, TimGM6mb, synth voice pool + per-player keys, **UI on** vs `--no-tui` (side by side, 60 s) | 2.05% vs 1.71% | |
 | idle, TimGM6mb, restraint + conductor, **UI on with the conductor panel** vs `--no-tui` (side by side, 60 s) | 1.81% vs 1.61% (UI thread 0.28%, audio thread 1.28%) | |
+| idle, TimGM6mb, synth ducking + drum restraint + 371 embedded themes, **UI on** (now-quoting line + citation panel) vs `--no-tui` (side by side, 60 s) | 2.10% vs 1.72% (UI thread 0.31%) | |
+| offline bench, seeds 1–4, busy phase: previous release vs this one (same box, sequential) | 1.31–1.86% → 1.57–2.07% (longer pad-like synth notes keep more pool voices sounding) | |
 | alive under heavy load (busy thread as guest, ~400 MB/s writes, ~40 MB/s downloads, file churn), UI on, X11 screen sampling, 60 s | 3.05% | |
 
 ## Troubleshooting
@@ -517,7 +643,8 @@ Tools:
 - `tools/bands.py` prints band energies.
 - `tools/measure.py SECS ./sysjam --null` measures sysjam's own CPU.
 - `tools/portal_test.sh BIN COLOR ARGS…` runs the end-to-end portal test. It uses a private D-Bus, pipewire, wireplumber, a GStreamer test source and `tools/mock_portal.py`.
-- `SYSJAM_BENCH=1 SYSJAM_BENCH_LOG=1 ./sysjam --seed 1` gives an offline 200 s timeline with CPU figures, per-player note density per state and the conductor's intervention count.
+- `SYSJAM_BENCH=1 SYSJAM_BENCH_LOG=1 ./sysjam --seed 1` gives an offline 200 s timeline with CPU figures, per-player note density per state, the conductor's intervention count and the list of theme quotes. Add `SYSJAM_RMS=1` for RMS per source (synth patches, pad bed, bells, sub, synth bass/kick, GM melodic, GM drums) split by drums playing/resting, and `SYSJAM_BENCH_SCALE=5` for a 5× longer timeline.
+- `tools/extract_themes.py` regenerates `assets/themes/themes.txt` from the music21 corpus (see *Themes*).
 
 ## Licence
 
@@ -527,3 +654,6 @@ Foundation, either version 3 of the License, or (at your option) any later
 version (**GPL-3.0-or-later**). The full text is in `LICENSE`.
 
 `assets/TimGM6mb.sf2` is a separately licensed asset (GPL-2.0-only); see above.
+
+`assets/themes/themes.txt` holds short melodic incipits of public-domain compositions taken from the
+music21 corpus. Sources, transcriber credits and exclusions are listed in `assets/themes/LICENSE`.

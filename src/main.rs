@@ -25,6 +25,7 @@ mod pwcap;
 mod screen;
 mod shared;
 mod synth;
+mod themes;
 mod ui;
 mod voice;
 
@@ -266,7 +267,8 @@ fn main() {
         let mut raw = std::env::var("SYSJAM_BENCH_RAW").ok().and_then(|p| std::fs::File::create(p).ok());
         let show = std::env::var_os("SYSJAM_BENCH_LOG").is_some();
         let mut ver = 0;
-        for (phase, secs, busy) in [("idle", 40usize, false), ("busy", 80, true), ("idle again", 80, false)] {
+        let scale: usize = std::env::var("SYSJAM_BENCH_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1).max(1);
+        for (phase, secs, busy) in [("idle", 40usize * scale, false), ("busy", 80 * scale, true), ("idle again", 80 * scale, false)] {
             let t = std::time::Instant::now();
             let blocks = RATE as usize * secs / BLOCK;
             let t_base = en.time();
@@ -299,6 +301,12 @@ fn main() {
             say!("bench {l}");
         }
         say!("bench {}", en.conductor_stats());
+        for l in en.quote_report() {
+            say!("bench {l}");
+        }
+        for l in en.rms_report().lines() {
+            say!("bench {l}");
+        }
         let (distinct, gm_picks, synth) = en.sound_stats();
         say!("bench sounds: {distinct} distinct GM programs, {gm_picks} GM picks, {synth} synth patches designed");
         return;

@@ -411,7 +411,8 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
         // drain band/chord messages from the audio thread (verbose only)
         if let Some(rx) = &msgs {
             while let Ok(m) = rx.try_recv() {
-                if cfg.verbose || tui {
+                // theme citations are always printed (public-domain sources are credited)
+                if cfg.verbose || tui || m.starts_with('♫') {
                     say!("{m}");
                 }
             }

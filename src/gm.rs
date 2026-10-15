@@ -183,6 +183,10 @@ struct Chan {
 
 pub struct Gm {
     synth: Synthesizer,
+    /// measurement only (SYSJAM_RMS): channel 10 on its own synthesizer so drums can be metered apart
+    drum: Option<Synthesizer>,
+    pub dl: Vec<f32>,
+    pub dr: Vec<f32>,
     chans: [Chan; 16],
     pub l: Vec<f32>,
     pub r: Vec<f32>,
@@ -196,7 +200,8 @@ impl Gm {
         st.enable_reverb_and_chorus = false; // we have our own reverb
         st.block_size = 64;
         let synth = Synthesizer::new(sf, &st).map_err(|e| format!("{e:?}"))?;
-        let mut g = Gm { synth, chans: [Chan::default(); 16], l: vec![0.0; 64], r: vec![0.0; 64], sr: sr as f32 };
+        let drum = if std::env::var_os("SYSJAM_RMS").is_some() { Synthesizer::new(sf, &st).ok() } else { None };
+        let mut g = Gm { synth, drum, dl: vec![0.0; 64], dr: vec![0.0; 64], chans: [Chan::default(); 16], l: vec![0.0; 64], r: vec![0.0; 64], sr: sr as f32 };
         for ch in 0..16 {
             g.cc(ch, 11, 0);
             g.cc(ch, 7, 100);
@@ -210,11 +215,17 @@ impl Gm {
         g.chans[9].sent = 127;
         Ok(g)
     }
+    fn sy(&mut self, ch: i32) -> &mut Synthesizer {
+        match self.drum.as_mut() {
+            Some(d) if ch == 9 => d,
+            _ => &mut self.synth,
+        }
+    }
     fn cc(&mut self, ch: i32, cc: i32, v: i32) {
-        self.synth.process_midi_message(ch, 0xB0, cc, v.clamp(0, 127));
+        self.sy(ch).process_midi_message(ch, 0xB0, cc, v.clamp(0, 127));
     }
     pub fn program(&mut self, ch: usize, p: u8, gain: f32) {
-        self.synth.process_midi_message(ch as i32, 0xC0, p as i32, 0);
+        self.sy(ch as i32).process_midi_message(ch as i32, 0xC0, p as i32, 0);
         self.cc(ch as i32, 7, (gain * 110.0) as i32);
         self.chans[ch].program = p;
     }
@@ -222,7 +233,7 @@ impl Gm {
         if !(0..128).contains(&key) {
             return;
         }
-        self.synth.note_on(ch as i32, key, vel.clamp(1, 127));
+        self.sy(ch as i32).note_on(ch as i32, key, vel.clamp(1, 127));
         self.chans[ch].last_note = now;
         self.chans[ch].active += 1;
     }
@@ -230,12 +241,12 @@ impl Gm {
         if !(0..128).contains(&key) {
             return;
         }
-        self.synth.note_off(ch as i32, key);
+        self.sy(ch as i32).note_off(ch as i32, key);
         self.chans[ch].last_note = now;
         self.chans[ch].active = self.chans[ch].active.saturating_sub(1);
     }
     pub fn all_off(&mut self, ch: usize) {
-        self.synth.note_off_all_channel(ch as i32, false);
+        self.sy(ch as i32).note_off_all_channel(ch as i32, false);
         self.chans[ch].active = 0;
     }
     /// Expression fade (CC11) towards `target` (0..1) over `secs`.
@@ -270,5 +281,8 @@ impl Gm {
             }
         }
         self.synth.render(&mut self.l[..n], &mut self.r[..n]);
+        if let Some(d) = self.drum.as_mut() {
+            d.render(&mut self.dl[..n], &mut self.dr[..n]);
+        }
     }
 }

@@ -1,44 +1,46 @@
-┌ sysjam ──────────────────────────────────────────────────────────────────────────────────────── input irq i8042 keys ███▌   mouse ██▌    ┐
-│ D minor (home A major) │ VIIsus2 Csus2 → VI Bb → VII C                                                                                   │
-│ 124→109 bpm bar 30   ○○●○    alive   energy █████████████▋ 0.98  agitation █████████████▉ 1.00  seed 5    75s                            │
+┌ sysjam ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── input none ┐
+│ B major │ I B → vi G#m → IVadd9 Eadd9 → V F# → IIIsus2 D#sus2                                                                            │
+│ 97→76 bpm bar 10   ○○○●    chilling   energy ▎              0.02  agitation ▎              0.03  seed 3    24s                           │
+│ ♫ now quoting  █▍     colour (synth): The New Highland Laddie (trad., Aird vol. 4 no. 716) · Aird's Selection of Airs, 1782-97 · music21 │
 └ q quit · space pause display ────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-┌ the band ────────────────────────────────────────────────────────────────────────┐┌ conductor · 2 cues ──────────────────────────────────┐
-│drone    following  ▊        D minor        sub drone + detuned pad               ││       shh…                                           │
-│  ↳ voice-leading pad into C, sub glides to C1 · 5 voices, smooth                 ││  (ᵕ_ᵕ)╻     “keys, bring it down”                    │
-│  ♪ C1 G3 C4 C4 E4 E4            ⇢ screen colour · curious 0.1 eager 0.7 busy 0.8 ││ ╭┤▒├─╯                                               │
-│bassist  comping    ██████▍  D minor        synth warm saw bass                   ││  │▒│                                                 │
-│  ↳ locking a syncopated groove                                                   ││  ╯ ╰        → keys  clutter ████▍                    │
-│  ♪ Bb1 F2 F2 C2 G2 G2          ⇢ disk/files 11% · curious 0.2 eager 0.2 busy 0.6 │└──────────────────────────────────────────────────────┘
-│drummer  following  ██████▋  —              synth deep kick + GM Standard kit · co│┌ machine ─────────────────────────────────────────────┐
-│  ↳ fill into the next phrase                                                     ││cpu            79% ▇▇▇▇▇▇▆▇▇▇▇▇▆▇▇▇▇▆▆▇▆▇▆▇▆▇▇▇▇▇▇    │
-│  ♪ kick rim ride ride kick ride       ⇢ cpu 85% · curious 0.6 eager 0.7 busy 0.4 ││cores          8/8 ▇▇▇▇▇▇▇▇█▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇█▇▇▇█    │
-│keys     comping    ███      F major        GM Electric Grand Piano (2) / GM Choir││net      87.9 MB/s ███████████████████████████████    │
-│  ↳ conductor: keys, bring it down → “ok, quieter”                                ││disk       20 kB/s ▃▃▁▁▃▃▁▁▁▁▁▁▁▁▁▁▄▁▁▃▃▁▁▁▄▁▁▃▃▁▁    │
-│  ♪ F5 Bb4 D5 F5 C5 E5          ⇢ keys/mouse 60% · curious 0.6 eager 0.3 busy 0.8 ││files          0/s ▃▃▁▁▃▃▁▁▁▁▁▁▁▁▁▁▄▁▁▃▃▁▁▁▄▁▁▃▃▁▁    │
-│lead     comping    ▋        D Phrygian     synth subtractive 2×square ±8c, res 0.││keys          0.60 ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅    │
-│  ↳ developing the motif: sequence                                                ││mouse         0.43 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    │
-│  ♪ D5 C5 F5                         ⇢ cores 92% · curious 0.4 eager 0.4 busy 0.4 ││screen colour off                                     │
-│colour   laying out          D minor        synth metal bells                     ││top threads                                           │
-│  ↳ only a stray shimmer now and then                                             ││  100% █████▉ stress-ng-cpu                           │
-│  ♪ ·                                 ⇢ net 100% · curious 0.4 eager 0.7 busy 0.5 ││  100% █████▉ stress-ng-cpu                           │
-│guest    soloing    ██▊      D minor        saw/sine guest voice                  ││  100% █████▉ stress-ng-cpu                           │
-│  ↳ thread stress-ng-cpu at 100% cpu sits in → long E5                            ││  100% █████▉ stress-ng-cpu                           │
-│  ♪ D5 D5 D5 D5 E5                                              ⇢ its thread 100% ││                                                      │
+┌ the band ────────────────────────────────────────────────────────────────────────┐┌ conductor · 0 cues ──────────────────────────────────┐
+│drone    following           B major        sub drone + detuned pad               ││                                                      │
+│  ↳ colour (synth) is talking → the drone pulls way back                          ││  (°ᴗ°)      “nice — colour (synth) has The New       │
+│  ♪ E1 E4 F#4 G#4 B4               ⇢ screen warm · curious 0.8 eager 0.8 busy 0.6 ││ ╭┤▒├━━━━━▶  Highland Laddie · everyone support”      │
+│bassist  following           B major        synth warm saw bass                   ││  │▒│                                                 │
+│  ↳ only long roots — chilling, invite 0.30                                       ││  ╯ ╰        clutter █▎                               │
+│  ♪ E1                           ⇢ disk/files 1% · curious 0.5 eager 0.0 busy 0.5 │└──────────────────────────────────────────────────────┘
+│drummer  laying out          —              synth deep kick + GM Standard kit · co│┌ quoted themes · public domain ───────────────────────┐
+│  ↳ not invited yet (invite 0.05)                                                 ││00:19 colour (synth): The New Highland Laddie (trad., │
+│  ♪ ·                                   ⇢ cpu 5% · curious 0.0 eager 0.5 busy 0.4 ││Aird vol. 4 no. 716) · Aird's Selection of Airs,      │
+│keys     following           B major        synth wavetable vocal→soft saw morph 0││1782-97 · music21 corpus · public domain              │
+│  ↳ colour (synth) is up front → ducking under it, filter closed                  │└──────────────────────────────────────────────────────┘
+│  ♪ E4 F#4 B4                    ⇢ keys/mouse 0% · curious 0.4 eager 0.7 busy 0.6 │┌ machine ─────────────────────────────────────────────┐
+│lead     laying out          B major        synth glass bells                     ││cpu             1%        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│  ↳ listening                                                                     ││cores          0/8        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│  ♪ ·                                 ⇢ cores 0% · curious 0.7 eager 0.7 busy 0.3 ││net         2 kB/s        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│colour   quoting    ██▏      B major        synth wavetable sine→glass morph 0.08 ││disk         0 B/s        ▁▃▁▃▃▁▁▁▁▁▁▁▁▁▁▁▁▃▁▁▁▁▁▁    │
+│  ↳ ♫ quoting The New Highland Laddie (trad., Aird vol. 4 no. 716) · Aird's Select││files          0/s        ▁▃▁▃▃▁▁▁▁▁▁▁▁▁▁▁▁▃▁▁▁▁▁▁    │
+│  ♪ B4 B4 D#5 C#5 C#5 D#5               ⇢ net 0% · curious 0.6 eager 0.5 busy 0.5 ││keys          0.00        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│guest    laying out          —              —                                     ││mouse         0.00        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│  ↳ listening                                                                     ││screen        hue 1° bri 0.78                         │
+│  ♪ ·                                                            ⇢ busiest thread ││top threads                                           │
+│                                                                                  ││                                                      │
 │                                                                                  ││                                                      │
 │                                                                                  ││                                                      │
 │                                                                                  ││                                                      │
 │                                                                                  ││                                                      │
 │                                                                                  │└──────────────────────────────────────────────────────┘
 │                                                                                  │┌ levels ──────────────────────────────────────────────┐
-│                                                                                  ││sub  █████████████████████████████▌           -18 dB  │
-│                                                                                  ││bass █████████████████████████████▍           -18 dB  │
-│                                                                                  ││mid  ███████████████████████████▌             -21 dB  │
-│                                                                                  ││high ██████████████████▉                      -33 dB  │
+│                                                                                  ││sub  ███████████████████████▉                 -26 dB  │
+│                                                                                  ││bass █████████████████████▏                   -30 dB  │
+│                                                                                  ││mid  █████████████████▌                       -35 dB  │
+│                                                                                  ││high ███████▏                                 -50 dB  │
 └──────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────┘
 ┌ band events ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│+ GM Choir Aahs (52) [Comp]                                                                                                               │
-│~ surge winds down: 127 → 109 bpm over 6 bars                                                                                             │
-│~ keys drifts to F major over D minor                                                                                                     │
-│♩ conductor: keys, bring it down                                                                                                          │
-│keys: “ok, quieter”                                                                                                                       │
+│colour (synth): “drums are out, my turn to stretch”                                                                                       │
+│~ tempo 100 → 76 bpm over 8 bars (chilling)                                                                                               │
+│bassist lays out                                                                                                                          │
+│♫ [00:19] colour (synth) quotes The New Highland Laddie (trad., Aird vol. 4 no. 716) · Aird's Selection of Airs, 1782-97 · music21 corpus │
+│♩ conductor: nice — colour (synth) has The New Highland Laddie · everyone support                                                         │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

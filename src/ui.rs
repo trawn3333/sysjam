@@ -69,6 +69,10 @@ pub struct BandSnap {
     pub energy: f32,
     pub agitation: f32,
     pub cond: CondSnap,
+    /// (player, full citation, variation, progress 0..1) while a theme is being quoted
+    pub quote: Option<(String, String, String, f32)>,
+    /// recent citations, oldest first ("mm:ss player: citation")
+    pub cites: Vec<String>,
     pub minds: Vec<Mind>,
     /// sub, bass, mid, high in dBFS
     pub levels: [f32; 4],
@@ -282,6 +286,9 @@ fn status_color(s: &str) -> Color {
         "following" => Color::LightCyan,
         "laying out" => Color::DarkGray,
         "holding" => Color::Blue,
+        "stretching" => Color::LightMagenta,
+        "grooving" => Color::LightGreen,
+        "quoting" => Color::LightYellow,
         _ => Color::Gray,
     }
 }
@@ -290,7 +297,7 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
     let area = f.area();
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(4), Constraint::Min(10), Constraint::Length(7)])
+        .constraints([Constraint::Length(5), Constraint::Min(10), Constraint::Length(7)])
         .split(area);
     draw_header(f, rows[0], b, m, paused, quitting);
     let mid = Layout::default()
@@ -300,11 +307,12 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
     draw_band(f, mid[0], b);
     let right = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(7), Constraint::Min(8), Constraint::Length(6)])
+        .constraints([Constraint::Length(7), Constraint::Length(5), Constraint::Min(8), Constraint::Length(6)])
         .split(mid[1]);
     draw_conductor(f, right[0], b);
-    draw_machine(f, right[1], m);
-    draw_levels(f, right[2], b);
+    draw_cites(f, right[1], b);
+    draw_machine(f, right[2], m);
+    draw_levels(f, right[3], b);
     draw_log(f, rows[2], log);
 }
 
@@ -367,7 +375,18 @@ fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, 
         inp.push(Span::styled(meter(m.mouse, 6), Style::default().fg(Color::Green)));
         inp.push(Span::raw(" "));
     }
-    let p = Paragraph::new(vec![Line::from(prog), Line::from(line2)]).block(
+    // persistent "now quoting" line while a theme is in the air
+    let line3 = match &b.quote {
+        Some((who, cite, what, prog)) => Line::from(vec![
+            Span::styled(" ♫ now quoting ", Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" {} ", meter(*prog, 6)), Style::default().fg(Color::LightYellow)),
+            Span::styled(format!("{who}: "), Style::default().fg(Color::LightYellow)),
+            Span::styled(cite.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" — {what}"), Style::default().fg(Color::Gray)),
+        ]),
+        None => Line::from(Span::styled(" ♫ no theme quoted right now", dim)),
+    };
+    let p = Paragraph::new(vec![Line::from(prog), Line::from(line2), line3]).block(
         Block::default()
             .borders(Borders::ALL)
             .title(Span::styled(" sysjam ", Style::default().add_modifier(Modifier::BOLD)))
@@ -375,6 +394,28 @@ fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, 
             .title_bottom(Span::styled(" q quit · space pause display ", dim)),
     );
     f.render_widget(p, r);
+}
+
+/// scrolling history of theme citations (newest at the bottom)
+fn draw_cites(f: &mut Frame, r: Rect, b: &BandSnap) {
+    let block = Block::default().borders(Borders::ALL).title(" quoted themes · public domain ");
+    let inner = block.inner(r);
+    f.render_widget(block, r);
+    let h = inner.height as usize;
+    let lines: Vec<Line> = if b.cites.is_empty() {
+        vec![Line::from(Span::styled("none yet — themes come rarely", Style::default().fg(Color::DarkGray)))]
+    } else {
+        let n = b.cites.len();
+        b.cites[n.saturating_sub(h)..]
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let last = n.saturating_sub(h) + i + 1 == n;
+                Line::from(Span::styled(c.clone(), Style::default().fg(if last { Color::LightYellow } else { Color::Gray })))
+            })
+            .collect()
+    };
+    f.render_widget(Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: true }), inner);
 }
 
 fn draw_conductor(f: &mut Frame, r: Rect, b: &BandSnap) {

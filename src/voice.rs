@@ -100,11 +100,12 @@ struct Voice {
     tail_r: f32,
     last_l: f32,
     last_r: f32,
+    lp: f32,
 }
 
 impl Voice {
     fn new() -> Self {
-        Voice { on: false, owner: 0, p: Patch::default(), inc: 0.0, vel: 0.0, start: 0, off: 0, t: 0.0, env: 0.0, rel: false, ph: [0.0; 4], lfo: 0.0, ic1: 0.0, ic2: 0.0, g: 0.1, ks: vec![0.0; KS_MAX], ks_len: 100, ks_pos: 0, gl: 0.7, gr: 0.7, tail_l: 0.0, tail_r: 0.0, last_l: 0.0, last_r: 0.0 }
+        Voice { on: false, owner: 0, p: Patch::default(), inc: 0.0, vel: 0.0, start: 0, off: 0, t: 0.0, env: 0.0, rel: false, ph: [0.0; 4], lfo: 0.0, ic1: 0.0, ic2: 0.0, g: 0.1, ks: vec![0.0; KS_MAX], ks_len: 100, ks_pos: 0, gl: 0.7, gr: 0.7, tail_l: 0.0, tail_r: 0.0, last_l: 0.0, last_r: 0.0, lp: 0.0 }
     }
 }
 
@@ -115,7 +116,14 @@ pub struct Pool {
     rng: Rng,
     pub l: Vec<f32>,
     pub r: Vec<f32>,
+    /// per-owner (slot) level and one-pole low-pass coefficient the band sets:
+    /// targets, glided per render call so ducking never zips
+    pub og: [f32; OWNERS],
+    pub oa: [f32; OWNERS],
+    ogs: [f32; OWNERS],
+    oas: [f32; OWNERS],
 }
+pub const OWNERS: usize = 6;
 
 fn wrap(x: f32) -> f32 {
     x - x.floor()
@@ -142,7 +150,7 @@ impl Pool {
             t.iter_mut().for_each(|x| *x /= m);
             waves.push(t);
         }
-        Pool { v: (0..POOL).map(|_| Voice::new()).collect(), waves, sr, rng: Rng::seeded(seed ^ 0x766f), l: vec![0.0; 64], r: vec![0.0; 64] }
+        Pool { v: (0..POOL).map(|_| Voice::new()).collect(), waves, sr, rng: Rng::seeded(seed ^ 0x766f), l: vec![0.0; 64], r: vec![0.0; 64], og: [1.0; OWNERS], oa: [1.0; OWNERS], ogs: [1.0; OWNERS], oas: [1.0; OWNERS] }
     }
 
     pub fn active(&self) -> usize {
@@ -182,6 +190,7 @@ impl Pool {
         v.ph = [0.0, 0.25, 0.5, 0.75];
         v.ic1 = 0.0;
         v.ic2 = 0.0;
+        v.lp = 0.0;
         let a = (pan.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
         v.gl = a.cos();
         v.gr = a.sin();
@@ -213,11 +222,22 @@ impl Pool {
         }
         let sr = self.sr;
         let dt = 1.0 / sr;
+        // owner gains glide with a ~120 ms time constant
+        let kg = 1.0 - (-(n as f32) / (sr * 0.12)).exp();
+        let g0 = self.ogs;
+        for o in 0..OWNERS {
+            self.ogs[o] += (self.og[o] - self.ogs[o]) * kg;
+            self.oas[o] += (self.oa[o] - self.oas[o]) * kg;
+        }
+        let inv_n = 1.0 / n as f32;
         for v in self.v.iter_mut() {
             if !v.on {
                 continue;
             }
             let p = v.p;
+            let ow = v.owner.min(OWNERS - 1);
+            let (ga, gb) = (g0[ow], self.ogs[ow]);
+            let la = self.oas[ow];
             let ra = 1.0 / (p.a.max(0.002) * sr);
             let kd = (-1.0 / (p.d.max(0.01) * sr)).exp();
             let kr = (-1.0 / (p.r.max(0.01) * sr)).exp();
@@ -307,7 +327,15 @@ impl Pool {
                         y * 1.2
                     }
                 };
-                let s = x * e * v.vel * p.gain;
+                // owner low-pass (closing filter when ducked) and level
+                let x = if la < 0.999 {
+                    v.lp += (x - v.lp) * la;
+                    v.lp
+                } else {
+                    v.lp = x;
+                    x
+                };
+                let s = x * e * v.vel * p.gain * (ga + (gb - ga) * j as f32 * inv_n);
                 v.tail_l *= 0.97;
                 v.tail_r *= 0.97;
                 let ol = s * v.gl + v.tail_l;

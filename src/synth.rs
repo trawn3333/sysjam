@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use crate::ui::Mind;
-use crate::harmony::{pc_name, roman_of, PKey, Rel};
+use crate::harmony::{pc_name, roman_of, Mode, PKey, Rel};
 use crate::conductor::{Conductor, Order, Pose};
 
 const CR: usize = 32; // control-rate block
@@ -327,6 +327,91 @@ pub struct Engine {
     rest_run: [u32; 7],
     play_run: [u32; 7],
     prev_tied: [f32; 7],
+    // per-source RMS meter (SYSJAM_RMS, bench only), split by drums playing / resting
+    meter: Option<Box<Meter>>,
+    last_drum: u64,
+    // synth vs the rest: when a GM / lead note stops sounding, per player
+    gm_until: [u64; 7],
+    mel_until: [u64; 7],
+    space_prev: [Space; 7],
+    bed_g: f32,
+    bed_fc: f32,
+    drum_minimal: bool,
+    space_said: [u64; 7],
+    space_tick: u32,
+    // themes: one quote at a time, passed around, always cited
+    quote: Option<Quote>,
+    quote_cool: u64,
+    quote_test: bool,
+    quote_hist: VecDeque<String>,
+    recent_themes: VecDeque<usize>,
+    n_quotes: u32,
+    quote_log: Vec<String>,
+}
+
+/// How a player treats the theme it quotes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Var {
+    Straight,
+    Fragment,
+    Augment,
+    Diminish,
+    Invert,
+    /// first half; another player answers with the second half
+    Call,
+    Answer,
+    /// the bassist plays it low
+    Low,
+}
+impl Var {
+    fn desc(self) -> &'static str {
+        match self {
+            Var::Straight => "a straight quote",
+            Var::Fragment => "a fragment",
+            Var::Augment => "augmented, as a slow pad melody",
+            Var::Diminish => "in diminution, twice as fast",
+            Var::Invert => "inverted",
+            Var::Call => "the first phrase, as a call",
+            Var::Answer => "the answer phrase",
+            Var::Low => "low in the bass",
+        }
+    }
+}
+struct Quote {
+    theme: usize,
+    player: usize,
+    var: Var,
+    /// (absolute step, semitone, length in steps)
+    ev: Vec<(u64, i32, f32)>,
+    next: usize,
+    start: u64,
+    end: u64,
+    pass: u32,
+    cite: String,
+    what: String,
+}
+
+/// Where the synth voices (designed patches + the drone pad bed) sit in the mix right now.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Space {
+    /// GM instruments / the lead / a quote are up front: duck and close the filter
+    Duck,
+    /// drums are playing: stay back as a soft pad
+    Back,
+    /// drums are out and nobody else is up front: come forward a little
+    Stretch,
+}
+/// synth trim vs GM (−10 dB), then per-space offsets
+const SYN_TRIM: f32 = 0.316;
+const SPACE_GAIN: [f32; 3] = [0.40, 0.80, 1.58]; // Duck −8 dB, Back −2 dB, Stretch +4 dB
+/// slot (pool owner) → player
+const OWNER_PL: [usize; 5] = [3, 3, 4, 5, 1];
+
+pub const METER_SRC: [&str; 11] = ["synth patches", "drone pad bed", "bells", "sub drone", "synth bass", "synth kick", "synth hats", "GM melodic", "GM drums", "guest", "total"];
+#[derive(Default)]
+struct Meter {
+    p: [[f64; 11]; 2],
+    n: [f64; 2],
 }
 
 fn pan(p: f32) -> (f32, f32) {
@@ -542,6 +627,23 @@ impl Engine {
             rest_run: [0; 7],
             play_run: [0; 7],
             prev_tied: [0.0; 7],
+            meter: std::env::var_os("SYSJAM_RMS").map(|_| Box::default()),
+            last_drum: 0,
+            gm_until: [0; 7],
+            mel_until: [0; 7],
+            space_prev: [Space::Back; 7],
+            bed_g: SYN_TRIM,
+            bed_fc: 0.7,
+            drum_minimal: false,
+            space_said: [0; 7],
+            space_tick: 0,
+            quote: None,
+            quote_cool: (c.sr * if std::env::var_os("SYSJAM_QUOTE_TEST").is_some() { 15.0 } else { 50.0 }) as u64,
+            quote_test: std::env::var_os("SYSJAM_QUOTE_TEST").is_some(),
+            quote_hist: VecDeque::new(),
+            recent_themes: VecDeque::new(),
+            n_quotes: 0,
+            quote_log: Vec::new(),
             harm,
             rng,
         };
@@ -645,10 +747,110 @@ impl Engine {
         }
         self.cond.last_semi[i] = (semi, now.max(1));
     }
+    /// who (other than `pl`) is up front right now: a sounding GM melodic note, or the lead
+    fn front_of(&self, pl: usize) -> Option<usize> {
+        let tail = (self.step_len * 4.0) as u64;
+        let now = self.now;
+        if self.quote_front(pl) {
+            return self.quote_player();
+        }
+        if pl != 4 && self.on[4] && self.mel_until[4] + tail > now {
+            return Some(4);
+        }
+        (3..6).find(|&j| j != pl && self.gm_until[j] + tail > now)
+    }
+    fn quote_front(&self, pl: usize) -> bool {
+        self.quote_player().map(|q| q != pl).unwrap_or(false)
+    }
+    fn quote_owner(&self, pl: usize) -> bool {
+        self.quote_player() == Some(pl)
+    }
+    fn quote_player(&self) -> Option<usize> {
+        self.quote.as_ref().filter(|q| q.start <= self.step + 16).map(|q| q.player)
+    }
+    /// the drummer is actually grooving (minimal ticks don't count: that's the synth's chance)
+    fn drums_playing(&self) -> bool {
+        (self.rmode[2] == RMode::Play || self.feel == Feel::Surge) && self.last_drum > 0 && (self.now.saturating_sub(self.last_drum) as f32) < self.step_len * 16.0
+    }
+    /// where player `pl`'s synth voices sit (pl 0 = the drone pad bed)
+    fn space_for(&self, pl: usize) -> Space {
+        if self.front_of(pl).is_some() {
+            Space::Duck
+        } else if self.drums_playing() {
+            Space::Back
+        } else {
+            Space::Stretch
+        }
+    }
+    /// control rate: push the space decision into the pool owners and the pad bed
+    fn apply_space(&mut self) {
+        let sr = self.sr;
+        let coef = |fc: f32| 1.0 - (-std::f32::consts::TAU * fc / sr).exp();
+        let surge = self.feel == Feel::Surge;
+        for o in 0..5 {
+            let pl = OWNER_PL[o];
+            let sp = self.space_for(pl);
+            let mut g = SYN_TRIM * SPACE_GAIN[sp as usize];
+            if surge {
+                g = SYN_TRIM * 1.25; // surges keep their energy
+            }
+            self.pool.og[o] = g;
+            self.pool.oa[o] = match sp {
+                Space::Duck if !surge => coef(900.0),
+                Space::Back if !surge => coef(2600.0),
+                _ => 1.0,
+            };
+        }
+        let sp = self.space_for(0);
+        let (g, fc) = match sp {
+            Space::Duck => (SYN_TRIM * 0.45, 0.45),
+            Space::Back => (SYN_TRIM * 0.8, 0.7),
+            Space::Stretch => (SYN_TRIM * 1.4, 1.0),
+        };
+        let k = 1.0 - (-((4 * CR) as f32) / (sr * 0.4)).exp();
+        self.bed_g += (g - self.bed_g) * k;
+        self.bed_fc += (fc - self.bed_fc) * k;
+    }
+    fn has_synth(&self, pl: usize) -> bool {
+        self.slots.iter().any(|s| s.on && s.synth.is_some() && Self::player_of(s.role) == pl)
+    }
+    /// once a bar: the synth players (and the drone) say what the space means to them
+    fn space_bar(&mut self) {
+        for pl in [0usize, 3, 4, 5] {
+            if pl != 0 && !self.has_synth(pl) {
+                continue;
+            }
+            let sp = self.space_for(pl);
+            let was = self.space_prev[pl];
+            if sp == was {
+                continue;
+            }
+            self.space_prev[pl] = sp;
+            let front = self.front_of(pl).map(|j| self.pname(j)).unwrap_or_else(|| "the lead".into());
+            let t = match (pl, sp, was) {
+                (0, Space::Stretch, _) => "drums are out → letting the drone bloom a little".to_string(),
+                (0, Space::Duck, _) => format!("{front} is talking → the drone pulls way back"),
+                (0, Space::Back, _) => "drums are in → drone stays low and dark".to_string(),
+                (_, Space::Stretch, _) => if self.drum_minimal && self.on[2] { "drums are minimal, my turn to stretch".to_string() } else { "drums are out, my turn to stretch".to_string() },
+                (_, Space::Duck, _) => format!("{front} is up front → ducking under it, filter closed"),
+                (_, Space::Back, Space::Stretch) => "drums are back → sinking into a soft pad".to_string(),
+                (_, Space::Back, _) => format!("{front} is done → back to a quiet pad under the drums"),
+            };
+            if pl == 0 || self.rmode[pl] != RMode::Rest {
+                let st = if sp == Space::Stretch { "stretching" } else { self.minds[pl].status };
+                self.think(pl, st, t.clone());
+                if sp == Space::Stretch && pl != 0 && self.now >= self.space_said[pl] {
+                    self.space_said[pl] = self.now + (self.sr * 40.0) as u64;
+                    self.band_say(format!("{}: “{t}”", self.pname(pl)));
+                }
+            }
+        }
+    }
+
     /// The restraint gate every melodic note passes: the player's own rest/hold
     /// decision, the conductor's lay-out and hush, and extra thinning for synth voices.
     fn gate(&mut self, who: usize, vel: i32, steps: f32, synth: bool) -> Option<(i32, f32)> {
-        if !(3..=5).contains(&who) {
+        if !(3..=5).contains(&who) || self.quote_owner(who) {
             return Some((vel, steps));
         }
         if self.cond.lay[who] > 0 || self.rmode[who] == RMode::Rest {
@@ -665,12 +867,29 @@ impl Engine {
             }
             vel = (vel as f32 * (0.55 + 0.45 * h)) as i32;
         }
-        // self-designed synth patches are the easiest to overdo: fewer, longer notes
-        if synth && self.feel != Feel::Surge && steps < 3.0 {
-            if self.rng.chance(0.4) {
-                return None;
+        // self-designed synth patches are the easiest to overdo: by default a background
+        // pad — fewer, longer notes; only when the drums are out may they do more
+        if synth && self.feel != Feel::Surge && !self.quote_owner(who) {
+            match self.space_for(who) {
+                Space::Duck => {
+                    if steps < 8.0 {
+                        return None; // lay out under the GM / lead, keep only long tones
+                    }
+                    vel = (vel as f32 * 0.8) as i32;
+                }
+                Space::Back => {
+                    if steps < 4.0 && self.rng.chance(0.6) {
+                        return None;
+                    }
+                    steps = (steps * 2.0).max(4.0);
+                }
+                Space::Stretch => {
+                    if steps < 3.0 && self.rng.chance(0.15) {
+                        return None;
+                    }
+                    steps *= 1.2;
+                }
             }
-            steps *= 1.7;
         }
         Some((vel, steps))
     }
@@ -806,6 +1025,11 @@ impl Engine {
                 count: self.cond.total(),
                 clutter: self.cond.clutter,
             },
+            quote: self.quote.as_ref().filter(|q| q.start <= self.step + 16).map(|q| {
+                let prog = ((self.step.saturating_sub(q.start)) as f32 / (q.end - q.start).max(1) as f32).clamp(0.0, 1.0);
+                (self.pname(q.player), q.cite.clone(), q.what.clone(), prog)
+            }),
+            cites: self.quote_hist.iter().cloned().collect(),
             levels,
             seed: self.seed,
             time: self.time(),
@@ -1277,8 +1501,12 @@ impl Engine {
             let f = semi_to_freq(self.root, semi as f32);
             let v = (vel as f32 / 110.0).clamp(0.05, 1.0);
             self.pool.note(si, &p, f, v, at, dur, pan);
+            self.mel_until[who] = self.mel_until[who].max(at + dur);
         } else if let Some(ch) = self.slot_ch(r) {
             self.note(ch, semi, vel, steps, delay);
+            let end = self.now + ((delay.max(0.0) + steps.max(0.25)) * self.step_len) as u64;
+            self.gm_until[who] = self.gm_until[who].max(end);
+            self.mel_until[who] = self.mel_until[who].max(end);
         } else {
             return;
         }
@@ -1413,6 +1641,7 @@ impl Engine {
         }
     }
     fn drum(&mut self, key: i32, vel: i32, delay: f32) {
+        self.last_drum = self.now.max(1);
         if self.ui.is_none() {
             self.count(2);
         } else {
@@ -1471,7 +1700,9 @@ impl Engine {
             }
             self.on_bar_line(bar);
             self.conductor_bar(bar);
+            self.space_bar();
         }
+        self.quote_step(bar * 16 + s as u64);
         self.bass_step(s);
         self.drums_step(s, bar);
         self.keys_step(s, bar);
@@ -1607,6 +1838,7 @@ impl Engine {
             self.band_say(m.into());
         }
         self.make_bass_pattern();
+        self.drums_phrase();
         self.make_drum_pattern();
         // keys comping style for this phrase
         let w: &[f32; 5] = match self.leader.state {
@@ -1618,15 +1850,21 @@ impl Engine {
         self.comp = [Comp::Sparse, Comp::Arp, Comp::ArpUD, Comp::Broken, Comp::Offbeat][self.rng.weighted(w)];
         // drummer fills before phrase ends sometimes
         let pf = match self.leader.state {
-            State::Alive => 0.35,
-            State::Awaken => 0.15,
+            State::Alive => 0.15,
+            State::Awaken => 0.04,
             _ => 0.0,
         };
-        if self.on[2] && self.rng.chance(pf) && self.cond.lay[2] == 0 {
+        if self.on[2] && self.rmode[2] == RMode::Play && self.rng.chance(pf) && self.cond.lay[2] == 0 {
             self.fill = true;
         }
         self.phrase_minds();
         self.restraint_phrase();
+        if let Some(q) = self.quote.as_ref() {
+            let pl = q.player;
+            self.rmode[pl] = RMode::Play; // keep the quoting player on
+        }
+        let bar = self.step / 16;
+        self.quote_phrase(bar);
     }
 
     fn pname(&self, i: usize) -> String {
@@ -1770,13 +2008,18 @@ impl Engine {
 
     /// The conductor addresses one player; stubborn ones grumble and comply a bar late.
     fn order(&mut self, i: usize, o: Order, bar: u64) {
+        self.order_say(i, o, bar, None);
+    }
+    fn order_say(&mut self, i: usize, o: Order, bar: u64, speech: Option<String>) {
         let who = self.pname(i);
         let (what, ok) = match o {
             Order::Hush(_) => ("bring it down", "ok, quieter"),
             Order::LayOut(n) => (if n == 1 { "lay out a phrase" } else { "lay out 2 phrases" }, "ok, resting"),
         };
         let pose = if matches!(o, Order::Hush(_)) { Pose::Shh } else { Pose::Point };
-        self.cond_say(format!("{who}, {what}"), pose, Some(i));
+        let said = speech.unwrap_or_else(|| format!("{who}, {what}"));
+        let what = said.strip_prefix(&format!("{who}, ")).unwrap_or(&said).to_string();
+        self.cond_say(said, pose, Some(i));
         match o {
             Order::Hush(_) => self.cond.n_hush += 1,
             Order::LayOut(_) => self.cond.n_lay += 1,
@@ -1880,8 +2123,56 @@ impl Engine {
         let phrase = bar % 4 == 0;
         let featured = |e: &Engine, i: usize| {
             let p = [P::Keys, P::Lead, P::Colour][i - 3];
-            e.leader.soloist == Some(p) || e.leader.lone == Some(p)
+            e.leader.soloist == Some(p) || e.leader.lone == Some(p) || e.quote_owner(i)
         };
+        // synth vs the others: the synth is the first to be hushed when anyone else plays
+        let drums_on = self.drums_playing();
+        for i in 3..6 {
+            if !self.has_synth(i) || self.rmode[i] != RMode::Play || self.cond.lay[i] > 0 || featured(self, i) || now < self.cond.nag_cool[i] || surge || self.quote_owner(i) {
+                continue;
+            }
+            let front = self.front_of(i);
+            if (front.is_some() || drums_on) && self.cond.dens[i] > 1.5 {
+                let who = self.pname(i);
+                let speech = match front {
+                    Some(j) => format!("{who}, back to the pad — let the {} through", self.pname(j)),
+                    None => format!("{who}, sit back under the drums"),
+                };
+                let o = if self.cond.offenses[i] >= 1.5 { Order::LayOut(1) } else { Order::Hush(2) };
+                self.order_say(i, o, bar, Some(speech));
+                self.cond.cool = now + (self.sr * 8.0) as u64;
+                self.cond.nag_cool[i] = now + (self.sr * 24.0) as u64;
+                return;
+            }
+        }
+        // drums are for alive moments and surges
+        if phrase && !surge && st != State::Alive && self.rmode[2] == RMode::Play && self.cond.dens[2] > 5.0 && now >= self.cond.nag_cool[2] {
+            let syn = (3..6).any(|i| self.has_synth(i));
+            let speech = if syn { "drums, give it some air — synth, take the space" } else { "drums, give it some air" };
+            self.order_say(2, Order::LayOut(2), bar, Some(speech.into()));
+            self.cond.cool = now + (self.sr * 10.0) as u64;
+            self.cond.nag_cool[2] = now + (self.sr * 40.0) as u64;
+            return;
+        }
+        // drums laid out: invite the synth in to stretch
+        if phrase && !surge && st != State::Chill && (self.rmode[2] != RMode::Play || !self.on[2]) && !drums_on && self.rng.chance(0.6) {
+            let cand: Vec<usize> = (3..6).filter(|&i| self.on[i] && self.has_synth(i) && self.rmode[i] != RMode::Play && self.cond.lay[i] == 0 && self.front_of(i).is_none()).collect();
+            if !cand.is_empty() {
+                let i = cand[self.rng.below(cand.len())];
+                let who = self.pname(i);
+                self.cond_say(format!("drums are out — {who}, stretch a little"), Pose::Point, Some(i));
+                self.cond.n_invite += 1;
+                self.rmode[i] = RMode::Play;
+                self.rest_run[i] = 0;
+                self.cond.hushv[i] = 0.85;
+                self.cond.hush_ph[i] = 1;
+                self.hold[i] = 0;
+                self.think(i, "stretching", format!("conductor: drums are out — stretch → “my turn”"));
+                self.hold[i] = now + (self.sr * 8.0) as u64;
+                self.cond.cool = now + (self.sr * 12.0) as u64;
+                return;
+            }
+        }
         if clutter > 1.3 && phrase {
             // way too much: a cue to the whole band
             self.cond.n_cue += 1;
@@ -1916,7 +2207,9 @@ impl Engine {
                     continue;
                 }
                 let synth = self.slots.iter().any(|s| s.on && s.synth.is_some() && Self::player_of(s.role) == i);
-                let sc = self.cond.dens[i] / target + 0.5 * self.cond.step_on[i] + if synth { 0.15 } else { 0.0 };
+                // the synth goes first whenever anyone else is playing
+                let others = self.front_of(i).is_some() || self.drums_playing();
+                let sc = self.cond.dens[i] / target + 0.5 * self.cond.step_on[i] + if synth { if others { 0.7 } else { 0.15 } } else { 0.0 };
                 if sc > 0.15 && best.map(|b| sc > b.1).unwrap_or(true) {
                     best = Some((i, sc));
                 }
@@ -1947,6 +2240,20 @@ impl Engine {
                 self.cond.cool = now + (self.sr * 12.0) as u64;
             }
         }
+    }
+
+    /// RMS per source (dBFS, post master gain, pre limiter), drums playing vs resting
+    pub fn rms_report(&self) -> String {
+        let Some(m) = self.meter.as_ref() else { return String::new() };
+        let db = |p: f64, n: f64| if n < 1.0 || p <= 0.0 { -120.0 } else { 10.0 * (p / n).log10() };
+        let mut out = String::new();
+        for (c, cn) in ["drums resting", "drums playing"].iter().enumerate() {
+            let secs = m.n[c] / self.sr as f64;
+            let per: Vec<String> = METER_SRC.iter().enumerate().map(|(k, n)| format!("{n} {:.1}", db(m.p[c][k], m.n[c]))).collect();
+            let syn = m.p[c][0] + m.p[c][1] + m.p[c][2];
+            out.push_str(&format!("rms {cn} ({secs:.0}s): {} | synth(patches+pad+bells) {:.1} vs GM melodic {:.1} dB\n", per.join(", "), db(syn, m.n[c]), db(m.p[c][7], m.n[c])));
+        }
+        out
     }
 
     pub fn conductor_stats(&self) -> String {
@@ -2278,6 +2585,9 @@ impl Engine {
             let next = self.harm.peek_next(self.meander());
             self.set_think(1, format!("walking an approach note into {}", next.name()));
         }
+        self.bass_sound(semi, vel, att, dec, 2.0);
+    }
+    fn bass_sound(&mut self, semi: i32, vel: f32, att: f32, dec: f32, gm_len: f32) {
         let f = semi_to_freq(self.root, semi as f32);
         self.bass_inc = f / self.sr;
         self.bass_attack = true;
@@ -2286,11 +2596,19 @@ impl Engine {
         self.bass_dec = (-1.0 / (self.sr * dec)).exp();
         if self.bass_mode == BassMode::Groove && self.slot_ch(Role::Bass).is_some() {
             let v = (vel * 80.0) as i32;
-            self.role_note(Role::Bass, semi + 12, v, 2.0, 0.0);
+            self.role_note(Role::Bass, semi + 12, v, gm_len, 0.0);
         }
+    }
+    /// the bassist plays a given pitch (theme quotes)
+    fn bass_play(&mut self, semi: i32, vel: f32, att: f32, dec: f32, len: f32) {
+        self.heard_semi(1, semi, vel);
+        self.bass_sound(semi, vel, att, dec, len);
     }
 
     fn bass_step(&mut self, s: usize) {
+        if self.quote_owner(1) {
+            return; // playing the theme low instead
+        }
         if self.feel == Feel::Surge {
             match s {
                 0 | 8 => self.bass_note(0, 0.95, 0.004, 0.34),
@@ -2325,49 +2643,117 @@ impl Engine {
 
     // -------------------------------------------------------------- drummer
 
+    /// The drummer's own per-phrase restraint: drums are for alive moments and surges.
+    /// Rest (out), Hold (minimal: a soft downbeat and a couple of ticks) or Play.
+    fn drums_phrase(&mut self) {
+        let st = self.leader.state;
+        let surge = self.feel == Feel::Surge;
+        let was = self.rmode[2];
+        let mut why = String::new();
+        let mode = if !self.on[2] {
+            RMode::Rest
+        } else if self.cond.lay[2] > 0 {
+            why = "conductor has me out → resting".into();
+            RMode::Rest
+        } else if surge {
+            RMode::Play
+        } else {
+            let tied = self.tied_level(2);
+            let fatigue = 0.25 * self.play_run[2].saturating_sub(2) as f32;
+            // weights: rest, minimal, play
+            let mut w = match st {
+                State::Chill => [1.0, 0.0, 0.0],
+                State::Subside => [0.65, 0.35, 0.0],
+                State::Awaken => [0.5, 0.42, 0.08],
+                State::Alive => [0.18, 0.32, 0.5],
+            };
+            w[2] += 0.25 * (tied - 0.5).max(0.0) * (st == State::Alive) as i32 as f32;
+            w[0] += fatigue;
+            let m = [RMode::Rest, RMode::Hold, RMode::Play][self.rng.weighted(&w)];
+            why = match m {
+                RMode::Rest if st == State::Chill => "chilling — no drums needed".into(),
+                RMode::Rest if fatigue > 0.2 => format!("played {} phrases → dropping out, let the synth have a go", self.play_run[2]),
+                RMode::Rest => "sitting this phrase out — space for the others".into(),
+                RMode::Hold => "minimal: a soft downbeat and a tick, nothing more".into(),
+                RMode::Play => format!("the band is alive (cpu {:.0}%) → a light groove", self.ctl.sig.cpu * 100.0),
+            };
+            m
+        };
+        match mode {
+            RMode::Rest => {
+                self.rest_run[2] += 1;
+                self.play_run[2] = 0;
+            }
+            _ => {
+                self.play_run[2] += 1;
+                self.rest_run[2] = 0;
+            }
+        }
+        self.rmode[2] = mode;
+        self.drum_minimal = mode == RMode::Hold;
+        if self.on[2] && !why.is_empty() && (mode != was || self.rng.chance(0.3)) {
+            let status = match mode {
+                RMode::Rest => "laying out",
+                RMode::Hold => "holding",
+                RMode::Play => "grooving",
+            };
+            self.think(2, status, why);
+        }
+    }
+
     fn make_drum_pattern(&mut self) {
-        let d = if self.on[2] { self.leader.invite(P::Drums) } else { 0.0 };
+        let mode = self.rmode[2];
+        let d = if self.on[2] && mode != RMode::Rest { self.leader.invite(P::Drums) } else { 0.0 };
         let ps = self.persona[2];
         let mut k = [0i32; 16];
         let mut sn = [0i32; 16];
         let mut h = [0i32; 16];
         let mut a = [0i32; 16];
-        if d > 0.15 {
-            k[0] = 70;
-            if d > 0.5 {
-                k[8] = 60;
+        if mode == RMode::Hold && d > 0.1 {
+            // minimal: soft downbeat, a tick on 2 and 4 (or a shaker pair), maybe a rim
+            k[0] = 48;
+            if self.rng.chance(0.5) {
+                h[4] = 18;
+                h[12] = 20;
+            } else {
+                a[6] = 12;
+                a[14] = 12;
             }
-            for &i in &[3usize, 6, 10, 11, 14] {
-                // the drummer listens to the bassist's syncopations
-                let follow = if self.bass_pat[i] != 0 { 0.5 } else { 0.0 };
-                if self.rng.chance(((d - 0.6) * ps.busy * 1.5).max(0.0) + follow * (d - 0.5).max(0.0)) {
-                    k[i] = 45;
-                }
+            if d > 0.5 && self.rng.chance(0.3) {
+                sn[12] = 22;
             }
+        } else if d > 0.15 {
+            k[0] = 66;
             if d > 0.6 {
-                sn[4] = 45;
-                sn[12] = 50;
-                for i in [7usize, 15] {
-                    if self.rng.chance(ps.busy * 0.3) {
-                        sn[i] = 18;
-                    }
-                }
-            } else if d > 0.4 && self.rng.chance(0.5) {
-                sn[12] = 35;
+                k[8] = 55;
             }
-            if d > 0.3 {
-                let sixteenths = d > 0.85 && ps.busy > 0.7;
-                for i in 0..16 {
-                    if i % 2 == 0 || sixteenths {
-                        h[i] = if i % 4 == 0 { 34 } else { 24 } + if sixteenths && i % 2 == 1 { -6 } else { 0 };
-                    }
+            for &i in &[3usize, 6, 10, 14] {
+                // the drummer listens to the bassist's syncopations
+                let follow = if self.bass_pat[i] != 0 { 0.35 } else { 0.0 };
+                if self.rng.chance(((d - 0.75) * ps.busy).max(0.0) + follow * (d - 0.6).max(0.0)) {
+                    k[i] = 40;
                 }
             }
-            if ps.register > 0.2 && d > 0.6 {
-                // auxiliary percussion on the off-beat eighths only
-                for i in (2..16).step_by(4) {
-                    a[i] = 14;
+            if d > 0.7 {
+                sn[4] = 42;
+                sn[12] = 46;
+                if self.rng.chance(ps.busy * 0.15) {
+                    sn[15] = 16;
                 }
+            } else if d > 0.45 && self.rng.chance(0.5) {
+                sn[12] = 32;
+            }
+            if d > 0.4 {
+                // quarters; eighths only when really alive — no sixteenths outside surges
+                let every = if d > 0.78 { 2 } else { 4 };
+                for i in (0..16).step_by(every) {
+                    h[i] = if i % 4 == 0 { 30 } else { 20 };
+                }
+            }
+            if ps.register > 0.2 && d > 0.7 {
+                // auxiliary percussion, two off-beats per bar
+                a[6] = 13;
+                a[14] = 13;
             }
         }
         self.drum_pat = [k, sn, h, a];
@@ -2380,6 +2766,11 @@ impl Engine {
         }
         let last_bar = bar % 4 == 3;
         let swing = if s % 2 == 1 { self.persona[2].swing * 0.33 } else { 0.0 };
+        let resting = self.rmode[2] == RMode::Rest && self.feel != Feel::Surge;
+        if resting {
+            self.fill = false;
+            self.crash_next = false;
+        }
         if self.crash_next && s == 0 && self.on[2] {
             self.crash_next = false;
             self.drum(49, 38, 0.0);
@@ -2397,7 +2788,7 @@ impl Engine {
             }
             return;
         }
-        if self.entry_wait > 0 || !self.on[2] || self.cond.lay[2] > 0 {
+        if self.entry_wait > 0 || !self.on[2] || self.cond.lay[2] > 0 || resting {
             return;
         }
         if self.feel == Feel::Surge {
@@ -2474,7 +2865,7 @@ impl Engine {
     // ----------------------------------------------------------------- keys
 
     fn keys_step(&mut self, s: usize, bar: u64) {
-        if !self.on[3] {
+        if !self.on[3] || self.quote_owner(3) {
             return;
         }
         let soloing = self.leader.soloist == Some(P::Keys) || self.leader.lone == Some(P::Keys)
@@ -2556,7 +2947,7 @@ impl Engine {
     // ----------------------------------------------------------------- lead
 
     fn lead_step(&mut self, s: usize, bar: u64) {
-        if !self.on[4] || self.entry_wait > 0 || self.cond.lay[4] > 0 || self.rmode[4] == RMode::Rest {
+        if !self.on[4] || self.entry_wait > 0 || self.cond.lay[4] > 0 || self.rmode[4] == RMode::Rest || self.quote_owner(4) {
             return;
         }
         let soloing = self.leader.soloist == Some(P::Lead) || self.leader.lone == Some(P::Lead);
@@ -2637,7 +3028,7 @@ impl Engine {
     // --------------------------------------------------------------- colour
 
     fn colour_step(&mut self, s: usize, bar: u64) {
-        if self.cond.lay[5] > 0 || self.rmode[5] == RMode::Rest {
+        if self.cond.lay[5] > 0 || self.rmode[5] == RMode::Rest || self.quote_owner(5) {
             return;
         }
         // shimmer: listens to the network (a few bells per bar at most)
@@ -2685,6 +3076,298 @@ impl Engine {
                 }
             }
         }
+    }
+
+    // ------------------------------------------------------------- themes
+
+    /// Phrase line: rarely, a player gets inspired to quote a public-domain theme.
+    fn quote_phrase(&mut self, bar: u64) {
+        if self.quote.is_some() || self.now < self.quote_cool || self.feel == Feel::Surge {
+            return;
+        }
+        let th = crate::themes::all();
+        if th.is_empty() {
+            return;
+        }
+        let st = self.leader.state;
+        let p = if self.quote_test {
+            1.0
+        } else {
+            match st {
+                State::Chill => 0.025,
+                State::Awaken => 0.11,
+                State::Alive => 0.09,
+                State::Subside => 0.035,
+            }
+        };
+        if !self.rng.chance(p) {
+            return;
+        }
+        // who: lead, keys, colour (if playing), or the bassist
+        let mut cand: Vec<(usize, f32)> = vec![(1, 0.35)];
+        for (i, w) in [(3usize, 0.8f32), (4, 1.0), (5, 0.6)] {
+            if self.on[i] && self.cond.lay[i] == 0 {
+                cand.push((i, w * (0.6 + self.persona[i].curiosity)));
+            }
+        }
+        let ws: Vec<f32> = cand.iter().map(|c| c.1).collect();
+        let pl = cand[self.rng.weighted(&ws)].0;
+        let alive = st == State::Alive;
+        let var = match pl {
+            1 => Var::Low,
+            3 => [Var::Augment, Var::Straight, Var::Fragment][self.rng.weighted(&[0.45, 0.3, 0.25])],
+            4 => {
+                let w = [0.32, 0.22, if alive { 0.14 } else { 0.0 }, 0.1, if self.on[3] || self.on[5] { 0.2 } else { 0.0 }];
+                [Var::Straight, Var::Fragment, Var::Diminish, Var::Invert, Var::Call][self.rng.weighted(&w)]
+            }
+            _ => [Var::Augment, Var::Fragment, Var::Invert][self.rng.weighted(&[0.5, 0.3, 0.2])],
+        };
+        // which theme: one the player's key suits (major/minor), not heard recently
+        let k = self.player_key(pl);
+        let minor = matches!(k.mode, Mode::Aeolian | Mode::Dorian | Mode::Phrygian);
+        let w: Vec<f32> = th.iter().enumerate().map(|(i, t)| if self.recent_themes.contains(&i) { 0.0 } else { t.fame() * if t.minorish() == minor { 2.0 } else { 1.0 } }).collect();
+        let ti = self.rng.weighted(&w);
+        self.recent_themes.push_back(ti);
+        if self.recent_themes.len() > 40 {
+            self.recent_themes.pop_front();
+        }
+        self.start_quote(ti, pl, var, bar * 16, 0);
+    }
+
+    fn player_key(&self, pl: usize) -> PKey {
+        if pl == 1 || pl == 0 {
+            PKey::of(self.key(), Rel::Same)
+        } else {
+            PKey::of(self.key(), self.rel[pl])
+        }
+    }
+
+    /// Transpose the theme into the player's key and mode, fit it to the tempo
+    /// (a quarter note is one beat) and apply the variation.
+    fn build_quote(&mut self, ti: usize, pl: usize, var: Var, from: u64) -> Option<(Vec<(u64, i32, f32)>, u64, u64)> {
+        let th = &crate::themes::all()[ti];
+        let mut notes: Vec<crate::themes::TNote> = th.notes.clone();
+        let total: u32 = notes.iter().map(|n| n.len).sum();
+        let mut pick = th.pickup;
+        match var {
+            Var::Fragment | Var::Call => {
+                let mut acc = 0;
+                let mut cut = notes.len();
+                for (i, n) in notes.iter().enumerate() {
+                    acc += n.len;
+                    if acc * 2 >= total && i >= 3 {
+                        cut = i + 1;
+                        break;
+                    }
+                }
+                notes.truncate(cut);
+            }
+            Var::Answer => {
+                let mut acc = 0;
+                let mut cut = 0;
+                for (i, n) in notes.iter().enumerate() {
+                    acc += n.len;
+                    if acc * 2 >= total && i >= 3 {
+                        cut = i + 1;
+                        break;
+                    }
+                }
+                if notes.len() - cut < 3 {
+                    cut = notes.len() / 2;
+                }
+                notes.drain(..cut);
+                while notes.first().map(|n| n.deg.is_none()).unwrap_or(false) {
+                    notes.remove(0);
+                }
+                pick = 0;
+            }
+            _ => {}
+        }
+        let factor = match var {
+            Var::Augment => 2.0,
+            Var::Low => if self.bass_mode == BassMode::Groove { 1.0 } else { 2.0 },
+            Var::Diminish => 0.5,
+            _ => 1.0,
+        };
+        let d0 = notes.iter().find_map(|n| n.deg)?;
+        let k = self.player_key(pl);
+        let ts = k.mode.steps();
+        let tminor = matches!(k.mode, Mode::Aeolian | Mode::Dorian | Mode::Phrygian);
+        let keep_alt = tminor == th.minorish();
+        let mut raw: Vec<(f32, Option<i32>, f32)> = Vec::new();
+        let mut pos = 0.0f32;
+        for n in &notes {
+            let len = n.len as f32 * factor / 3.0; // 1/12 quarter → steps (4 per beat)
+            let semi = n.deg.map(|d| {
+                let (d, alt) = if var == Var::Invert { (2 * d0 - d, -n.alt) } else { (d, n.alt) };
+                let oct = d.div_euclid(7);
+                k.tonic + 12 * oct + ts[d.rem_euclid(7) as usize] + if keep_alt { alt } else { 0 }
+            });
+            raw.push((pos, semi, len));
+            pos += len;
+        }
+        // register: centre the motif where this player lives
+        let center = match pl {
+            1 => -11 + self.reg,
+            3 => 19,
+            4 => 31 + (self.persona[4].register * 4.0) as i32,
+            _ => 33,
+        };
+        let sem: Vec<i32> = raw.iter().filter_map(|r| r.1).collect();
+        let mean = sem.iter().sum::<i32>() as f32 / sem.len().max(1) as f32;
+        let shift = ((center as f32 - mean) / 12.0).round() as i32 * 12;
+        let cap = match var {
+            Var::Augment | Var::Low => 128.0,
+            _ => 64.0,
+        };
+        let ps = ((pick as f32 * factor / 3.0).round() as u64) % 16;
+        let start = if ps > 0 { from + 16 - ps } else { from };
+        let mut ev = Vec::new();
+        for (p, semi, len) in raw {
+            if p >= cap {
+                break;
+            }
+            if let Some(s) = semi {
+                let l = len.min(cap - p);
+                ev.push((start + p.round() as u64, s + shift, l));
+            }
+        }
+        if ev.len() < 3 {
+            return None;
+        }
+        let end = start + pos.min(cap).ceil() as u64;
+        Some((ev, start, end))
+    }
+
+    fn start_quote(&mut self, ti: usize, pl: usize, var: Var, from: u64, pass: u32) {
+        let Some((ev, start, end)) = self.build_quote(ti, pl, var, from) else { return };
+        let th = &crate::themes::all()[ti];
+        let cite = th.citation();
+        let who = self.pname(pl);
+        let kname = self.player_key(pl).name();
+        let what = if pass == 0 { var.desc().to_string() } else { format!("{} (passed on)", var.desc()) };
+        self.quote = Some(Quote { theme: ti, player: pl, var, ev, next: 0, start, end, pass, cite: cite.clone(), what: what.clone() });
+        self.n_quotes += 1;
+        // the quoting player is featured for the duration
+        self.rmode[pl] = RMode::Play;
+        self.cond.lay[pl] = 0;
+        self.cond.hushv[pl] = 1.0;
+        let phrases = ((end - from) / 64 + 1) as u32;
+        for i in 3..6 {
+            if i != pl {
+                self.cond.hushv[i] = self.cond.hushv[i].min(0.7);
+                self.cond.hush_ph[i] = self.cond.hush_ph[i].max(phrases);
+            }
+        }
+        self.hold[pl] = 0;
+        let verb = if pass == 0 { "quoting" } else { "picking up" };
+        self.think(pl, "quoting", format!("♫ {verb} {cite} — {what}, in {kname}"));
+        self.hold[pl] = self.now + ((end - self.step.min(end)) as f32 * self.step_len) as u64;
+        let t = self.time();
+        let line = format!("♫ [{:02}:{:02}] {who} {} {cite} — {what}, in {kname}", (t as u32) / 60, (t as u32) % 60, if pass == 0 { "quotes" } else { "picks up" });
+        self.say(line.clone());
+        self.quote_log.push(line);
+        let ts = format!("{:02}:{:02}", (t as u32) / 60, (t as u32) % 60);
+        self.quote_hist.push_back(format!("{ts} {who}: {cite}"));
+        while self.quote_hist.len() > 8 {
+            self.quote_hist.pop_front();
+        }
+        let speech = if pass == 0 {
+            format!("nice — {who} has {} · everyone support", th.name())
+        } else {
+            format!("{who} picks it up — keep it soft")
+        };
+        self.cond_say(speech, Pose::Point, Some(pl));
+        self.cond.pose_until = self.now + (self.sr * 6.0) as u64;
+        for i in [3usize, 4, 5] {
+            if i != pl && self.on[i] && self.rmode[i] != RMode::Rest {
+                self.think(i, "following", format!("{who} is quoting {} → supporting softly", th.name()));
+            }
+        }
+    }
+
+    /// every step: sound the quote's notes, then pass the motif on or let it go
+    fn quote_step(&mut self, step: u64) {
+        let Some(q) = self.quote.as_mut() else { return };
+        let mut due = Vec::new();
+        while q.next < q.ev.len() && q.ev[q.next].0 <= step {
+            due.push(q.ev[q.next]);
+            q.next += 1;
+        }
+        let (pl, var, done, ti, pass, end) = (q.player, q.var, step >= q.end && q.next >= q.ev.len(), q.theme, q.pass, q.end);
+        let _ = end;
+        for (_, semi, len) in due {
+            self.quote_note(pl, var, semi, len);
+        }
+        if !done {
+            return;
+        }
+        self.quote = None;
+        // pass it around: someone answers or picks up a fragment
+        let mut nxt: Option<(usize, Var)> = None;
+        if pass < 2 {
+            let others: Vec<usize> = [1usize, 3, 4, 5].into_iter().filter(|&i| i != pl && (i == 1 || (self.on[i] && self.cond.lay[i] == 0))).collect();
+            if !others.is_empty() && (var == Var::Call || self.rng.chance(0.4)) {
+                let i = others[self.rng.below(others.len())];
+                let v = if var == Var::Call { Var::Answer } else if i == 1 { Var::Low } else { [Var::Fragment, Var::Invert, Var::Augment][self.rng.weighted(&[0.6, 0.2, 0.2])] };
+                nxt = Some((i, v));
+            }
+        }
+        if let Some((i, v)) = nxt {
+            let from = (step / 16 + 1) * 16;
+            self.start_quote(ti, i, v, from, pass + 1);
+            return;
+        }
+        let secs = if self.quote_test { 25.0 } else { self.rng.range(100.0, 200.0) };
+        self.quote_cool = self.now + (self.sr * secs) as u64;
+        for i in 3..6 {
+            if self.cond.hushv[i] < 1.0 && self.cond.hush_ph[i] > 0 {
+                self.cond.hush_ph[i] = 1;
+            }
+        }
+        self.cond_say("lovely. back to it".into(), Pose::Calm, None);
+        let who = self.pname(pl);
+        self.think(pl, self.minds[pl].status, format!("let the theme go — back to my own lines"));
+        self.band_say(format!("{who} lets the theme go"));
+    }
+
+    fn quote_note(&mut self, pl: usize, var: Var, semi: i32, len: f32) {
+        let pad = matches!(var, Var::Augment) || (var == Var::Low && len >= 6.0);
+        let l = if pad { len + 1.0 } else { (len * 0.92).max(0.8) };
+        match pl {
+            1 => {
+                let vel = if pad { 0.65 } else { 0.72 };
+                let (att, dec) = if pad { (0.08, 4.0) } else { (0.01, 0.6 + 0.08 * len) };
+                self.bass_play(semi, vel, att, dec, l);
+            }
+            3 => {
+                let r = if self.slot_on(Role::Comp) { Some(Role::Comp) } else if self.slot_on(Role::Pad) { Some(Role::Pad) } else { None };
+                match r {
+                    Some(r) => self.role_note(r, semi, if pad { 44 } else { 50 }, l, 0.0),
+                    None => self.bell_for(3, semi as f32 + 12.0, 0.4, 0.0),
+                }
+            }
+            4 => {
+                if self.slot_on(Role::Lead) {
+                    self.role_note(Role::Lead, semi, if pad { 46 } else { 54 }, l, 0.0);
+                } else {
+                    self.bell_for(4, semi as f32 + 12.0, 0.5, 0.0);
+                }
+            }
+            _ => {
+                if self.slot_on(Role::Colour) {
+                    self.role_note(Role::Colour, semi, if pad { 42 } else { 48 }, l, 0.0);
+                } else {
+                    self.bell_for(5, semi as f32, 0.42, 0.0);
+                }
+            }
+        }
+    }
+
+    pub fn quote_report(&self) -> Vec<String> {
+        let mut v = self.quote_log.clone();
+        v.push(format!("quotes: {}", self.n_quotes));
+        v
     }
 
     // --------------------------------------------------- GM layer manager
@@ -2741,11 +3424,12 @@ impl Engine {
             Role::Bass => [1.0, 0.2, 0.0, 0.0],
         };
         let kind = [Kind::Sub, Kind::Fm, Kind::Wave, Kind::Pluck][self.rng.weighted(&w)];
+        // background voices by default: slow attacks, long releases
         let (a, d, s, r) = match role {
-            Role::Pad => (0.6 + ps.register.abs() * 0.8, 1.5, 0.75, 1.8),
-            Role::Comp => (0.004, 0.35 + 0.4 * (1.0 - ps.busy), 0.25, 0.35),
-            Role::Lead => (0.03, 0.5, 0.65, 0.4),
-            Role::Colour => (0.2, 1.2, 0.35, 1.5),
+            Role::Pad => (0.9 + ps.register.abs() * 0.9, 2.0, 0.75, 2.4),
+            Role::Comp => (0.08 + 0.1 * (1.0 - ps.busy), 0.6 + 0.5 * (1.0 - ps.busy), 0.45, 0.9),
+            Role::Lead => (0.12, 0.8, 0.65, 0.9),
+            Role::Colour => (0.6, 1.6, 0.45, 2.0),
             Role::Bass => (0.005, 0.4, 0.6, 0.2),
         };
         let mut p = Patch { kind, a, d, s, r, ..Default::default() };
@@ -2767,15 +3451,16 @@ impl Engine {
                     Role::Colour => 2400.0,
                     Role::Bass => 350.0,
                 };
-                p.cutoff = base * (0.6 + 1.4 * tied);
-                p.res = 0.15 + 0.65 * ps.curiosity;
-                p.env_amt = 0.5 + 2.5 * ps.busy * self.rng.range(0.5, 1.0);
+                // softer filter: lower cutoff, gentler resonance and sweep
+                p.cutoff = base * (0.45 + 0.8 * tied);
+                p.res = 0.1 + 0.4 * ps.curiosity;
+                p.env_amt = 0.3 + 1.4 * ps.busy * self.rng.range(0.5, 1.0);
             }
             Kind::Fm => {
                 p.ops = 2 + (ps.curiosity * 2.99) as u8;
                 let r: &[f32] = if ps.curiosity > 0.55 { &[3.5, 1.41, 2.76, 7.0, 0.5] } else { &[1.0, 2.0, 3.0, 4.0, 0.5] };
                 p.ratio = [1.0, r[self.rng.below(r.len())], r[self.rng.below(r.len())], r[self.rng.below(r.len())]];
-                p.index = 1.0 + 4.0 * tied + 2.0 * ps.busy;
+                p.index = 0.7 + 2.2 * tied + 1.0 * ps.busy;
             }
             Kind::Wave => {
                 p.wa = self.rng.below(5) as u8;
@@ -2784,7 +3469,7 @@ impl Engine {
             }
             Kind::Pluck => {
                 p.damp = 0.990 + 0.0095 * (1.0 - ps.busy);
-                p.bright = (0.25 + 0.7 * tied.max(self.rng.f() * 0.5)).min(0.95);
+                p.bright = (0.15 + 0.5 * tied.max(self.rng.f() * 0.5)).min(0.7);
                 p.a = 0.002;
                 p.s = 1.0;
                 p.d = 1.0;
@@ -3030,6 +3715,7 @@ impl Engine {
         let gain = v as f32 / 100.0;
         let semi = self.in_key(who, semi.round() as i32, 40) as f32;
         self.heard_semi(who, semi.round() as i32, gain);
+        self.mel_until[who] = self.mel_until[who].max(self.now + (self.step_len * 6.0) as u64);
         let sr = self.sr;
         let f = semi_to_freq(self.root, semi);
         let idx = self.bells.iter().position(|b| !b.on).unwrap_or_else(|| {
@@ -3080,7 +3766,12 @@ impl Engine {
         let d1 = sine(&self.tbl, self.drift[0]);
         let d2 = sine(&self.tbl, self.drift[1]);
         let d3 = sine(&self.tbl, self.drift[2]);
-        let tc = 2000.0 * (e * 1.2).exp2() * (0.85 + 0.3 * bri) * (1.0 + 0.15 * warm);
+        self.space_tick = self.space_tick.wrapping_add(1);
+        if self.space_tick % 4 == 0 {
+            self.apply_space();
+        }
+        // the drone bed is a background voice: a darker filter that closes further when ducked
+        let tc = 1300.0 * (e * 1.0).exp2() * (0.85 + 0.3 * bri) * (1.0 + 0.15 * warm) * self.bed_fc;
         self.cutoff += (tc - self.cutoff) * k;
         self.detune += ((5.0 + 4.0 * e) - self.detune) * k;
         self.saw_mix += ((0.42 + 0.15 * warm + 0.15 * e).clamp(0.2, 0.7) - self.saw_mix) * k;
@@ -3234,8 +3925,8 @@ impl Engine {
                 self.cr_count -= 1;
                 let tbl = &self.tbl;
                 // pad (low-mids)
-                let pl = self.pad_f[0].run(self.padl[ci] * self.pad_norm).0;
-                let pr = self.pad_f[1].run(self.padr[ci] * self.pad_norm).0;
+                let pl = self.pad_f[0].run(self.padl[ci] * self.pad_norm).0 * self.bed_g;
+                let pr = self.pad_f[1].run(self.padr[ci] * self.pad_norm).0 * self.bed_g;
                 // sub drone 30-60 Hz: detuned sine pair + a little 2nd/3rd harmonic
                 let f = semi_to_freq(self.root, self.sub_semi);
                 let i1 = f / sr;
@@ -3364,7 +4055,7 @@ impl Engine {
                 // GM
                 let (ml, mr) = if gm_on {
                     let g = self.gm.as_ref().unwrap();
-                    (g.l[j] * gmg, g.r[j] * gmg)
+                    ((g.l[j] + g.dl[j]) * gmg, (g.r[j] + g.dr[j]) * gmg)
                 } else {
                     (0.0, 0.0)
                 };
@@ -3417,6 +4108,33 @@ impl Engine {
                 let g = self.master * self.fade * self.fade * 1.9;
                 l *= g;
                 r *= g;
+                if self.meter.is_some() {
+                    let drums = self.last_drum > 0 && ((self.now + j as u64).saturating_sub(self.last_drum) as f32) < self.step_len * 16.0;
+                    let (gdl, gdr) = match self.gm.as_ref() {
+                        Some(gm) => (gm.dl[j] * gmg, gm.dr[j] * gmg),
+                        None => (0.0, 0.0),
+                    };
+                    let src = [
+                        (yl, yr),
+                        (pl, pr),
+                        (bl, br),
+                        (sub, sub),
+                        (bass, bass),
+                        (kick, kick),
+                        (hat, hat),
+                        (ml - gdl, mr - gdr),
+                        (gdl, gdr),
+                        (gl, gr),
+                        (l / g.max(1e-9), r / g.max(1e-9)),
+                    ];
+                    let m = self.meter.as_mut().unwrap();
+                    let c = drums as usize;
+                    m.n[c] += 1.0;
+                    for (k, (a, b)) in src.iter().enumerate() {
+                        let (a, b) = ((a * g) as f64, (b * g) as f64);
+                        m.p[c][k] += 0.5 * (a * a + b * b);
+                    }
+                }
                 let (ol, or) = self.lim.run(l, r);
                 out[(fi + j) * 2] = ol;
                 out[(fi + j) * 2 + 1] = or;
