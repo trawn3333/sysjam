@@ -17,6 +17,7 @@ pub struct MonitorCfg {
     pub scale_bright: &'static [i32],
     pub default_bright: bool,
     pub root: f32,
+    pub input: bool,
 }
 
 fn read_into(path: &str, buf: &mut String) -> bool {
@@ -297,6 +298,10 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
     let mut started = false;
     let mut screen_change = 0.0f32;
     let mut prev_raw = 0.0f32;
+    let mut input = if cfg.input { Some(crate::input::Tracker::open(cfg.verbose)) } else {
+        if cfg.verbose { say!("input activity: off (--no-input)"); }
+        None
+    };
     let (mut net_r, mut wr_r, mut fd_r) = (0.0f64, 0.0f64, 0.0f64);
     let mut cores_busy = 0usize;
     let start = Instant::now();
@@ -424,7 +429,8 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
             screen_change = (screen_change * 0.85 + (raw_score - prev_raw).abs() * 0.5).min(1.0);
             prev_raw = raw_score;
             started = true;
-            c.sig = crate::band::Signals { cpu: cpu_e, cores: cores_e, net: net_e, file: file_e, fd: fl, screen_change };
+            let act = input.as_mut().map(|t| t.poll()).unwrap_or_default();
+            c.sig = crate::band::Signals { cpu: cpu_e, cores: cores_e, net: net_e, file: file_e, fd: fl, screen_change, keyboard: act.keyboard, mouse: act.mouse };
             c.warmth = score_e.clamp(-1.0, 1.0);
             c.brightness = sc.brightness;
             c.screen_valid = sc.valid;
@@ -440,7 +446,7 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
                     "off".into()
                 };
                 say!(
-                    "[{:5.0}s] cpu {:3.0}% cores {}/{} | net {} | write {} | fds {:.0}/s | screen {} | signals cpu {:.2} net {:.2} file {:.2} | guest: {}",
+                    "[{:5.0}s] cpu {:3.0}% cores {}/{} | net {} | write {} | fds {:.0}/s | keys {:.2} mouse {:.2} | screen {} | signals cpu {:.2} net {:.2} file {:.2} | guest: {}",
                     start.elapsed().as_secs_f32(),
                     cpu_s * 100.0,
                     cores_busy,
@@ -448,6 +454,8 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
                     human(net_r),
                     human(wr_r),
                     fd_r,
+                    act.keyboard,
+                    act.mouse,
                     scr,
                     cpu_e,
                     net_e,

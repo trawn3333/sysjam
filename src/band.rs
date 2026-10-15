@@ -52,6 +52,10 @@ pub struct Signals {
     pub file: f32,
     pub fd: f32,
     pub screen_change: f32,
+    /// keyboard activity 0..1 (counts only)
+    pub keyboard: f32,
+    /// mouse / touchpad activity 0..1
+    pub mouse: f32,
 }
 
 #[derive(Default)]
@@ -79,6 +83,11 @@ pub struct Leader {
     pub bars_in_state: u32,
     pub energy: f32,
     pub agitation: f32,
+    /// sustained chaos: the colour player may bring in industrial noise
+    pub chaos: bool,
+    chaos_t: f32,
+    /// one-shot deliberate industrial colour move (consumed by the engine)
+    pub industrial_move: bool,
     pub n_hi: u32,
     cpu_hi: f32,
     burst: f32,
@@ -110,6 +119,9 @@ impl Leader {
             bars_in_state: 0,
             energy: 0.0,
             agitation: 0.0,
+            chaos: false,
+            chaos_t: 0.0,
+            industrial_move: false,
             n_hi: 0,
             cpu_hi: 0.0,
             burst: 0.0,
@@ -130,11 +142,13 @@ impl Leader {
     /// Fold the machine signals into energy/agitation; detect sustained events.
     pub fn listen(&mut self, s: &Signals, dt: f32, msgs: &mut Vec<String>) -> Requests {
         let mut req = Requests::default();
-        let n_hi = [s.cpu > 0.5, s.net > 0.5, s.file > 0.5, s.cores > 0.5].iter().filter(|&&b| b).count() as u32;
+        let n_hi = [s.cpu > 0.5, s.net > 0.5, s.file > 0.5, s.cores > 0.5, s.keyboard > 0.55].iter().filter(|&&b| b).count() as u32;
         self.n_hi = n_hi;
-        let mut inst = 0.45 * s.cpu + 0.15 * s.cores + 0.2 * s.net + 0.2 * s.file + 0.05 * s.fd + 0.1 * s.screen_change;
+        // keyboard tips energy harder than mouse; both are capped so compositor chatter can't dominate
+        let input = (0.55 * s.keyboard + 0.2 * s.mouse).min(0.45);
+        let mut inst = 0.40 * s.cpu + 0.12 * s.cores + 0.18 * s.net + 0.18 * s.file + 0.04 * s.fd + 0.08 * s.screen_change + input;
         if n_hi >= 2 {
-            inst += 0.15 * (n_hi - 1) as f32;
+            inst += 0.12 * (n_hi - 1) as f32;
         }
         let inst = inst.clamp(0.0, 1.0);
         if !self.started {
@@ -162,6 +176,8 @@ impl Leader {
         if self.energy > 0.4 {
             self.peaked = true;
         }
+        if self.agitation > 0.68 { self.chaos_t = (self.chaos_t + dt).min(10.0) } else { self.chaos_t = (self.chaos_t - 2.0 * dt).max(0.0) }
+        self.chaos = self.chaos_t >= 6.0 || (self.state == State::Alive && n_hi >= 3 && self.agitation > 0.55);
         if self.agitation < 0.12 { self.idle_t += dt } else { self.idle_t = 0.0 }
         if self.peaked && self.idle_t >= 8.0 && self.resolve_cd <= 0.0 {
             self.peaked = false;
@@ -218,7 +234,7 @@ impl Leader {
                     self.go(State::Awaken, msgs)
                 }
             }
-            State::Awaken if dwell_ok && e > 0.42 && r < p => self.go(State::Alive, msgs),
+            State::Awaken if (dwell_ok && e > 0.42 && r < p) || (e > 0.35 && self.agitation > 0.55) => self.go(State::Alive, msgs),
             State::Awaken if dwell_ok && e < 0.15 && r < p => {
                 self.go(State::Subside, msgs);
                 req.resolve = true;
@@ -269,6 +285,8 @@ impl Leader {
                     } else if x < 0.19 {
                         req.modulate = true;
                         msgs.push("bandleader calls a key change".into());
+                    } else if x < 0.22 {
+                        self.industrial_move = true;
                     }
                     self.trade = self.rng.chance(0.4);
                 }

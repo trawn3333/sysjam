@@ -186,6 +186,15 @@ pub struct Engine {
     air_f: Svf,
     air: f32,
     air_target: f32,
+    ind_gain: f32,
+    ind_target: f32,
+    ind_steps: u32,
+    ind_cd: f32,
+    ind_env: f32,
+    ind_pat: u16,
+    ind_f: Svf,
+    ind_f2: Svf,
+    ind_freq: f32,
     riser: f32,
     riser_t: f32,
     riser_f: Svf,
@@ -323,7 +332,16 @@ impl Engine {
             click_gap: 0.0,
             air_f: Svf::default(),
             air: 0.0,
-            air_target: 0.5,
+            air_target: 0.0,
+            ind_gain: 0.0,
+            ind_target: 0.0,
+            ind_steps: 0,
+            ind_cd: 20.0,
+            ind_env: 0.0,
+            ind_pat: 0,
+            ind_f: Svf::default(),
+            ind_f2: Svf::default(),
+            ind_freq: 3000.0,
             riser: 0.0,
             riser_t: 1.0,
             riser_f: Svf::default(),
@@ -527,6 +545,42 @@ impl Engine {
         self.keys_step(s, bar);
         self.lead_step(s, bar);
         self.colour_step(s, bar);
+        self.industrial_step(s);
+    }
+
+    /// Colour player's industrial texture: only when the band hears real chaos
+    /// (or a deliberate colour move). Short, gated, rhythmic; never a blanket.
+    fn industrial_step(&mut self, s: usize) {
+        if self.ind_steps > 0 {
+            self.ind_steps -= 1;
+            let calm = self.leader.agitation < 0.45 && !self.leader.chaos;
+            if self.ind_steps == 0 || calm {
+                self.ind_steps = 0;
+                self.ind_target = 0.0;
+                self.ind_cd = 25.0;
+                self.band_say("colour player lets the industrial noise go".into());
+            } else if (self.ind_pat >> s) & 1 == 1 {
+                self.ind_env = 0.6 + 0.4 * self.rng.f();
+            }
+            return;
+        }
+        if s != 0 || self.ind_cd > 0.0 {
+            return;
+        }
+        let deliberate = std::mem::take(&mut self.leader.industrial_move) && self.leader.state == State::Alive && self.leader.agitation > 0.4;
+        if self.leader.chaos || deliberate {
+            let bars = 1 + self.rng.below(3) as u32;
+            self.ind_steps = 16 * bars;
+            // 4-7 hits per bar, always one on the downbeat
+            let mut pat: u16 = 1;
+            for _ in 0..(3 + self.rng.below(4)) {
+                pat |= 1 << self.rng.below(16);
+            }
+            self.ind_pat = pat;
+            self.ind_freq = self.rng.range(1600.0, 4200.0);
+            self.ind_target = if deliberate && !self.leader.chaos { 0.6 } else { 1.0 };
+            self.band_say(format!("colour player brings in industrial noise ({bars} bar{})", if bars == 1 { "" } else { "s" }));
+        }
     }
 
     fn meander(&self) -> bool {
@@ -618,9 +672,6 @@ impl Engine {
             self.entry_wait = 0;
         }
         // drone/landscape player: air swells, shimmer clouds
-        if self.rng.chance(if self.meander() { 0.15 } else { 0.06 }) {
-            self.air_target = self.rng.range(0.3, 1.0);
-        }
         if self.meander() && self.rng.chance(0.1) {
             for k in 0..(3 + self.rng.below(3)) {
                 let pcs = self.chord().pcs();
@@ -1318,9 +1369,15 @@ impl Engine {
         self.sub_semi += (self.sub_target - self.sub_semi) * sg;
         // bass filter follows its envelope
         self.bass_f.set(140.0 + 520.0 * self.bass_env * (0.4 + e), 0.8, sr);
-        // air layer
+        // air layer: silent by default (kept only as a hook)
         self.air += (self.air_target - self.air) * k * 0.5;
         self.air_f.set(9000.0 + 2500.0 * d3, 0.6, sr);
+        // industrial texture
+        self.ind_cd -= CR as f32 / sr;
+        let ik = 1.0 - (-(CR as f32) / (sr * 0.8)).exp();
+        self.ind_gain += (self.ind_target - self.ind_gain) * ik;
+        self.ind_f.set(self.ind_freq, 1.8, sr);
+        self.ind_f2.set(self.ind_freq * 2.37, 6.0, sr);
         // riser
         if self.riser_t < 1.0 {
             self.riser_t += CR as f32 / (16.0 * self.step_len);
@@ -1501,7 +1558,17 @@ impl Engine {
                 cr *= 0.04;
                 // air / breath (highs) + riser
                 let nz = self.rng.bi();
-                let air = self.air_f.run(nz).1 * self.air * 0.07;
+                let mut air = 0.0;
+                if self.air > 1e-4 {
+                    air = self.air_f.run(nz).1 * self.air * 0.07;
+                }
+                // industrial: gated band-passed noise + a metallic resonance, ~0.018 peak
+                if self.ind_gain > 1e-4 && self.ind_env > 1e-4 {
+                    let g = self.ind_gain * self.ind_env;
+                    let x = self.ind_f.run(nz).1 + 0.5 * self.ind_f2.run(nz).1;
+                    air += x * g * 0.018;
+                    self.ind_env *= 0.9991; // ~25 ms decay at 44.1k
+                }
                 let mut ris = 0.0;
                 if self.riser > 0.0 {
                     ris = self.riser_f.run(self.rng.bi()).1 * self.riser * 0.05;

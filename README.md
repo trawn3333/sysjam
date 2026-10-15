@@ -8,7 +8,7 @@ alive → subsiding**. Chords keep moving even on an idle machine, and General
 MIDI instruments rotate in and out. Under everything sits a continuous deep
 sub drone and bass. No two runs are the same unless you pass `--seed`.
 
-(Formerly developed under the working name *sysmusic*.) Listen: [`docs/sample.mp3`](docs/sample.mp3), a 3-minute idle → spike → busy → idle demo; its verbose log is in `docs/sample-render.log`.
+(Formerly developed under the working name *sysmusic*.) Listen: [`docs/sample.mp3`](docs/sample.mp3) is a 75 s demo at 192 kbps. It starts calm with no hiss, then hits chaos (CPU + network + disk load plus simulated fast typing), where a short burst of industrial noise comes in, then settles again. Its verbose log is `docs/sample-render.log`.
 
 One static-ish binary (`sysjam`, ~1 MB, x86_64, needs glibc ≥ 2.29). It
 links only libc, libm, libpthread and libdl. ALSA, D-Bus and PipeWire are
@@ -35,6 +35,7 @@ loaded at run time with `dlopen`, so it starts even when one of them is missing.
 | `--soundfont PATH`, `--no-gm`, `--gm-layers N` | General MIDI layer (see below); N = 1–4 simultaneous layers (default 3, +1 at peaks) |
 | `--clicks L` | file open/close click texture 0–1 (default 0.25) |
 | `--no-leads` | never let a busy thread sit in as a guest soloist |
+| `--no-input` | don't watch keyboard/mouse activity (see below) |
 | `--no-screen`, `--screen-method auto\|portal\|grim\|x11\|cmd`, `--screen-cmd CMD`, `--screen-interval S` | screen colour (see below) |
 | `--device NAME` | ALSA device (`default`, `pipewire`, `pulse`, `hw:0`) |
 | `--null`, `--duration S`, `--verbose` | testing / logging |
@@ -48,12 +49,12 @@ the bandleader's invitation, the shared energy and what the others are doing.
 
 | Player | Plays | Listens to |
 |---|---|---|
-| **Drone / landscape** | Continuous sub drone (detuned sine pair at 30–60 Hz plus 2nd/3rd harmonics, gliding to each chord root), a voice-led detuned pad (low-mids), and air/breath noise up to ~12–16 kHz. Never lays out | energy, screen brightness |
+| **Drone / landscape** | Continuous sub drone (detuned sine pair at 30–60 Hz plus 2nd/3rd harmonics, gliding to each chord root), and a voice-led detuned pad (low-mids). Never lays out. There is no constant hiss/air bed | energy, screen brightness |
 | **Bassist** | Roots and fifths at 40–120 Hz, in three styles: long notes, pulsing roots, or a syncopated groove. Plays approach notes into the next chord. Heavy file/disk activity makes it busier | file + disk writes, the drummer |
 | **Drummer** | Synth kick, plus the GM kit (channel 10) when a SoundFont is loaded. Locks onto the bassist's syncopations, adds fills and risers before section changes, crashes on entries | CPU, cores, the bassist |
 | **Keys** | GM pads hold chord tones (common tones are kept between chords). Keys/plucks play arps, broken chords or offbeat comping, and take solos when invited | energy, the lead (trading) |
 | **Lead / melody** | Sparse two-bar call phrases built from a motif it develops (repeat, sequence, invert, vary, fragment, new idea). Rests between phrases, and resolves the melody before laying out | agitation, colour player, keys |
-| **Colour / FX** | Bells, shimmer clouds driven by network traffic, swells, odd GM colours (FX Atmosphere, Seashore, …). Answers the lead's phrases | network, the lead |
+| **Colour / FX** | Bells, shimmer clouds driven by network traffic, swells, odd GM colours (FX Atmosphere, Seashore, …). Answers the lead's phrases. **Industrial texture:** only when the band hears real chaos, i.e. agitation above 0.68 for 6 s, or alive with 3+ hot signals at once, or a rare deliberate colour move while alive. It is 1–3 bars of gated, rhythmic band-passed noise with a metallic resonance (peak ≈ 0.018, about −12 dB under the old continuous air bed and gated, so it averages far lower). It fades out as soon as things calm down, then waits 25 s before it can come back | network, the lead, chaos |
 | *Guest* | A thread using >40% of a core for >10 s may sit in as a single quiet guest voice. It holds for ≥25 s, is released 10 s after it drops below 25%, then a 20 s cooldown applies. Compositor, audio-server and sysjam threads are ignored | that thread |
 
 **Bandleader / arrangement.**
@@ -140,11 +141,11 @@ The bands are filled deliberately:
 - **bass** 60–250 Hz: bass voice and GM bass;
 - **low-mids**: pad;
 - **mids**: GM instruments, arps and lead;
-- **highs**: bells, hats, air noise and risers up to ~16 kHz.
+- **highs**: bells, hats, cymbals and risers. The upper band stays quiet when calm; brief industrial noise only appears in chaos.
 
 A gentle look-ahead-free limiter with a soft clip sits at the end of the chain.
 
-Measured on the demo render (`tools/bands.py`, energy per band relative to the 800 Hz–3 kHz mids):
+Measured on the earlier 3-minute demo render (`tools/bands.py`, energy per band relative to the 800 Hz–3 kHz mids). That render still had the old air bed; in the new 75 s demo the 6–16 kHz band in the calm part is −34.9 dB (it was −27.6 dB), and sub/bass are +13.2/+7.2 dB calm and +8.5/−0.2 dB in chaos:
 
 | band | idle 2–32 s | busy 50–110 s | winding down 140–178 s |
 |---|---|---|---|
@@ -157,6 +158,19 @@ Measured on the demo render (`tools/bands.py`, energy per band relative to the 8
 
 Level is about −15 dBFS RMS with peaks around −2 to −5 dBFS. On small
 speakers, raise `--sub` (up to 2) or lower `--volume`.
+
+## Keyboard / mouse activity
+
+Intense typing makes the band pick up, and mouse bursts nudge it more gently.
+These are improvisational cues, not one click per keypress. sysjam only counts
+**how many** input events happen; it never reads which keys.
+
+Detection order (no root needed):
+1. **`/proc/interrupts`**: deltas of the `i8042` lines (irq 1 = keyboard, irq 12 = PS/2 mouse/touchpad) and i2c-HID touchpad lines. Readable by everyone and essentially free. This covers most laptops' built-in keyboards and touchpads. USB keyboards don't get their own line (they share the USB controller's interrupt), so they are not counted this way.
+2. **`/dev/input/event*`**, opened read-only and non-blocking, but only if your user can open them (the `input` group). Devices are classified by their sysfs name (keyboard / mouse / touchpad / trackpoint); everything else is skipped. sysjam counts key presses/repeats and motion events. Key codes are discarded unread and nothing is stored.
+3. Otherwise it is off. `--verbose` prints one line saying why, and the music carries on.
+
+Rates are smoothed over ~3 s and mapped to 0–1: about 6 keystrokes/s saturates the keyboard, and continuous mouse motion only reaches the mouse cap. The two together can add at most 0.45 to the bandleader's energy input, so they push but never dominate on their own. Heavy typing counts as a "hot" signal, and with high agitation it lets awakening → alive happen before the usual dwell. `--no-input` turns it off.
 
 ## Screen colour
 
@@ -215,6 +229,8 @@ Measured exactly (schedstat, all threads) on an 8-vCPU Xeon VM:
 | idle, FluidR3 GM (140 MB SoundFont) | 1.97% | 146 MB |
 | idle, shipped TimGM6mb | 1.77% | 10 MB |
 | idle, `--no-gm` | 1.47% | 3.7 MB |
+| idle, TimGM6mb, input tracking on (/proc/interrupts) vs `--no-input` | 1.87% vs 1.63% (difference within run-to-run noise) | 10 MB |
+| 75 s chaos demo (`tools/demo_short.sh`) | 2.15% | |
 | 3-min demo under heavy load (stress-ng, ~50 MB/s downloads, ~500 MB/s direct writes), incl. WAV writing | 2.50% | |
 | offline engine only, alive state | ~1.7% | |
 
@@ -249,7 +265,8 @@ mkdir -p dist && cp target/x86_64-unknown-linux-gnu/release/sysjam dist/
 Requires rustc ≥ 1.85 (rustysynth is pinned to 1.3.5).
 
 Tools:
-- `tools/demo.sh` renders the 3-minute `dist/sample.wav` (the MP3 is in `docs/`) while load goes idle → spike → busy → idle.
+- `tools/demo_short.sh` renders the 75 s calm → chaos → calm demo. Typing is simulated through a fake `/proc/interrupts` (`SYSJAM_INTERRUPTS`).
+- `tools/demo.sh` renders a 3-minute idle → spike → busy → idle demo.
 - `tools/bands.py` prints band energies.
 - `tools/measure.py SECS ./sysjam --null` measures sysjam's own CPU.
 - `tools/portal_test.sh BIN COLOR ARGS…` runs the end-to-end portal test. It uses a private D-Bus, pipewire, wireplumber, a GStreamer test source and `tools/mock_portal.py`.
