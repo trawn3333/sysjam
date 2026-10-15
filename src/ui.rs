@@ -36,6 +36,18 @@ pub struct Mind {
     pub away: bool,
     /// the machine signal this player is tied to, with its level
     pub tied: String,
+    /// the conductor is talking to this player right now
+    pub addressed: bool,
+}
+
+/// What the conductor is doing (pose drives the little figure).
+#[derive(Clone, Default)]
+pub struct CondSnap {
+    pub pose: crate::conductor::Pose,
+    pub speech: String,
+    pub target: Option<&'static str>,
+    pub count: u32,
+    pub clutter: f32,
 }
 
 #[derive(Clone, Default)]
@@ -56,6 +68,7 @@ pub struct BandSnap {
     pub state: &'static str,
     pub energy: f32,
     pub agitation: f32,
+    pub cond: CondSnap,
     pub minds: Vec<Mind>,
     /// sub, bass, mid, high in dBFS
     pub levels: [f32; 4],
@@ -268,6 +281,7 @@ fn status_color(s: &str) -> Color {
         "comping" => Color::LightGreen,
         "following" => Color::LightCyan,
         "laying out" => Color::DarkGray,
+        "holding" => Color::Blue,
         _ => Color::Gray,
     }
 }
@@ -286,10 +300,11 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
     draw_band(f, mid[0], b);
     let right = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(10), Constraint::Length(6)])
+        .constraints([Constraint::Length(7), Constraint::Min(8), Constraint::Length(6)])
         .split(mid[1]);
-    draw_machine(f, right[0], m);
-    draw_levels(f, right[1], b);
+    draw_conductor(f, right[0], b);
+    draw_machine(f, right[1], m);
+    draw_levels(f, right[2], b);
     draw_log(f, rows[2], log);
 }
 
@@ -362,6 +377,54 @@ fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, 
     f.render_widget(p, r);
 }
 
+fn draw_conductor(f: &mut Frame, r: Rect, b: &BandSnap) {
+    use crate::conductor::{frame, Pose};
+    let c = &b.cond;
+    let title = format!(" conductor · {} cue{} ", c.count, if c.count == 1 { "" } else { "s" });
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(r);
+    f.render_widget(block, r);
+    let col = match c.pose {
+        Pose::Calm => Color::LightYellow,
+        Pose::Shh => Color::LightMagenta,
+        Pose::Point => Color::LightCyan,
+        Pose::Surge => Color::LightRed,
+        Pose::Rest => Color::DarkGray,
+    };
+    let art = frame(c.pose, b.beat);
+    let w = inner.width as usize;
+    let tw = w.saturating_sub(13).max(8);
+    // speech, word-wrapped beside the figure
+    let mut said: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let text = if c.speech.is_empty() { String::new() } else { format!("“{}”", c.speech) };
+    for word in text.split_whitespace() {
+        if cur.chars().count() + word.chars().count() + 1 > tw && !cur.is_empty() {
+            said.push(std::mem::take(&mut cur));
+        }
+        if !cur.is_empty() {
+            cur.push(' ');
+        }
+        cur.push_str(word);
+    }
+    if !cur.is_empty() {
+        said.push(cur);
+    }
+    let mut lines = Vec::new();
+    for (k, a) in art.iter().enumerate() {
+        let mut sp = vec![Span::styled(format!("{a:<12} "), Style::default().fg(col).add_modifier(Modifier::BOLD))];
+        let row = k.checked_sub(1).and_then(|j| said.get(j));
+        if let Some(t) = row {
+            sp.push(Span::styled(t.clone(), Style::default().fg(Color::White)));
+        } else if k == 4 {
+            let tgt = c.target.map(|t| format!("→ {t}  ")).unwrap_or_default();
+            sp.push(Span::styled(format!("{tgt}clutter {}", meter(c.clutter.min(1.5) / 1.5, 8)), Style::default().fg(Color::DarkGray)));
+        }
+        lines.push(Line::from(sp));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
 fn draw_band(f: &mut Frame, r: Rect, b: &BandSnap) {
     let block = Block::default().borders(Borders::ALL).title(" the band ");
     let inner = block.inner(r);
@@ -374,7 +437,10 @@ fn draw_band(f: &mut Frame, r: Rect, b: &BandSnap) {
     for mi in &b.minds {
         let st = status_color(mi.status);
         let mut l1 = vec![
-            Span::styled(format!("{:<9}", mi.name), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{:<9}", mi.name),
+                if mi.addressed { Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) },
+            ),
             Span::styled(format!("{:<11}", mi.status), Style::default().fg(st)),
             Span::styled(meter(mi.activity, 8), Style::default().fg(st)),
             Span::raw(" "),
@@ -390,7 +456,8 @@ fn draw_band(f: &mut Frame, r: Rect, b: &BandSnap) {
         lines.push(Line::from(l1));
         if per >= 2 {
             let t: String = format!("  ↳ {}", mi.think).chars().take(w).collect();
-            lines.push(Line::from(Span::styled(t, Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC))));
+            let ts = if mi.addressed { Style::default().fg(Color::LightYellow).add_modifier(Modifier::ITALIC) } else { Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC) };
+            lines.push(Line::from(Span::styled(t, ts)));
         }
         if per >= 3 {
             let notes = if mi.notes.is_empty() { "·".to_string() } else { mi.notes.join(" ") };

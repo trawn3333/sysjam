@@ -12,6 +12,7 @@ macro_rules! say {
 
 mod audio;
 mod band;
+mod conductor;
 mod dbus;
 mod dsp;
 mod gm;
@@ -294,6 +295,10 @@ fn main() {
             let e = t.elapsed().as_secs_f64();
             say!("bench {phase} ({:.0}-{:.0}s): {secs} s audio in {e:.3} s = {:.2}% of one core", t_base, en.time(), e / secs as f64 * 100.0);
         }
+        for l in en.density_report().lines() {
+            say!("bench {l}");
+        }
+        say!("bench {}", en.conductor_stats());
         let (distinct, gm_picks, synth) = en.sound_stats();
         say!("bench sounds: {distinct} distinct GM programs, {gm_picks} GM picks, {synth} synth patches designed");
         return;

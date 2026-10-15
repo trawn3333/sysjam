@@ -71,12 +71,25 @@ crossterm) that shows how the band is thinking. Piped or redirected output, or
     e.g. `inspired by the modulation to D minor → picking up a fifths lead`;
   - the notes it played in the last few seconds, plus the machine signal it is tied
     to (`⇢ net 98%`) and its personality (`curious 0.4 eager 0.5 busy 0.6`).
+- **Conductor** (top right): a little figure that conducts in time with the beat.
+  Its pose changes with what it's doing:
+  - tracing a 4/4 pattern with the baton while the band plays;
+  - sitting on a stool (`z Z`) while the band is chilling and the drone carries it;
+  - `shh…` with a finger to its lips when it hushes someone;
+  - pointing when it cues a player or invites one back;
+  - both arms up during a surge.
+
+  Its speech line shows the current instruction, e.g. `“keys, bring it down”`, with
+  the addressed player and a clutter meter beneath. The addressed player's panel
+  lights up yellow for a few seconds, and its thinking line shows the exchange:
+  `conductor: keys, bring it down → “ok, quieter”`. The panel title counts the
+  interventions so far.
 - **Machine**: CPU, busy cores, network, disk writes, file churn, keyboard and
   mouse rates, each with a sparkline of the last two minutes. Below them sit a
   swatch of the sampled screen colour and the busiest threads.
 - **Levels**: sub (< 60 Hz), bass, mid and high meters of the output.
 - **Band events**: a rate-limited log of instrument changes, band moves,
-  modulations and guests.
+  modulations, guests, and the conductor's instructions with the players' replies.
 
 Keys:
 
@@ -107,6 +120,58 @@ the bandleader's invitation, the shared energy and what the others are doing.
 | **Lead / melody** | Sparse two-bar call phrases built from a motif it develops (repeat, sequence, invert, vary, fragment, new idea). Rests between phrases, and resolves the melody before laying out | agitation, colour player, keys |
 | **Colour / FX** | Bells, shimmer clouds driven by network traffic, swells, odd GM colours (FX Atmosphere, Seashore, …). Answers the lead's phrases. **Industrial texture:** only when the band hears real chaos, i.e. agitation above 0.68 for 6 s, or alive with 3+ hot signals at once, or a rare deliberate colour move while alive. It is 1–3 bars of gated, rhythmic band-passed noise with a metallic resonance (peak ≈ 0.018, about −12 dB under the old continuous air bed and gated, so it averages far lower). It fades out as soon as things calm down, then waits 25 s before it can come back | network, the lead, chaos |
 | *Guest* | A thread using >40% of a core for >10 s may sit in as a single quiet guest voice. It holds for ≥25 s, is released 10 s after it drops below 25%, then a 20 s cooldown applies. Compositor, audio-server and sysjam threads are ignored | that thread |
+
+**Restraint: play only when there's something to add.** Players are calm by
+default. At every phrase, keys, lead and colour each decide to **play**, **hold**
+a single sustained tone, or **rest**. The decision weighs:
+- the arrangement state (chilling leans hard towards resting);
+- the player's tied signal, and whether it just changed;
+- how dense the rest of the band already is;
+- novelty: a freshly picked-up sound counts in favour, while playing many phrases in a row ("fatigue") and doubling another player count against.
+
+The reason shows in the thinking line, e.g. `band is busy enough (9 notes/bar) → nothing useful to add, resting`,
+`holding one long chord tone under the drone`, or `my signal is up (net 92%) → worth playing`.
+
+In **chilling**, most players rest or hold one long tone, and the drone, pad and deep bass carry it.
+
+Patterns are sparser overall:
+- keys: mostly sparse stabs; arpeggios in quarters, eighths only when alive;
+- lead: one bar of call per phrase, two when alive;
+- colour: a few shimmer bells per bar at most;
+- drone: rarer landscape bells;
+- drums: hats in eighths, auxiliary percussion on the off-beats only.
+
+**Synth patches** are thinned the hardest: short notes are dropped 40% of the time and the rest are lengthened 1.7×.
+Surges and alive moments stay energetic, mostly through the bass and drums.
+
+**The conductor.** Every bar the conductor listens to the whole band:
+- note density of keys + lead + colour against a state target (about 1.5 notes/bar chilling, 4 awakening, 8 alive, 2.5 subsiding, 5 in a surge);
+- players crowding the same register within two beats, and players stepping on the lead;
+- the mid/high share of the output spectrum, and the loudness.
+
+When the mix gets out of control it steps in, at most every 8 s and never nagging one player more than every 20 s:
+- **hush** the worst offender: velocity down, and short notes thinned out by half, for 2 phrases;
+- tell it to **lay out** for 1–2 phrases (repeat offenders, or bad clutter);
+- **cue** the band when things are badly out of hand: `everyone drop to the drone` (chilling/subsiding; the bassist goes to long notes) or `bass and drums only`;
+- **invite** a resting player back (`keys, come back in — softly`) when space opens up.
+
+Players respect it, but stubborn ones (high eagerness/busyness) grumble first and comply a bar later:
+`conductor: keys (synth), lay out 2 phrases → “one more lick? …ok, ok”`.
+Soloists are left alone. `SYSJAM_COND_LOG=1` prints the conductor's measurements every phrase on stderr.
+
+**Note density, before vs after** (offline 200 s bench, `SYSJAM_BENCH=1`, time-weighted over seeds 1, 5, 11 and 23, notes per minute):
+
+| player | chilling before → after | alive before → after |
+|---|---|---|
+| drone (pad voices that move + sub glides) | 21 → 22 | 69 → 80 |
+| bass | 5 → 5 | 155 → 179 |
+| drums | 0 → 0 | 480 → 303 |
+| keys | 15 → 6 | 216 → 89 |
+| lead | 4 → 5 | 27 → 21 |
+| colour | 37 → 9 | 72 → 28 |
+| **total** | **83 → 48 (−42%)** | **1018 → 700 (−31%)** |
+
+Across the four runs the conductor stepped in 11 times: 7 hushes, 2 lay-outs and 2 invitations back, with 3 grumbles. Restraint alone keeps most phrases tidy, so the conductor only acts when a player really overdoes it.
 
 **Bandleader / arrangement.**
 - **Energy** is a 15 s average of the system signals; **agitation** is a 3 s average.
@@ -148,8 +213,9 @@ target tempo, depending on the arrangement state and its agitation:
 The tempo never jumps. It ramps smoothly over 2–8 bars (at most 24 bpm per ramp), one tiny step-length change per sixteenth, so the step clock stays glitch-free. The echo time follows the tempo, gliding one sample at a time. Sometimes the drummer plays a phrase or two in **half-time** or **double-time** feel. `--bpm N` locks the tempo; feel moves still happen.
 
 **Surges.** Every so often the band opens the throttle. A surge is rare: the
-first one can come after about 40 s, later ones at least 2.5 minutes apart. It is
-much more likely when the band is alive or the typing is intense. When it fires:
+first one can come after about 40 s, later ones at least 2.5 minutes apart. It only
+starts while the band is awakening or alive (or from any state when the typing is
+racing), and it is much more likely when the band is alive or the typing is intense. When it fires:
 - the tempo ramps to 120–150 bpm over 2 bars, holds for 2–4 phrases, then winds back down over 6 bars to the middle of the state's tempo range;
 - the drummer drops into a lopsided Harley-Davidson V-twin **"potato-potato" lope**: long-short pairs of deep kicks (38–47 Hz bodies) and floor toms on sixteenths 0, 3, 8 and 11, with a soft rim;
 - the bassist thuds the root on the same long-short pulse with a growl patch;
@@ -412,6 +478,7 @@ Measured exactly (schedstat, all threads) on an 8-vCPU Xeon VM:
 | offline engine only, alive state | ~1.7% | |
 | idle, FluidR3, **live terminal UI on** vs `--no-tui` (same seed, side by side, 120 s, /proc utime+stime) | 2.22% vs 1.89% (the UI thread itself: 0.27%) | |
 | idle, TimGM6mb, synth voice pool + per-player keys, **UI on** vs `--no-tui` (side by side, 60 s) | 2.05% vs 1.71% | |
+| idle, TimGM6mb, restraint + conductor, **UI on with the conductor panel** vs `--no-tui` (side by side, 60 s) | 1.81% vs 1.61% (UI thread 0.28%, audio thread 1.28%) | |
 | alive under heavy load (busy thread as guest, ~400 MB/s writes, ~40 MB/s downloads, file churn), UI on, X11 screen sampling, 60 s | 3.05% | |
 
 ## Troubleshooting
@@ -450,7 +517,7 @@ Tools:
 - `tools/bands.py` prints band energies.
 - `tools/measure.py SECS ./sysjam --null` measures sysjam's own CPU.
 - `tools/portal_test.sh BIN COLOR ARGS…` runs the end-to-end portal test. It uses a private D-Bus, pipewire, wireplumber, a GStreamer test source and `tools/mock_portal.py`.
-- `SYSJAM_BENCH=1 SYSJAM_BENCH_LOG=1 ./sysjam --seed 1` gives an offline 200 s timeline with CPU figures.
+- `SYSJAM_BENCH=1 SYSJAM_BENCH_LOG=1 ./sysjam --seed 1` gives an offline 200 s timeline with CPU figures, per-player note density per state and the conductor's intervention count.
 
 ## Licence
 
