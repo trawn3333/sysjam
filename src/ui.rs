@@ -317,7 +317,9 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
         last_beat = beat_i;
         // the full UI refreshes at 2 fps (or at once after a key); in between only the
         // little people are redrawn over the cached frame
-        let full = force_full || last_full.elapsed() >= Duration::from_millis(500) || cache.is_none();
+        // (a big terminal refreshes its panels a little less often: the cost grows with its area)
+        let full_ms = cache.as_ref().map_or(500, |c| (500.0 * (c.area.width as f32 * c.area.height as f32 / 9520.0).max(1.0)).min(1000.0) as u64);
+        let full = force_full || last_full.elapsed() >= Duration::from_millis(full_ms) || cache.is_none();
         if full && !paused {
             if let Ok(b) = ui.band.lock() {
                 if b.version != band.version {
@@ -410,7 +412,7 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
     }
     if let Some(p) = std::env::var_os("SYSJAM_UIPROF") {
         let el = prof.3.elapsed().as_secs_f64();
-        let _ = std::fs::write(p, format!("frames {} ({} unchanged, skipped) in {el:.1}s; widgets {:.3}% core (full frames {:.3}%, stage {:.3}%, crowd {:.3}%, diff {:.3}%, emitted cells/s {:.0}), terminal diff+write {:.3}% core\n", prof.2, prof.4, prof.0.as_secs_f64() / el * 100.0, prof_full.as_secs_f64() / el * 100.0, PROF_STAGE.load(Ordering::Relaxed) as f64 / 1e9 / el * 100.0, PROF_CROWD.load(Ordering::Relaxed) as f64 / 1e9 / el * 100.0, PROF_DIFF.load(Ordering::Relaxed) as f64 / 1e9 / el * 100.0, PROF_EMIT.load(Ordering::Relaxed) as f64 / el, prof.1.as_secs_f64() / el * 100.0));
+        let _ = std::fs::write(p, format!("frames {} ({} unchanged, skipped) in {el:.1}s; widgets {:.3}% core (full frames {:.3}%, stage {:.3}%, crowd {:.3}%, diff {:.3}%, emitted cells/s {:.0}, crowd {:.0}), terminal diff+write {:.3}% core\n", prof.2, prof.4, prof.0.as_secs_f64() / el * 100.0, prof_full.as_secs_f64() / el * 100.0, PROF_STAGE.load(Ordering::Relaxed) as f64 / 1e9 / el * 100.0, PROF_CROWD.load(Ordering::Relaxed) as f64 / 1e9 / el * 100.0, PROF_DIFF.load(Ordering::Relaxed) as f64 / 1e9 / el * 100.0, PROF_EMIT.load(Ordering::Relaxed) as f64 / el, PROF_CROWD_CELLS.load(Ordering::Relaxed) as f64 / el, prof.1.as_secs_f64() / el * 100.0));
     }
     TUI_ON.store(false, Ordering::SeqCst);
     restore();
@@ -521,12 +523,31 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
         _ => roomy,
     };
     crate::audience::SHOWN.store(crowd_on, Ordering::Relaxed);
-    let need = 30 + CROWD_H - 1;
+    // the band panel keeps what the stage needs; the extra height goes to the crowd, as more
+    // stacked rows of people (1 row on the smallest crowd terminal, up to CROWD_MAX_LAYERS)
     let mut log_h = 7u16;
     let mut show_crowd = false;
-    if crowd_on && area.height >= 5 + 5 + need {
-        show_crowd = true;
-        log_h = (area.height - 5 - need).min(7);
+    let mut crowd_h = 0u16;
+    if crowd_on {
+        let fit = |log: u16| -> u16 { area.height.saturating_sub(5 + log + BAND_NEED - 1) };
+        let mut avail = fit(7);
+        if avail < crowd_h_for(1) {
+            log_h = (7 - (crowd_h_for(1) - avail).min(5)).max(2);
+            avail = fit(log_h);
+        }
+        if avail >= crowd_h_for(1) {
+            show_crowd = true;
+            let mut layers = (1..=CROWD_MAX_LAYERS).rev().find(|&n| crowd_h_for(n) <= avail).unwrap_or(1);
+            // the height goes to people first: the log gives up to 3 lines for one more row
+            if layers < CROWD_MAX_LAYERS && log_h > 4 && crowd_h_for(layers + 1) <= fit(4) {
+                layers += 1;
+                while log_h > 4 && crowd_h_for(layers) > fit(log_h) {
+                    log_h -= 1;
+                }
+            }
+            anim.floor.rows = layers;
+            crowd_h = crowd_h_for(layers);
+        }
     }
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -540,8 +561,8 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
     anim.crowd = m.crowd.clone();
     if show_crowd {
         let l = mid[0];
-        let band = Rect { height: l.height - (CROWD_H - 1), ..l };
-        let cr = Rect { y: l.y + band.height - 1, height: CROWD_H, ..l };
+        let band = Rect { height: l.height - (crowd_h - 1), ..l };
+        let cr = Rect { y: l.y + band.height - 1, height: crowd_h, ..l };
         draw_band(f, band, b, anim, ctx);
         draw_crowd(f, cr, b, anim, ctx);
     } else {
@@ -1057,9 +1078,11 @@ fn anim_cells(b: &BandSnap, anim: &mut Anim, ctx: &Ctx) -> (Vec<(u16, u16, Strin
     // number of colour runs doesn't shift the musicians' cells
     if let Some((r, fw)) = anim.aud {
         let beat = ctx.pos.map(|p| p.beats().floor() as i64).unwrap_or(0);
-        if anim.crowd_rows.is_empty() || anim.crowd_t.elapsed() >= Duration::from_millis(120) || beat != anim.crowd_beat || anim.crowd_rows[0].len() != fw {
+        if anim.crowd_rows.is_empty() || anim.crowd_t.elapsed() >= Duration::from_millis(if anim.floor.rows >= 4 { 170 } else { 120 }) || beat != anim.crowd_beat || anim.crowd_rows[0].len() != fw {
             let g = crowd_grid(b, anim, ctx, fw);
+            let n0 = delta.len();
             grid_delta(&anim.crowd_rows, &g, r.x, r.y, false, &mut delta);
+            PROF_CROWD_CELLS.fetch_add(delta[n0..].iter().map(|c| c.3 as u64).sum::<u64>(), Ordering::Relaxed);
             anim.crowd_rows = g;
             anim.crowd_t = Instant::now();
             anim.crowd_beat = beat;
@@ -1422,10 +1445,20 @@ fn stage_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> 
     Some(g)
 }
 
-/// crowd rows inside the panel: headroom, three depth layers, name tags
-const CROWD_ROWS: usize = 11;
+/// rows the band panel (the stage) keeps before the crowd gets the rest
+const BAND_NEED: u16 = 30;
+/// most stacked rows of people on the floor
+const CROWD_MAX_LAYERS: usize = 6;
+/// crowd rows inside the panel for `n` stacked rows of people: headroom, each row 3 rows
+/// above the one in front (back rows' legs hide behind the heads in front), the front row's
+/// 5-row figures, name tags
+fn crowd_rows_for(n: usize) -> usize {
+    3 * n.max(1) + 4
+}
 /// crowd panel rows incl. borders
-const CROWD_H: u16 = CROWD_ROWS as u16 + 2;
+fn crowd_h_for(n: usize) -> u16 {
+    crowd_rows_for(n) as u16 + 2
+}
 /// the crowd only shows on a terminal big enough to draw it well (`a` overrides)
 const CROWD_MIN_W: u16 = 160;
 const CROWD_MIN_H: u16 = 55;
@@ -1454,6 +1487,7 @@ type Cell = (char, Color, Color);
 /// layers, drawn back to front (painter's algorithm): small hazy figures at the back, then
 /// the middle, then the front row at the stage; a floor gradient and a little haze behind.
 static PROF_CROWD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static PROF_CROWD_CELLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static PROF_DIFF: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static PROF_EMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 fn crowd_grid(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<Cell>> {
@@ -1468,8 +1502,9 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
     anim.floor.step(&anim.crowd, fw, v);
     let ascii = crate::theme::ascii();
     let emoji = !ascii && std::env::var("SYSJAM_EMOJI").map_or(true, |e| e != "0");
-    // rows: headroom, back layer (rows 1-3), middle (2-6), front (5-9), name tags (10)
-    let nrows = CROWD_ROWS;
+    // rows: headroom, then the stacked rows of people (back to front, 3 rows apart), tags
+    let layers = anim.floor.rows.max(1);
+    let nrows = crowd_rows_for(layers);
     let tag_row = nrows - 1;
     let bgs: Vec<Color> = (0..nrows).map(|k| crate::theme::floor_bg(k, nrows)).collect();
     let mut g: Vec<Vec<Cell>> = (0..nrows).map(|k| vec![(' ', Color::Reset, bgs[k]); fw]).collect();
@@ -1477,7 +1512,7 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
     if !ascii {
         let hz = crate::theme::dim(Color::DarkGray, 2);
         let t = anim.floor.t;
-        for k in 1..3 {
+        for k in 1..(1 + 2 * layers.min(2)).min(nrows - 1) {
             for x in (0..fw).step_by(23) {
                 let xx = (x as f32 + t * (0.6 + k as f32 * 0.2) + k as f32 * 4.0) as usize % fw;
                 g[k][xx] = ('·', hz, bgs[k]);
@@ -1491,7 +1526,7 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
     let mut tags: Vec<(bool, i32, String, Color)> = Vec::new();
     // back to front; walkers on top within a layer
     let mut order: Vec<usize> = (0..anim.floor.people.len()).collect();
-    let layer = |z: f32| -> usize { (z + 0.5).floor().clamp(0.0, 2.0) as usize };
+    let layer = |z: f32| -> usize { (z + 0.5).floor().clamp(0.0, (layers - 1) as f32) as usize };
     order.sort_by_key(|&i| {
         let p = &anim.floor.people[i];
         (layer(p.z), (p.act != Act::Here) as u8)
@@ -1500,7 +1535,12 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
         let p = &anim.floor.people[i];
         let m = &p.m;
         let z = layer(p.z);
-        let look = Look { style: b.style_id, act: p.act, vibe: v, beats, t: t + (p.seed % 1000) as f32 * 0.013, cpu: m.cpu, disk: m.disk > 2e5, chat: m.chat > 2e4, idle: m.idle, step: p.step, beer: p.beer, id: p.seed, surge, chorus };
+        // how far back: 0 = the front row at the stage
+        let depth = layers - 1 - z;
+        // far away (the small figures) moves only on the beat: fewer cells to repaint;
+        // a deep (5-row) crowd moves on the eighths, so a big screen stays cheap
+        let (lb, lt) = if depth >= 2 { (beats.floor(), (t * 2.0).floor() * 0.5) } else if (depth == 1 && layers >= 3) || layers >= 5 { ((beats * 2.0).floor() * 0.5, (t * 4.0).floor() * 0.25) } else { (beats, t) };
+        let look = Look { style: b.style_id, act: p.act, vibe: v, beats: lb, t: lt + (p.seed % 1000) as f32 * 0.013, cpu: m.cpu, disk: m.disk > 2e5, chat: m.chat > 2e4, idle: m.idle, step: p.step, beer: p.beer, id: p.seed, surge, chorus };
         let base = if matches!(p.act, Act::Wave | Act::Leave) {
             Color::Gray
         } else if p.act == Act::Bar || p.act == Act::ToBar {
@@ -1519,14 +1559,16 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
             Color::Gray
         };
         // depth = haze: the back row is dimmer (blended toward the floor), the middle a bit
-        let col = crate::theme::dim(base, [2u8, 1, 0][z]);
-        let (rows, lift, dx): (Vec<String>, bool, i32) = if z == 0 {
+        let col = crate::theme::dim(base, depth.min(2) as u8);
+        // the two rows nearest the stage are full size, the ones behind them smaller
+        let small = depth >= 2;
+        let (rows, lift, dx): (Vec<String>, bool, i32) = if small {
             (fig_small(&look).to_vec(), false, 0)
         } else {
             let (r, l, d) = fig(&look);
             (r.to_vec(), l, d)
         };
-        let y0: i32 = [1, 2, 5][z] - lift as i32;
+        let y0: i32 = 1 + 3 * z as i32 + small as i32 - lift as i32;
         let x0 = p.x.round() as i32 + if p.act == Act::Here { dx - 1 } else { 0 };
         let top_row = rows.iter().position(|r| r.trim() != "").unwrap_or(0) as i32;
         for (r, row) in rows.iter().enumerate() {
@@ -1547,7 +1589,7 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
             }
         }
         // something held up overhead, swaying on the beat
-        if z > 0 {
+        if !small {
             if let Some((it, sway)) = item(&look) {
                 let (gl, w) = it.glyph(ascii, emoji);
                 let y = y0 + top_row - 1;
@@ -1574,13 +1616,14 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
                 }
             }
         }
-        if z == 0 {
-            continue; // the back row is too far away for name tags
+        if depth >= 2 || (depth == 1 && layers == 1) {
+            continue; // the rows further back are too far away for name tags
         }
         let show_file = m.file.is_some() && ((t / 4.0) as u32 + p.seed % 7) % 3 == 0;
         let label = if show_file { m.file.clone().unwrap().chars().take(SLOT - 1).collect::<String>() } else { tag(&m.name, SLOT - 1) };
-        let tcol = if show_file { th(Color::Cyan) } else if m.fresh && m.cpu > 0.02 { th(Color::LightYellow) } else { crate::theme::dim(Color::DarkGray, if z == 1 { 1 } else { 0 }) };
-        let lx = x0 + FW as i32 / 2 - label.chars().count() as i32 / 2;
+        let tcol = if show_file { th(Color::Cyan) } else if m.fresh && m.cpu > 0.02 { th(Color::LightYellow) } else { crate::theme::dim(Color::DarkGray, depth.min(1) as u8) };
+        // the tag stays put while its owner moshes (no jitter: fewer cells to repaint)
+        let lx = p.x.round() as i32 - 1 + FW as i32 / 2 - label.chars().count() as i32 / 2;
         tags.push((p.act == Act::Here || p.act == Act::Bar, lx, label, tcol));
     }
     let _ = FH;

@@ -3,7 +3,7 @@
 //! Monitor side (`Census`): piggybacks on the monitor's existing /proc/<pid>/stat walk
 //! (every 1.5 s). Only processes owned by the user are candidates; kernel threads and other
 //! users' processes are only counted, never named. For the few people actually in the crowd
-//! (≤ 16) it reads /proc/<pid>/io, and every few seconds it peeks at one member's open files
+//! (≤ 48, as many as the floor holds) it reads /proc/<pid>/io, and every few seconds it peeks at one member's open files
 //! (/proc/<pid>/fd links) to borrow a file *basename* for its name tag. Nothing is stored.
 //!
 //! UI side: `Floor` walks, dances and sends the little people to the bar; `fig` draws one
@@ -20,7 +20,13 @@ pub static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool:
 /// the `a` key: 0 = automatic (only on a big enough terminal), 1 = forced on, 2 = forced off
 pub static FORCE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
-pub const CAP: usize = 16;
+/// hard ceiling on the crowd (the census reads /proc/<pid>/io for each one)
+pub const CAP: usize = 48;
+/// how many the floor on screen can hold right now (set by the UI from its stacked rows)
+pub static WANT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(16);
+fn want_cap() -> usize {
+    WANT.load(std::sync::atomic::Ordering::Relaxed).clamp(1, CAP)
+}
 
 #[derive(Clone, Default, Debug)]
 pub struct Member {
@@ -268,7 +274,7 @@ impl Census {
             }
         }
         let active = self.tracks.iter().filter(|t| !t.m.gone).count();
-        let want = if first { 8.min(CAP) } else { CAP };
+        let want = if first { 8.min(want_cap()) } else { want_cap() };
         let mut room = want.saturating_sub(active);
         // a full floor makes way for fresh spawns and busy processes: the idlest go home
         let urgent = pool.iter().filter(|c| c.3 || c.2 > 1.0).count().min(2);
@@ -318,7 +324,7 @@ impl Census {
         if self.rot_t >= 12.0 && !pool.is_empty() {
             self.rot_t = 0.0;
             let busy_waiting = pool.iter().any(|c| c.2 > 0.5);
-            let full = self.tracks.iter().filter(|t| !t.m.gone).count() >= CAP;
+            let full = self.tracks.iter().filter(|t| !t.m.gone).count() >= want_cap();
             if busy_waiting || full || self.rand() < 0.5 {
                 if let Some(t) = self.tracks.iter_mut().filter(|t| !t.m.gone && !t.m.fresh && t.m.idle > 20.0).max_by(|a, b| a.m.idle.partial_cmp(&b.m.idle).unwrap()) {
                     t.m.gone = true;
@@ -818,8 +824,24 @@ pub struct Person {
     pub beer: bool,
     pub seed: u32,
     pub stay: f32,
-    /// depth: 0 back (by the bar, hazy) .. 2 front (at the stage)
+    /// depth: 0 back (by the bar, hazy) .. rows-1 front (at the stage)
     pub z: f32,
+}
+
+/// the floor's places: stacked rows of slots, back rows staggered half a slot so the people
+/// behind look out between the heads in front. Returns (row, x) per slot; row rows-1 = front
+pub fn slots(fw: usize, rows: usize) -> Vec<(usize, f32)> {
+    let mut v = Vec::new();
+    // fill order: the front row first, then the rows behind (a small crowd stands at the stage)
+    for row in (0..rows.max(1)).rev() {
+        let stagger = (rows - 1 - row) % 2 == 1;
+        let off = if stagger { SLOT / 2 } else { 0 };
+        let n = (fw.saturating_sub(off) / SLOT).max(1);
+        for c in 0..n {
+            v.push((row, (off + c * SLOT + (SLOT - FW) / 2) as f32));
+        }
+    }
+    v
 }
 
 pub struct Floor {
@@ -830,11 +852,13 @@ pub struct Floor {
     last: Option<Instant>,
     pub t: f32,
     rng: u64,
+    /// stacked rows of people on the floor (from the panel height)
+    pub rows: usize,
 }
 
 impl Floor {
     pub fn new() -> Floor {
-        Floor { people: Vec::new(), benched: HashMap::new(), evict_t: 0.0, last: None, t: 0.0, rng: 0xA5A5_1234_5678_9ABC }
+        Floor { people: Vec::new(), benched: HashMap::new(), evict_t: 0.0, last: None, t: 0.0, rng: 0xA5A5_1234_5678_9ABC, rows: 1 }
     }
     fn rand(&mut self) -> f32 {
         self.rng ^= self.rng << 13;
@@ -849,7 +873,9 @@ impl Floor {
         let dt = self.last.map(|l| now.duration_since(l).as_secs_f32()).unwrap_or(0.0).min(0.5);
         self.last = Some(now);
         self.t += dt;
-        let nslots = (fw / SLOT).clamp(1, CAP);
+        let places = slots(fw, self.rows);
+        let nslots = places.len().clamp(1, CAP);
+        WANT.store(nslots, std::sync::atomic::Ordering::Relaxed);
         // new data: arrivals, departures, fresh numbers
         for m in &snap.members {
             match self.people.iter_mut().find(|p| p.m.pid == m.pid) {
@@ -881,13 +907,17 @@ impl Floor {
                     if free.is_empty() {
                         continue;
                     }
+                    free.sort_unstable();
                     let r = self.rand();
-                    let slot = free[((r * free.len() as f32) as usize).min(free.len() - 1)];
-                    let from_left = (slot as f32) < nslots as f32 * 0.5;
+                    // the frontmost row with room, a random place in it
+                    let front = places[free[0]].0;
+                    let row_free: Vec<usize> = free.iter().copied().filter(|&s| places[s].0 == front).collect();
+                    let slot = row_free[((r * row_free.len() as f32) as usize).min(row_free.len() - 1)];
+                    let from_left = places[slot].1 < fw as f32 * 0.5;
                     // looks and habits come from the exe name, so the same program is always the same person
                     let seed = name_id(&m.name);
                     let beer = (seed >> 24) % 5 < 3;
-                    self.people.push(Person { m: m.clone(), x: if from_left { -(FW as f32) } else { fw as f32 }, slot, act: Act::Enter, t_act: 0.0, step: 0, beer, seed, stay: 0.0, z: 1.0 });
+                    self.people.push(Person { m: m.clone(), x: if from_left { -(FW as f32) } else { fw as f32 }, slot, act: Act::Enter, t_act: 0.0, step: 0, beer, seed, stay: 0.0, z: places[slot].0 as f32 });
                 }
                 None => {}
             }
@@ -904,12 +934,15 @@ impl Floor {
         // one walker back from the bar at a time, so they don't walk through each other
         let mut backing = self.people.iter().any(|p| p.act == Act::Back);
         let mut want_bar: Option<usize> = None;
+        let mut want_move: Option<usize> = None;
+        // one wanderer at a time (each step of a walk repaints a whole figure)
+        let walking = self.people.iter().any(|p| matches!(p.act, Act::Enter | Act::Back | Act::ToBar));
         let n = self.people.len();
         for i in 0..n {
             let r = self.rand();
             let p = &mut self.people[i];
             p.t_act += dt;
-            let home = (p.slot * SLOT + (SLOT - FW) / 2) as f32;
+            let home = places.get(p.slot).map_or(0.0, |s| s.1);
             let speed = if p.m.fresh && p.m.cpu > 0.05 { 16.0 } else { 9.0 };
             let go = |p: &mut Person, target: f32| -> bool {
                 let d = target - p.x;
@@ -936,6 +969,9 @@ impl Floor {
                     // idle ones wander off to the bar now and then (not while the band is on fire)
                     if vibe != Vibe::Hype && p.m.idle > 12.0 && p.t_act > 8.0 && at_bar < 2 && want_bar.is_none() && r < dt / 15.0 {
                         want_bar = Some(i);
+                    } else if p.t_act > 10.0 && want_move.is_none() && !walking && r > 1.0 - dt / 60.0 {
+                        // now and then someone wanders to another place, a row forward or back
+                        want_move = Some(i);
                     }
                 }
                 Act::ToBar => {
@@ -971,19 +1007,35 @@ impl Floor {
             self.people[i].act = Act::ToBar;
             self.people[i].t_act = 0.0;
         }
-        // depth: the music pulls people toward the stage; idle ones drift back to the bar
-        for p in self.people.iter_mut() {
-            let lean = (p.seed >> 5) % 3; // some always hang back a little
-            let target = match p.act {
-                Act::Here => match vibe {
-                    Vibe::Hype | Vibe::Applause => if lean == 0 { 1.0 } else { 2.0 },
-                    Vibe::Normal => if p.m.idle > 20.0 { 0.0 } else if lean == 2 { 2.0 } else { 1.0 },
-                    Vibe::Chill => if p.m.idle > 20.0 || lean == 0 { 0.0 } else { 1.0 },
-                },
-                Act::Bar | Act::ToBar | Act::Wave | Act::Leave => 0.0,
-                Act::Enter | Act::Back => p.z,
+        if let Some(i) = want_move {
+            // the music pulls people forward, a calm band lets them drift back
+            let row = places.get(self.people[i].slot).map_or(0, |s| s.0);
+            let used: Vec<usize> = self.people.iter().filter(|p| !matches!(p.act, Act::Wave | Act::Leave)).map(|p| p.slot).collect();
+            let dir: i32 = match vibe {
+                Vibe::Hype | Vibe::Applause => 1,
+                Vibe::Chill => -1,
+                Vibe::Normal => if self.rand() < 0.5 { 1 } else { -1 },
             };
-            let k = (dt * 0.5).min(1.0);
+            let to_row = row as i32 + dir;
+            let x = self.people[i].x;
+            let cand = (0..nslots).filter(|s| !used.contains(s) && places[*s].0 as i32 == to_row).min_by(|a, b| (places[*a].1 - x).abs().partial_cmp(&(places[*b].1 - x).abs()).unwrap());
+            if let Some(s) = cand {
+                let p = &mut self.people[i];
+                p.slot = s;
+                p.act = Act::Back;
+                p.t_act = 0.0;
+            }
+        }
+        // depth: each place is in a row; the bar is at the back, so drinkers drift back
+        // (and come forward again to their row)
+        for p in self.people.iter_mut() {
+            let row = places.get(p.slot).map_or(0, |s| s.0) as f32;
+            let target = match p.act {
+                Act::Here | Act::Enter | Act::Back => row,
+                Act::Bar | Act::ToBar => 0.0,
+                Act::Wave | Act::Leave => p.z,
+            };
+            let k = (dt * 0.9).min(1.0);
             p.z += (target - p.z) * k;
         }
         self.people.retain(|p| !(p.act == Act::Leave && (p.x < -(FW as f32) || p.x > fw as f32)));

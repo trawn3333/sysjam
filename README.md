@@ -191,7 +191,7 @@ The arrow keys only work in the TUI; `--style` and `--tempo-bias` are the comman
 
 The UI runs in its own thread at nice 5. The audio thread publishes a small snapshot about every
 100 ms with a non-blocking `try_lock`, so a slow or stalled terminal can never hold up the audio.
-The whole UI refreshes about twice a second; in between, only the little people (and the beat
+The whole UI refreshes about twice a second (once a second on a very big terminal); in between, only the little people (and the beat
 dots) are redrawn, at about 16 fps, straight to the changed cells, plus one extra frame exactly on
 every beat. The stage and the crowd move at about 7–8 fps (and on every beat) and are diffed cell by
 cell against what is already on screen, so only the cells that actually changed are sent (about
@@ -365,8 +365,9 @@ repeated 4-chord runs within 32 chords 6.9% → 1.5%, distinct chord bigrams per
 
 ## The audience: your processes on the dance floor
 
-Under the band there is a strip of floor with a little crowd: up to 16 of **your own processes**
-(as many as fit, one per 12 columns, about 7 on a 170-column terminal), each a 5-row ASCII figure
+Under the band there is a dance floor with a crowd of **your own processes**, in **stacked rows**
+(one person per 12 columns in each row, so about 9 per row on a 170-column terminal and up to 48 in
+all), each a 5-row ASCII figure
 with a short name tag such as `firefox` or `cargo` (exe name only, no pid; long names are cut to fit
 the 11-cell slot).
 Now and then the tag shows instead the name of a file the process has open (`notes.md`,
@@ -396,6 +397,14 @@ how many kernel threads stay backstage.
 - **Only when there is room:** the crowd panel shows by itself when the terminal is at least
   **160 columns × 55 rows** and disappears below that, coming back automatically when you
   resize. `a` forces it on or off.
+- **A taller terminal grows the crowd, not the band.** The band panel keeps what the stage needs
+  (30 rows) and the extra height goes to more stacked rows of people: 3 rows at 160×55 (the event
+  log gives up a few lines for the third row), 4 at about 60 rows, 5 at 65, 6 at 70 and taller
+  (2 rows on a squeezed crowd terminal, 1 at the minimum).
+
+  ![160×55: three stacked rows of the crowd, Biker](docs/styles/crowd-160x55.png)
+
+  ![220×70: six stacked rows, 48 people, House](docs/styles/crowd-220x70.png)
 - **Who comes:** a rotating, CPU-weighted sample. Processes that start after sysjam ("fresh"
   ones: compilers, shell commands, a browser) get priority and **walk in** from the edge; an idle
   one goes home to make room. When a process exits its figure **waves and walks out**. Short
@@ -417,13 +426,17 @@ how many kernel threads stay backstage.
   Industrial's wall of sound starts a mosh pit (headbanging hair flips, flailing fists, people
   shoved sideways, stomps); in Biker everyone throws the horns `\m/` and puts their fists up to
   sing along in the chorus; in Blues they swing-step on the shuffle and cheer the solos.
-- **Depth:** the floor has three layers. People drift **toward the stage** while the band is hot
-  and **back toward the bar** when idle or chilling (some always hang back). The back row is drawn
-  as smaller 3-row figures, hazier (their colour blended toward the background, precomputed per
-  theme; 256-colour terminals get the nearest dimmer step), then the middle, then the front row at
-  the stage, painted back to front so whoever is in front hides who is behind. A floor gradient
-  and a little drifting haze sit behind them. Name tags only for the middle and front rows.
-  ASCII / NO_COLOR terminals keep the depth through the small back figures.
+- **Depth:** each row stands 3 rows behind the one in front of it, so the legs of the back rows
+  are hidden behind the heads in front (painted back to front: whoever is in front hides who is
+  behind), and alternate rows are staggered by half a slot so faces peek through the gaps. The
+  front two rows are full size; everyone further back is a smaller 3-row figure, hazier (colour
+  blended toward the background, precomputed per theme; 256-colour terminals get the nearest
+  dimmer step). Name tags only for the two front rows, held-up items only for full-size people.
+  Newcomers take the frontmost free spot. **People move between rows:** one at a time, someone
+  steps forward while the band is hot and back toward the bar when it's chilling, and anyone
+  going for a drink walks back through the rows and returns to a free spot. A floor gradient and
+  a little drifting haze sit behind them. ASCII / NO_COLOR terminals keep the depth through the
+  small back figures.
 - **Held up overhead, now and then:** a beer 🍺, wine 🍷, an eggplant 🍆 or a phone 📱 (filming, its
   screen glowing cyan in the big moments), swaying on the beat; lighters in Blues, glowsticks in
   Techno (alternating green and magenta). Only a few at a time, mostly while the crowd is hyped,
@@ -437,10 +450,12 @@ how many kernel threads stay backstage.
 
 **Cost.** It reuses the monitor's existing `/proc/<pid>/stat` walk (every 1.5 s, already there
 for the "top threads" panel), plus one `stat` of `/proc/<pid>` for the owner of each new pid,
-`/proc/<pid>/io` for the ≤16 people in the crowd, and every 6 s the `fd` links of one of them
-(at most 48). Measured: 0.13 ms per census on top of the walk (≈0.01% of a core); the monitor
-thread stayed at 0.10% and the UI thread at 0.40% with the crowd on (0.42% without it before the
-terminal-output tweak), see [Performance](#performance).
+`/proc/<pid>/io` for the people in the crowd (≤48), and every 6 s the `fd` links of one of them
+(at most 48). Measured: 0.13 ms per census on top of the walk (≈0.01% of a core). The stacked
+crowd is still diffed cell by cell (only cells that changed are sent); far rows move only on the
+beat, the second row on the half-beat, and a deep crowd refreshes at ~6 fps between beats, so the
+UI thread stays at about 0.45% in calm styles even at 220×70, and at 0.47–0.55% in Industrial's
+mosh pit with 3–6 rows (the worst case), see [Performance](#performance).
 
 **Privacy.** Process names and file names are only drawn (no pids any more) on your own screen; nothing is
 logged, sent or stored. Only processes owned by your user are named, and only their file
@@ -448,7 +463,8 @@ descriptors are looked at (the kernel wouldn't show other users' anyway); other 
 and kernel threads are only counted. File tags are base names with no path, skipping `/dev`,
 `/proc`, `/sys`, `/run`, `/usr`, hidden files, libraries, fonts, caches and lock files.
 `--no-audience` turns the whole thing off (no scan at all); `a` forces the panel on or off. By
-default it appears at 160×55 or larger (9 rows: headroom for jumps, 5-row figures, name tags).
+default it appears at 160×55 or larger (9 rows for one row of people: headroom for jumps, 5-row
+figures, name tags; each extra row of people costs 3 more).
 
 **Width-safe.** The crowd is pure ASCII; a unit test renders 12 exe names × every style × every
 activity × every vibe × 24 frames of the beat clock (walks, jumps, grapevines included) and checks
@@ -1161,6 +1177,7 @@ Measured exactly (schedstat, all threads) on an 8-vCPU Xeon VM:
 | same, **with the audience** (crowd of 7 on the floor, its own census, cheaper terminal output) vs `--no-audience` (previous output path) | engine 1.27%, **UI 0.40%**, monitor 0.10% (≈1.8% total; census 0.13 ms per 1.5 s) vs UI 0.42% | |
 | Techno / Space Cadet, live UI at 170×56 with the 5-row crowd, legs, beat-synced feet, next-idea + never-dead-air engine, WAV sink, 40 s of a 75 s run, per thread | engine 1.55% / 1.37%, **UI 0.45% / 0.42%**, monitor 0.12% (≈2.1% / 1.9% total) | |
 | Industrial / Biker / Blues, live UI at 170×56 with **the stage** (lights, props, apron) and the 3-layer crowd, WAV sink, 40 s of a 75 s run, per thread | engine 2.47% / 2.45% / 1.90%, **UI 0.47% / 0.45% / 0.42%**, monitor 0.10–0.12% (≈3.0% / 3.0% / 2.4% total) | |
+| **stacked crowd**, idle machine, live UI, WAV sink, 40 s of a 75 s run, per thread: Industrial 160×55 (3 rows) / House 220×70 (6 rows) / Industrial 220×70 (6 rows, 48 people moshing) | engine 2.2–2.4% / 2.0–2.1% / 2.27%, **UI 0.47–0.52% / 0.45% / 0.50–0.55%**, monitor 0.12–0.20% | Industrial's mosh pit with 3+ rows sits right at the 0.5% line (≈3,000 cells/s sent at 220×70); calm styles stay under it |
 | offline bench (40 s idle / 80 s busy / 80 s idle), busy phase, TimGM6mb: Industrial wall of sound (3 seeds) / Biker hard rock / Blues shuffle (2 seeds) | 2.32–2.79% / 1.92–2.52% / 2.55–2.75% (before: Industrial 1.84–2.21%, Blues 1.79–1.99%) | |
 | offline 600 s runs, all 13 styles × seeds 1–2 (7 in parallel): idle profile / loaded profile, before → after the band's own drive | idle 1.43% → 1.80% (max 2.46%), loaded 1.94% → 2.00% (max 2.81%) | |
 | the conductor's MLP (once a bar, offline bench) | 1–3 µs per call, ≈0.0001% | |
