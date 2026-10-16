@@ -236,7 +236,6 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
     let mut prof_full = Duration::ZERO;
     let mut prof_term_full = Duration::ZERO;
     let mut last_cells: Vec<(u16, u16, String, usize, Style)> = Vec::new();
-    let mut esc = Esc::new();
     // stage/crowd runs written since the last full frame
     let mut touched: Vec<(u16, u16, String, usize, Style)> = Vec::new();
     let mut last_hit_seen = 0.0f64;
@@ -397,10 +396,10 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
                 if let Some(c) = cache.as_ref() {
                     for cell in last_cells.iter().chain(touched.iter()) {
                         if !run_matches(c, cell.0, cell.1, &cell.2, cell.4, cell.3) {
-                            emit(&mut esc, c, cell.0, cell.1, None, cell.3);
+                            emit(&mut term.backend_mut().esc, c, cell.0, cell.1, None, cell.3);
                         }
                     }
-                    esc.flush();
+                    term.backend_mut().esc.flush();
                 }
                 dirty = false;
             }
@@ -436,14 +435,14 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
                     for (i, cell) in cells.iter().enumerate() {
                         if fresh[i] {
                             PROF_EMIT.fetch_add(cell.3 as u64, Ordering::Relaxed);
-                            emit(&mut esc, c, cell.0, cell.1, Some((&cell.2, cell.4)), cell.3);
+                            emit(&mut term.backend_mut().esc, c, cell.0, cell.1, Some((&cell.2, cell.4)), cell.3);
                         }
                     }
                     for cell in &delta {
                         PROF_EMIT.fetch_add(cell.3 as u64, Ordering::Relaxed);
-                        emit(&mut esc, c, cell.0, cell.1, Some((&cell.2, cell.4)), cell.3);
+                        emit(&mut term.backend_mut().esc, c, cell.0, cell.1, Some((&cell.2, cell.4)), cell.3);
                     }
-                    esc.flush();
+                    term.backend_mut().esc.flush();
                     dirty = true;
                 }
                 last_cells = cells;
@@ -764,10 +763,51 @@ struct Esc {
     buf: Vec<u8>,
     cur: Option<(Color, Color, bool)>,
     at: Option<(u16, u16)>,
+    /// what the terminal shows, cell by cell (both paths write here), so a full frame
+    /// doesn't resend what an in-between frame already put there
+    shadow: Vec<Shade>,
+    sw: u16,
+}
+/// one cell as on screen; `n == 255`: unknown
+#[derive(Clone, Copy, PartialEq)]
+struct Shade {
+    sym: [u8; 12],
+    n: u8,
+    fg: Color,
+    bg: Color,
+    m: Modifier,
+}
+const UNKNOWN: Shade = Shade { sym: [0; 12], n: 255, fg: Color::Reset, bg: Color::Reset, m: Modifier::empty() };
+impl Shade {
+    fn of(sym: &str, fg: Color, bg: Color, m: Modifier) -> Shade {
+        let b = sym.as_bytes();
+        if b.len() > 12 {
+            return UNKNOWN;
+        }
+        let mut s = [0u8; 12];
+        s[..b.len()].copy_from_slice(b);
+        Shade { sym: s, n: b.len() as u8, fg, bg, m }
+    }
 }
 impl Esc {
     fn new() -> Esc {
-        Esc { buf: Vec::with_capacity(16384), cur: None, at: None }
+        Esc { buf: Vec::with_capacity(16384), cur: None, at: None, shadow: Vec::new(), sw: 0 }
+    }
+    /// the shadow sized to the terminal (everything unknown after a change)
+    fn fit(&mut self, w: u16, h: u16) {
+        if self.sw != w || self.shadow.len() != w as usize * h as usize {
+            self.sw = w;
+            self.shadow = vec![UNKNOWN; w as usize * h as usize];
+        }
+    }
+    fn forget(&mut self) {
+        self.shadow.fill(UNKNOWN);
+    }
+    fn shade(&mut self, x: u16, y: u16) -> Option<&mut Shade> {
+        if x >= self.sw {
+            return None;
+        }
+        self.shadow.get_mut(y as usize * self.sw as usize + x as usize)
     }
     fn num(&mut self, n: u32) {
         let mut d = [0u8; 10];
@@ -875,9 +915,19 @@ impl ratatui::backend::Backend for Fast {
         I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
     {
         let e = &mut self.esc;
+        if let Ok((w, h)) = crossterm::terminal::size() {
+            e.fit(w, h);
+        }
         let mut cur: Option<(Color, Color, Modifier)> = None;
         let mut last: Option<(u16, u16)> = None;
         for (x, y, cell) in content {
+            // already on screen (an in-between frame drew it): skip
+            let sh = Shade::of(cell.symbol(), cell.fg, cell.bg, cell.modifier);
+            match e.shade(x, y) {
+                Some(c) if *c == sh && sh.n != 255 => continue,
+                Some(c) => *c = sh,
+                None => {}
+            }
             // move unless the cell follows the last one
             if !matches!(last, Some((lx, ly)) if x == lx + 1 && y == ly) {
                 e.at = None;
@@ -921,9 +971,11 @@ impl ratatui::backend::Backend for Fast {
         CrosstermBackend::new(&mut self.w).set_cursor_position(position)
     }
     fn clear(&mut self) -> std::io::Result<()> {
+        self.esc.forget();
         CrosstermBackend::new(&mut self.w).clear()
     }
     fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> std::io::Result<()> {
+        self.esc.forget();
         CrosstermBackend::new(&mut self.w).clear_region(clear_type)
     }
     fn size(&self) -> std::io::Result<ratatui::layout::Size> {
@@ -963,6 +1015,15 @@ fn emit(out: &mut Esc, cache: &ratatui::buffer::Buffer, x: u16, y: u16, text: Op
         // a wide glyph (an emoji held up in the crowd) covers the next cell too
         let wide = if sym.len() == 1 { false } else { unicode_width::UnicodeWidthStr::width(sym) == 2 };
         out.buf.extend_from_slice(sym.as_bytes());
+        let sh = Shade::of(sym, fg, bg, if bold { Modifier::BOLD } else { Modifier::empty() });
+        if let Some(c) = out.shade(x + k, y) {
+            *c = sh;
+        }
+        if wide {
+            if let Some(c) = out.shade(x + k + 1, y) {
+                *c = UNKNOWN;
+            }
+        }
         k += if wide { 2 } else { 1 };
     }
     out.at = Some((x + k, y));
