@@ -167,10 +167,12 @@ Keys:
 | `↑` / `↓` | tempo bias ±7 bpm, ramped over one bar (hold to repeat, ~6 per second) |
 | `←` / `→` | previous / next conductor style (auto → House Band → … → Tribal → auto) |
 | `q`, `Esc`, `Ctrl-C` | fade out and quit (press again to quit immediately) |
+| `n` or `Tab` | **next idea**: move on right now, within about a beat (see [next idea](#next-idea-and-never-dead-air)) |
 | `l` or `Enter` | **like** what's playing now (see [likes](#likes-the-only-thing-sysjam-learns-from)) |
-| `a` | show / hide the crowd panel |
+| `a` | force the crowd panel on / off (by default it shows by itself when the terminal is at least 160×55) |
 | `space` | pause / resume the display (the music keeps playing) |
 
+The footer shows them: `↑↓ tempo  ←→ style  n next  l like  a crowd  space pause  q quit`.
 The arrow keys only work in the TUI; `--style` and `--tempo-bias` are the command-line equivalents.
 
 The UI runs in its own thread at nice 5. The audio thread publishes a small snapshot about every
@@ -312,13 +314,36 @@ repeated 4-chord runs within 32 chords 6.9% → 1.5%, distinct chord bigrams per
 ## The audience: your processes on the dance floor
 
 Under the band there is a strip of floor with a little crowd: up to 16 of **your own processes**
-(as many as fit, one per 10 columns, about 7 on a 140-column terminal), each a 3-row ASCII figure
-with a name tag such as `firefox:4123` or `cargo:9981` (long names are shortened, `fire:4123`).
+(as many as fit, one per 12 columns, about 7 on a 170-column terminal), each a 5-row ASCII figure
+with a short name tag such as `firefox` or `cargo` (exe name only, no pid; long names are cut to fit
+the 11-cell slot).
 Now and then the tag shows instead the name of a file the process has open (`notes.md`,
 `spawn.log`): the base name only, never a path. At the right end is the bar (`🍺 ☕`, or `U c` in
 ASCII). The panel title counts how many of your processes there are, how many are at the bar and
 how many kernel threads stay backstage.
 
+- **Who they are:** every exe name is hashed (FNV-1a) into a *persona*, so `firefox` always looks
+  like the same person, on every run and every machine: hair or hat (spiky, bun, cap, beanie,
+  top hat, mohawk, curls, bald …), clothes (hoodie, suit, stripes, dress, vest, jacket …), an
+  accessory (headphones, earring, scarf, bag, a flower), height (short people have no knee row),
+  and a dance personality (bouncer, swayer, stepper, headbanger, shuffler, twirler, wallflower).
+  The style's theme (cowboy hat, glowsticks, wig) goes over the top. Their **faces change with the
+  music and what they are doing**: `(*o*)`/`(^O^)` when the band is hot, `(O)` mouths in a surge,
+  `(^v^)` applauding a like, `(>o>)` when the process is CPU-hungry, `(@_@)` busy on disk, `('o')`
+  chatting, `(-.-)` dozing, `(^_^)`/`(-_-)` swaying to a chill groove, `(^-^)` waving goodbye, plus blinks.
+- **Legs and feet, on the beat clock:** multi-frame cycles synced to the same beat clock as the
+  band. A 4-frame walk cycle when coming in, going to the bar and leaving; foot taps on the beat;
+  knee bounces; kicks, stomps and jumps with both feet off the ground (the whole figure lifts into
+  the headroom row) during surges and hype. Each style has its footwork: a Country line-dance
+  **grapevine** (the figure actually travels sideways) and heel-toe, a Techno **shuffle** and
+  **running man**, a Blues **swing step**, Baroque **minuet** steps with pointed toes, a Biker
+  **stomp**, a Celtic **jig** with high kicks. The musicians tap too, by style (country heel-toe,
+  biker stomp, celtic eighths, blues on 2 and 4, baroque on beat 1, techno every beat), the
+  **drummer's right foot comes down on the actual kick hits**, and the conductor shifts his
+  weight every two beats and taps his foot (and bounces and stomps in surges).
+- **Only when there is room:** the crowd panel shows by itself when the terminal is at least
+  **160 columns × 55 rows** and disappears below that, coming back automatically when you
+  resize. `a` forces it on or off.
 - **Who comes:** a rotating, CPU-weighted sample. Processes that start after sysjam ("fresh"
   ones: compilers, shell commands, a browser) get priority and **walk in** from the edge; an idle
   one goes home to make room. When a process exits its figure **waves and walks out**. Short
@@ -335,13 +360,13 @@ how many kernel threads stay backstage.
 - **What they do with the music:** when the band is alive and hot, in a surge, or the crowd is
   roaring, everyone puts their hands up and jumps on the beat (from the same beat clock as the
   conductor). When it's chilling they mingle and nod. A like gets a round of applause. By style:
-  cowboy hats and a line dance in Country, glowsticks in Techno, swaying with lighters in Blues,
-  wigs and a polite golf clap in Baroque.
+  cowboy hats and a grapevine in Country, glowsticks and the running man in Techno, a swing step
+  with lighters in Blues, wigs, minuets and a polite golf clap in Baroque. After `n` they cheer briefly.
 - **And back (lightly):** the crowd's excitement (how many there are × how busy × how alive the
   band is, smoothed over 6 s) adds at most 0.06 to the band's energy input. Above 0.55 the
   conductor may say so ("the crowd's into it!", at most every 2 minutes) and gets a small lift
   of delight. When a notable process walks in (a browser, an editor, a compiler, anything over 30%
-  CPU) a musician nods: `~ firefox:4123 walked in; the keys nods`.
+  CPU) a musician nods: `~ firefox walked in; the keys nods`.
 
 **Cost.** It reuses the monitor's existing `/proc/<pid>/stat` walk (every 1.5 s, already there
 for the "top threads" panel), plus one `stat` of `/proc/<pid>` for the owner of each new pid,
@@ -350,13 +375,17 @@ for the "top threads" panel), plus one `stat` of `/proc/<pid>` for the owner of 
 thread stayed at 0.10% and the UI thread at 0.40% with the crowd on (0.42% without it before the
 terminal-output tweak), see [Performance](#performance).
 
-**Privacy.** Process names, pids and file names are only drawn on your own screen; nothing is
+**Privacy.** Process names and file names are only drawn (no pids any more) on your own screen; nothing is
 logged, sent or stored. Only processes owned by your user are named, and only their file
 descriptors are looked at (the kernel wouldn't show other users' anyway); other users' processes
 and kernel threads are only counted. File tags are base names with no path, skipping `/dev`,
 `/proc`, `/sys`, `/run`, `/usr`, hidden files, libraries, fonts, caches and lock files.
-`--no-audience` turns the whole thing off (no scan at all); `a` hides the panel. The crowd needs
-about 46 rows (on shorter terminals the event log gives up two lines for it, below that it hides).
+`--no-audience` turns the whole thing off (no scan at all); `a` forces the panel on or off. By
+default it appears at 160×55 or larger (9 rows: headroom for jumps, 5-row figures, name tags).
+
+**Width-safe.** The crowd is pure ASCII; a unit test renders 12 exe names × every style × every
+activity × every vibe × 24 frames of the beat clock (walks, jumps, grapevines included) and checks
+that every row is exactly 7 cells wide, and that at least 10 of the 12 names get different looks.
 
 ## The conductor's feelings and his tiny brain
 
@@ -416,8 +445,12 @@ update to a table of preferences. The conductor is delighted (`“Yeehaw! glad y
 liked more often, tempo choices lean to tempos you liked, players pick up instrument families you
 liked, modes you liked come up more, and liked quotes come more often. It is a gentle bias, not a lock.
 
-**Nothing else is learned.** sysjam does not learn from skipping styles, from how long you listen,
-from your typing, or from any other behaviour; only presses of `l` count. Everything stays local:
+**Nothing else is learned**, except a small negative from each **`n`** (next idea): the moment you
+skipped is stored under `skips:` in the same file and nudges the style, state, tempo, mode and
+density weights down by 0.06 (one like is worth about +0.3), spreading it over the alternatives.
+Instruments, players and quotes are not touched by a skip. sysjam does not learn from switching
+styles with ←/→, from how long you listen, from your typing, or from any other behaviour; only
+presses of `l` and `n` count. Everything stays local:
 the likes and the learned weights are written to `~/.config/sysjam/likes.yaml` (or
 `$XDG_CONFIG_HOME/sysjam/likes.yaml`), plain human-readable YAML with a timestamp per like, loaded
 at startup, never sent anywhere. Edit it or delete it any time, or run `sysjam --reset-likes` to
@@ -433,6 +466,11 @@ learned_bias:
     "70-89": 0.300
   mode:
     "major": 1.200
+skips:
+  - time: "2026-10-15T21:03:10-05:00"
+    style: "House Band"
+    state: "chilling"
+    ...
 likes:
   - time: "2026-10-15T20:42:33-05:00"
     style: "Celtic Session"
@@ -446,6 +484,57 @@ A scripted test: six likes during a Celtic Session run, then four 20-minute *aut
 7, 9, 13) with and without that file. Without likes, Celtic got 0% of the time in all four; with them
 29%, 26%, 28% and 0% (21% on average). Time at 70–89 bpm went from 15% to 45% on average,
 and guitar picks (a liked family) from 14 to 29.
+
+## Next idea, and never dead air
+
+**`n` / Tab: next idea, now.** When it's going nowhere, press `n` (or Tab). Within about a beat
+(measured 0.33–0.42 s from key to new harmony on screen), the band:
+- jumps to a **new key** away from the recent ones (`next idea: modulation straight to F# minor`);
+- starts a **new progression** and writes a **new motif**, new comping and new bass, drum and acid patterns;
+- picks **new sounds for at least half of the band**;
+- lifts any lay-outs, brings two melodic players straight in with full phrases, and the drummer plays a fill if he's in.
+
+The conductor says `“right, moving on!”` (then `“ok — next idea!”`, `“fresh page, here we go”`, …),
+the crowd cheers lightly, and the moment you skipped is stored as a small negative in your
+likes file (see [likes](#likes-the-only-thing-sysjam-learns-from)). It also works offline: `SYSJAM_KEYS="30:next"`.
+
+**Why there was dead time.** Measured in 20-minute offline auto runs (6 seeds, `SYSJAM_BENCH=1
+SYSJAM_BENCH_SCALE=6`: 4 min idle, 8 min busy, 8 min idle), 70–84% of the no-melody time was in
+*chilling*. Keys and colour rested, the lead was rarely invited, chill chords changed only every 4–5
+bars, the conductor had a habit of "dropping to the drone", and *hold* notes were often swallowed.
+
+**What changed.**
+- A **floor**: at least one melodic voice playing and at least two of keys/lead/colour in, always;
+  the drone/pad is always evolving (pad voices drift each bar, deeper LFO when chilling).
+- **Restraint means fewer notes, not silence**: a lay-out comes with an invite (`keys, back to the
+  pad — lead, you take it`), the drone cue became `“everyone, softer — let the drone breathe”`.
+- **Lush chilling**: chords every 1–2 bars, more colour swells, rolled-chord holds, the lead calls in every phrase.
+- A **stagnation detector** (same chords, same players, same sounds, flat energy) shows its reason
+  and makes a change: a new section, a key change, a featured soloist, call and response, or a build
+  (`getting stale — new section`), so something contrasting happens every 1–3 minutes.
+- **No lone "dumb notes"**: a keys/lead/colour player only enters at a phrase start or pickup, with a
+  complete statement (a 3+ note phrase with contour, no gap over a beat and a half, ending on a held
+  chord tone, or a full comp pattern of at least a bar), and finishes it unless a style switch or `n`
+  cuts in; thinning shortens phrases instead of deleting notes from them. Single hits are only for
+  programs that make sense alone (bird tweet, seashore, tubular bells, glockenspiel, timpani, gongs,
+  FX, reverse cymbal, long pad/drone swells), placed on strong beats or chord changes.
+
+**Before → after** (same 6 seeds, 20 min each; *dead* = fewer than 2 voices or nothing new for 4 s;
+an *orphan* is a melodic/comp note with no other note from the same player within 2 beats either side):
+
+| metric | before | after |
+|---|---|---|
+| dead time | 21.6% (13.4–26.7) | **4.2%** (3.1–5.0) |
+| no melodic voice | ~52% | 29.5% (25.9–33.8) |
+| fewer than 2 players | ~38% | 5.6% (0–9.3) |
+| stagnant bars | ~12% (4–25) | **0.9%** (0.5–1.8) |
+| longest stretch without a section change | 99–217 s | 86–88 s |
+| median gap between section changes | ~25 s (15–42) | 34 s (28–39) |
+| orphan notes per 10 min | 47 (36–63), 15% of melodic/comp notes | **8** (5–15), 1.6% |
+
+The bench prints these lines itself (`bench deadtime:`, `bench sections:`, `bench orphans:`), plus
+why there was no melody (`keys off/lay/rest/hold/gated …`). `SYSJAM_NO_DEVELOP=1` turns the
+stagnation detector off for comparison; `SYSJAM_ORPH_LOG=1` lists every orphan note.
 
 ## The band
 
@@ -467,7 +556,7 @@ the bandleader's invitation, the shared energy and what the others are doing.
 **Restraint: play only when there's something to add.** Players are calm by
 default. At every phrase, keys, lead and colour each decide to **play**, **hold**
 a single sustained tone, or **rest**. The decision weighs:
-- the arrangement state (chilling leans hard towards resting);
+- the arrangement state (chilling leans towards fewer notes, but never towards silence);
 - the player's tied signal, and whether it just changed;
 - how dense the rest of the band already is;
 - novelty: a freshly picked-up sound counts in favour, while playing many phrases in a row ("fatigue") and doubling another player count against.
@@ -475,11 +564,14 @@ a single sustained tone, or **rest**. The decision weighs:
 The reason shows in the thinking line, e.g. `band is busy enough (9 notes/bar) → nothing useful to add, resting`,
 `holding one long chord tone under the drone`, or `my signal is up (net 92%) → worth playing`.
 
-In **chilling**, most players rest or hold one long tone, and the drone, pad and deep bass carry it.
+In **chilling**, players thin out by playing *fewer, shorter phrases*, not by going silent: there is
+always at least one melodic voice and at least two of keys/lead/colour in, the pad keeps drifting,
+chords change every 1–2 bars, colour swells come more often and the lead keeps calling (see
+[never dead air](#next-idea-and-never-dead-air)).
 
 Patterns are sparser overall:
 - keys: mostly sparse stabs; arpeggios in quarters, eighths only when alive;
-- lead: one bar of call per phrase, two when alive;
+- lead: a two-bar call per phrase, a connected statement of 3+ notes ending on a held chord tone;
 - colour: a few shimmer bells per bar at most;
 - drone: rarer landscape bells;
 - drums: see below — rest or minimal unless alive; hats in quarters, eighths only when really alive, no sixteenths outside surges.
@@ -951,6 +1043,7 @@ Measured exactly (schedstat, all threads) on an 8-vCPU Xeon VM:
 | offline bench with scripted style switches and tempo nudges (13 key presses through 10 styles, incl. Techno build/drop) | 1.06% / 1.66% / 1.63% (idle / busy / idle) | |
 | Techno, live animated UI (~16 fps figures, beat-locked frames), WAV sink, 40 s of a 75 s run, per thread | audio/engine thread 1.47%, **UI thread 0.45%**, monitor 0.10% (≈2.0% total) | |
 | same, **with the audience** (crowd of 7 on the floor, its own census, cheaper terminal output) vs `--no-audience` (previous output path) | engine 1.27%, **UI 0.40%**, monitor 0.10% (≈1.8% total; census 0.13 ms per 1.5 s) vs UI 0.42% | |
+| Techno / Space Cadet, live UI at 170×56 with the 5-row crowd, legs, beat-synced feet, next-idea + never-dead-air engine, WAV sink, 40 s of a 75 s run, per thread | engine 1.55% / 1.37%, **UI 0.45% / 0.42%**, monitor 0.12% (≈2.1% / 1.9% total) | |
 | the conductor's MLP (once a bar, offline bench) | 1–3 µs per call, ≈0.0001% | |
 | alive under heavy load (busy thread as guest, ~400 MB/s writes, ~40 MB/s downloads, file churn), UI on, X11 screen sampling, 60 s | 3.05% | |
 

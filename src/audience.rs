@@ -15,8 +15,10 @@ use std::os::unix::fs::MetadataExt;
 use std::time::Instant;
 
 pub static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-/// panel shown (the `a` key)
+/// panel on screen right now (decided by the UI from the terminal size, or forced)
 pub static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// the `a` key: 0 = automatic (only on a big enough terminal), 1 = forced on, 2 = forced off
+pub static FORCE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 pub const CAP: usize = 16;
 
@@ -356,9 +358,11 @@ impl Census {
 // ------------------------------------------------------------------ the floor (UI)
 
 /// figure width and the slot each one stands in
-pub const FW: usize = 5;
-pub const SLOT: usize = 10;
+pub const FW: usize = 7;
+pub const SLOT: usize = 12;
 pub const BARW: usize = 8;
+/// rows of one figure (hair/hat, head, body, knees, feet)
+pub const FH: usize = 5;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Act {
@@ -397,112 +401,288 @@ pub struct Look<'a> {
     pub idle: f32,
     pub step: i32,
     pub beer: bool,
-    pub seed: u32,
+    /// hash of the exe name: the same program always looks and dances the same
+    pub id: u32,
+    /// the band is surging (jumps, stomps, kicks)
+    pub surge: bool,
 }
 
-/// three rows of exactly FW cells, plus a vertical lift (1 = jumping)
-pub fn fig(l: &Look) -> ([String; 3], bool) {
+/// FNV-1a of the exe name
+pub fn name_id(name: &str) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in name.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h ^ (h >> 15)
+}
+
+/// a person's fixed looks and habits, all from the name hash
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Persona {
+    pub hair: usize,
+    pub top: usize,
+    /// 0 none, 1 headphones, 2 earring, 3 scarf, 4 bag, 5 flower
+    pub acc: usize,
+    pub tall: bool,
+    /// 0 bounce, 1 sway, 2 two-step, 3 headbang, 4 robot, 5 twist, 6 kicker
+    pub dance: usize,
+    /// wears the style's hat (half the crowd dresses up)
+    pub themed: bool,
+}
+
+pub fn persona(id: u32) -> Persona {
+    let b = |s: u32, n: u32| ((id >> s) % n) as usize;
+    Persona { hair: b(0, HAIR.len() as u32), top: b(5, TOPS.len() as u32), acc: b(9, 6), tall: (id >> 13) & 3 != 0, dance: b(16, 7), themed: (id >> 20) & 1 == 1 }
+}
+
+const HAIR: [&str; 11] = ["  ___  ", "  ,,,  ", " ~~~~~ ", "  ^^^  ", "  (@)  ", "  ===  ", "  ///  ", "  .-.  ", "  ~~~  ", "  ___> ", "  \\\\\\  "];
+const TOPS: [&str; 10] = ["[#]", "{=}", "(:)", "|v|", "<+>", "[=]", "(~)", "[*]", "{o}", "|:|"];
+
+/// legs: (knees, feet), 7 cells each
+mod legs {
+    pub const STAND: [&str; 2] = ["  | |  ", " _| |_ "];
+    pub const TAP_R: [&str; 2] = ["  | |  ", " _| |/ "];
+    pub const TAP_L: [&str; 2] = ["  | |  ", " \\| |_ "];
+    pub const BOUNCE: [&str; 2] = ["  > <  ", " _/ \\_ "];
+    pub const STEP_R: [&str; 2] = ["  | \\  ", " _|  \\_"];
+    pub const STEP_L: [&str; 2] = ["  / |  ", " _/  |_"];
+    pub const PASS: [&str; 2] = ["  | |  ", "  |_|_ "];
+    pub const CROSS: [&str; 2] = ["   X   ", "  / \\_ "];
+    pub const KICK_R: [&str; 2] = ["  |__/ ", " _|    "];
+    pub const KICK_L: [&str; 2] = [" \\__|  ", "    |_ "];
+    pub const KNEE_R: [&str; 2] = ["  |_,  ", " _|    "];
+    pub const KNEE_L: [&str; 2] = ["  ,_|  ", "    |_ "];
+    pub const STOMP_R: [&str; 2] = ["  | |  ", " _| |_*"];
+    pub const STOMP_L: [&str; 2] = ["  | |  ", "*_| |_ "];
+    pub const HEEL_R: [&str; 2] = ["  | |  ", " _| |\\ "];
+    pub const SHUF_A: [&str; 2] = ["  / \\  ", " _/ \\_ "];
+    pub const SHUF_B: [&str; 2] = ["  \\ /  ", " _\\ /_ "];
+    pub const POINT: [&str; 2] = ["  | \\  ", " _|  '-"];
+    pub const TOES: [&str; 2] = ["  | |  ", "  ^ ^  "];
+    pub const TUCK: [&str; 2] = ["  > <  ", "  ' '  "];
+    pub const SIT: [&str; 2] = ["  |_   ", " _/ \\_ "];
+}
+
+/// footwork for this instant: (legs, lift = both feet off the ground, x shift)
+fn footwork(l: &Look, p: &Persona, hype: bool) -> ([&'static str; 2], bool, i32) {
+    use legs::*;
+    let b = l.beats;
+    let beat = b.floor() as i64;
+    let frac = b.fract() as f32;
+    let half = (b * 2.0).floor() as i64; // eighths
+    let on = frac < 0.22;
+    if l.surge {
+        // surge: jumps with both feet off the ground, kicks, stomps, knee bounces
+        return match (beat.rem_euclid(4), p.dance % 3) {
+            (_, 0) => if on { (TUCK, true, 0) } else { (BOUNCE, false, 0) },
+            (0 | 2, 1) => if on { (STOMP_R, false, 0) } else { (BOUNCE, false, 0) },
+            (_, 1) => if on { (STOMP_L, false, 0) } else { (BOUNCE, false, 0) },
+            (k, _) => if half.rem_euclid(2) == 0 { (if k % 2 == 0 { KICK_R } else { KICK_L }, false, 0) } else { (TUCK, frac > 0.5 && frac < 0.75, 0) },
+        };
+    }
+    if hype {
+        // per-style footwork
+        return match l.style {
+            // line-dance grapevine (step, cross behind, step, touch; and back) + heel-toe
+            "country" => {
+                let k = beat.rem_euclid(8);
+                match k {
+                    0 => (STEP_R, false, 1),
+                    1 => (CROSS, false, 1),
+                    2 => (STEP_R, false, 2),
+                    3 => (if on { TAP_L } else { STAND }, false, 2),
+                    4 => (HEEL_R, false, 1),
+                    5 => (TAP_R, false, 1),
+                    6 => (STEP_L, false, 0),
+                    _ => (if on { TAP_R } else { STAND }, false, 0),
+                }
+            }
+            // shuffle (heels in/out on the eighths) and the running man (knees up)
+            "techno" | "house" => {
+                if p.dance % 2 == 0 {
+                    (if half.rem_euclid(2) == 0 { SHUF_A } else { SHUF_B }, false, 0)
+                } else {
+                    (match half.rem_euclid(4) { 0 => KNEE_R, 1 => PASS, 2 => KNEE_L, _ => PASS }, false, 0)
+                }
+            }
+            // swing step: side step-touch, rock on 2 and 4
+            "blues" | "jazz" => match beat.rem_euclid(4) {
+                0 => (STEP_R, false, 1),
+                1 => (if on { TAP_L } else { BOUNCE }, false, 1),
+                2 => (STEP_L, false, 0),
+                _ => (if on { TAP_R } else { BOUNCE }, false, 0),
+            },
+            // minuet: point the toe, rise on the toes, a small step
+            "baroque" => match beat.rem_euclid(6) {
+                0 | 3 => (POINT, false, 0),
+                1 | 4 => (TOES, false, 0),
+                2 => (STEP_R, false, 1),
+                _ => (STEP_L, false, 0),
+            },
+            // biker stomp: heavy alternate stomps on every beat
+            "biker" | "industrial" => (if on { if beat % 2 == 0 { STOMP_R } else { STOMP_L } } else { BOUNCE }, false, 0),
+            // jig: hop-kicks on the eighths, little hops off the ground
+            "celtic" => match half.rem_euclid(4) {
+                0 => (KICK_R, false, 0),
+                1 => (TUCK, frac.fract() < 0.5, 0),
+                2 => (KICK_L, false, 0),
+                _ => (TUCK, true, 0),
+            },
+            _ => if on && (p.dance % 2 == 0 || beat % 2 == 0) { (TUCK, true, 0) } else { (BOUNCE, false, 0) },
+        };
+    }
+    // everyday dancing by personality, feet on the beat
+    match p.dance {
+        0 => (if on { BOUNCE } else { STAND }, false, 0),
+        1 => (if beat.rem_euclid(4) < 2 { TAP_R } else { TAP_L }, false, (beat.rem_euclid(4) >= 2) as i32),
+        2 => (match beat.rem_euclid(4) { 0 => STEP_R, 1 => STAND, 2 => STEP_L, _ => STAND }, false, 0),
+        3 => (if on { TAP_R } else { STAND }, false, 0),
+        4 => (if beat % 2 == 0 { STAND } else { PASS }, false, 0),
+        5 => (if beat % 2 == 0 { SHUF_A } else { SHUF_B }, false, 0),
+        _ => (if on { if beat % 2 == 0 { KICK_R } else { KICK_L } } else { STAND }, false, 0),
+    }
+}
+
+/// FH rows of exactly FW cells, a lift (1 = jumping) and an x shift (dance steps)
+pub fn fig(l: &Look) -> ([String; FH], bool, i32) {
+    use legs::*;
+    let p = persona(l.id);
     let beat = l.beats.floor() as i64;
     let frac = l.beats.fract() as f32;
     let odd = beat.rem_euclid(2) == 1;
     let st = l.style;
-    let hat = match st {
-        "country" => " _n_ ",
-        "baroque" => " @@@ ",
-        "jazz" => " _=_ ",
-        "biker" => " ___ ",
-        "monk" => "  .  ",
-        _ => "     ",
+    let blink = ((l.t * 0.6 + (l.id % 97) as f32 * 0.31) % 4.0) < 0.15;
+    // hair or hat
+    let mut hair = HAIR[p.hair].to_string();
+    if p.themed {
+        let h = match st {
+            "country" => Some("  _n_  "),
+            "baroque" => Some("  @@@  "),
+            "jazz" => Some("  _=_  "),
+            "biker" => Some("  ___  "),
+            "monk" => Some("   .   "),
+            "techno" => Some(if odd { " * * * " } else { " + + + " }),
+            _ => None,
+        };
+        if let Some(h) = h {
+            hair = h.to_string();
+        }
+    }
+    if p.acc == 5 {
+        hair.replace_range(5..6, "*"); // a flower behind the ear
+    }
+    // expression: from the music (vibe) and the process's own activity
+    let hype = l.act == Act::Here && l.vibe == Vibe::Hype;
+    let (mut eye, mut mouth) = match (l.act, l.vibe) {
+        (Act::Wave | Act::Leave, _) => ('^', '-'),
+        (Act::Bar, _) => ('-', 'o'),
+        (_, Vibe::Applause) => ('^', 'v'),
+        (Act::Here, Vibe::Hype) => if odd { ('^', 'O') } else { ('*', 'o') },
+        _ if l.disk => ('@', '_'),
+        _ if l.cpu > 0.5 => ('>', 'o'),
+        _ if l.idle > 40.0 => ('-', '.'),
+        _ if l.chat => ('\'', 'o'),
+        _ if l.cpu > 0.08 => ('^', '_'),
+        (_, Vibe::Chill) => if frac < 0.35 { ('^', '_') } else { ('-', '_') },
+        _ => ('o', '_'),
     };
-    let walk_legs = if l.step.rem_euclid(2) == 0 { " / | " } else { " | \\ " };
-    let mut r0 = hat.to_string();
-    let mut r1 = " /o\\ ".to_string();
-    let mut r2 = " / \\ ".to_string();
+    if blink && eye != '-' {
+        eye = '-';
+    }
+    if l.surge && l.act == Act::Here {
+        mouth = 'O';
+    }
+    let (lb, rb) = if p.acc == 1 { ('d', 'b') } else { ('(', ')') };
+    let ear = if p.acc == 2 { '\'' } else { ' ' };
+    let head = format!(" {lb}{eye}{mouth}{eye}{rb}{ear}");
+    // body: arms + clothes
+    let top = TOPS[p.top];
+    let mut tc: Vec<char> = top.chars().collect();
+    if p.acc == 3 {
+        tc[0] = '~'; // scarf
+    }
+    let top: String = tc.into_iter().collect();
+    let bag = if p.acc == 4 { 'o' } else { ' ' };
+    let arms = |la: char, ra: char| format!(" {la}{top}{ra}{bag}");
+    let mut body;
     let mut lift = false;
+    let mut dx = 0;
+    let mut lg: [&str; 2];
     match l.act {
         Act::Enter | Act::Back | Act::ToBar | Act::Leave => {
-            r2 = walk_legs.into();
+            // a 4-frame walking cycle, arms swinging against the legs
+            lg = match l.step.rem_euclid(4) {
+                0 => STEP_R,
+                1 => PASS,
+                2 => STEP_L,
+                _ => PASS,
+            };
+            body = if l.step.rem_euclid(4) < 2 { arms('\\', '\\') } else { arms('/', '/') };
             if l.disk {
-                r0 = " [#] ".into();
-                r1 = " \\o/ ".into();
+                hair = "  [#]  ".into();
+                body = arms('\\', '/');
             }
             if l.act == Act::Leave && l.step.rem_euclid(4) < 2 {
-                r1 = " /o/ ".into();
+                body = arms('/', '/');
             }
         }
         Act::Wave => {
-            r1 = if (l.t * 4.0) as i32 % 2 == 0 { " /o/ " } else { " /o| " }.into();
+            body = if (l.t * 4.0) as i32 % 2 == 0 { arms('/', '/') } else { arms('/', '|') };
+            lg = if (l.t * 4.0) as i32 % 2 == 0 { TAP_R } else { STAND };
         }
         Act::Bar => {
-            let sip = ((l.t + l.seed as f32 * 0.37) % 3.0) < 0.8;
+            let sip = ((l.t + l.id as f32 * 0.0037) % 3.0) < 0.8;
             let mug = if l.beer { 'U' } else { 'c' };
-            if sip {
-                r0 = format!("{}{mug} ", &hat[..3]);
-                r1 = " /o/ ".into();
-            } else {
-                r1 = format!(" /o{mug} ");
+            body = if sip { format!(" /{top}{mug}{bag}") } else { format!(" /{top}\\{mug}") };
+            // tapping a foot at the bar
+            lg = if frac < 0.22 { TAP_R } else { STAND };
+        }
+        Act::Here => {
+            let (f, up, x) = footwork(l, &p, hype);
+            lg = f;
+            lift = up;
+            dx = x;
+            body = match l.vibe {
+                Vibe::Applause => if (l.t * 6.0) as i32 % 2 == 0 { arms('>', '<') } else { arms('-', '-') },
+                Vibe::Hype => match st {
+                    "country" => if odd { arms('/', '-') } else { arms('-', '\\') },
+                    "baroque" => if frac < 0.2 { arms('.', '.') } else { arms('/', '\\') },
+                    "blues" => arms('\\', '\\'),
+                    _ => arms('\\', '/'),
+                },
+                _ if l.disk => {
+                    hair = "  [#]  ".into();
+                    arms('\\', '/')
+                }
+                _ if l.cpu > 0.5 => if (l.beats * 2.0).floor() as i64 % 2 == 0 { arms('\\', '/') } else { arms('/', '\\') },
+                _ if l.idle > 40.0 => {
+                    // sitting it out
+                    lg = SIT;
+                    lift = false;
+                    dx = 0;
+                    hair = if (l.t as i32 + (l.id % 7) as i32) % 4 < 2 { "      z".into() } else { "     z ".into() };
+                    arms('/', '\\')
+                }
+                _ => match p.dance {
+                    3 => if frac < 0.3 { arms('/', '\\') } else { arms('|', '|') }, // headbang
+                    4 => if odd { arms('-', '/') } else { arms('\\', '-') },     // robot
+                    _ if l.cpu > 0.08 => if odd { arms('\\', '\\') } else { arms('/', '/') },
+                    _ => if beat.rem_euclid(4) < 2 { arms('/', '\\') } else { arms('|', '\\') },
+                },
+            };
+            if l.chat && !hype {
+                hair.replace_range(5..7, "..");
             }
         }
-        Act::Here => match l.vibe {
-            Vibe::Applause => {
-                r1 = if (l.t * 6.0) as i32 % 2 == 0 { " >o< " } else { " -o- " }.into();
-            }
-            Vibe::Hype => match st {
-                "country" => {
-                    // line dance: everyone steps the same way on the beat
-                    r1 = if odd { " /o- " } else { " -o\\ " }.into();
-                    r2 = if odd { " /|  " } else { "  |\\ " }.into();
-                }
-                "baroque" => {
-                    // polite golf clap
-                    r1 = if frac < 0.2 { " .o. " } else { " /o\\ " }.into();
-                }
-                "blues" => {
-                    r0 = if (l.t * 5.0) as i32 % 2 == 0 { " i   " } else { " '   " }.into();
-                    r1 = " \\o\\ ".into();
-                }
-                _ => {
-                    r1 = " \\o/ ".into();
-                    if st == "techno" {
-                        r0 = if odd { " * * " } else { " + + " }.into();
-                    }
-                    let every = l.cpu > 0.3 || (l.seed % 3 == 0);
-                    lift = frac < 0.3 && (every || odd);
-                }
-            },
-            Vibe::Chill if !l.disk && l.cpu <= 0.5 => {
-                // mingle and nod along
-                r1 = if frac < 0.35 { " |o| " } else { " /o\\ " }.into();
-                if l.chat {
-                    r0 = "   ..".into();
-                }
-            }
-            Vibe::Normal | Vibe::Chill => {
-                if l.disk {
-                    r0 = " [#] ".into();
-                    r1 = " \\o/ ".into();
-                } else if l.cpu > 0.5 {
-                    // dancing hard
-                    let half = (l.beats * 2.0).floor() as i64 % 2 == 0;
-                    r1 = if half { " \\o/ " } else { " /o\\ " }.into();
-                    r2 = if half { " / \\ " } else { " < > " }.into();
-                } else if l.cpu > 0.08 {
-                    r1 = if odd { " \\o  " } else { "  o/ " }.into();
-                } else if l.idle > 40.0 {
-                    // sitting it out
-                    r1 = "  o  ".into();
-                    r2 = " _/\\_".into();
-                    r0 = if (l.t as i32 + l.seed as i32) % 4 < 2 { "    z" } else { "   z " }.into();
-                } else if l.chat {
-                    r0 = "   ..".into();
-                } else {
-                    // a slow sway
-                    r1 = if beat.rem_euclid(4) < 2 { " /o\\ " } else { " |o\\ " }.into();
-                }
-            }
-        },
     }
-    ([r0, r1, r2], lift)
+    let rows = if p.tall {
+        [hair, head, body, lg[0].to_string(), lg[1].to_string()]
+    } else {
+        // shorter: no knee row
+        ["       ".to_string(), hair, head, body, lg[1].to_string()]
+    };
+    (rows, lift, dx)
 }
 
 /// the bar at the right end of the floor: 3 rows of BARW-1 cells (emoji width 2) + a label
@@ -514,13 +694,9 @@ pub fn bar_rows(ascii: bool) -> [String; 4] {
     }
 }
 
-/// a name tag, at most `w` cells: "firefox:4123" → "fire:4123"
-pub fn tag(name: &str, pid: i32, w: usize) -> String {
-    let p = format!(":{pid}");
-    let room = w.saturating_sub(p.len()).max(2);
-    let n: String = name.chars().take(room).collect();
-    let s = format!("{n}{p}");
-    s.chars().take(w).collect()
+/// a name tag, at most `w` cells: the exe name only (no PIDs), truncated
+pub fn tag(name: &str, w: usize) -> String {
+    name.chars().take(w).collect()
 }
 
 /// UI memory for each figure on the floor
@@ -598,8 +774,9 @@ impl Floor {
                     let r = self.rand();
                     let slot = free[((r * free.len() as f32) as usize).min(free.len() - 1)];
                     let from_left = (slot as f32) < nslots as f32 * 0.5;
-                    let seed = (self.rand() * 1000.0) as u32;
-                    let beer = self.rand() < 0.6;
+                    // looks and habits come from the exe name, so the same program is always the same person
+                    let seed = name_id(&m.name);
+                    let beer = (seed >> 24) % 5 < 3;
                     self.people.push(Person { m: m.clone(), x: if from_left { -(FW as f32) } else { fw as f32 }, slot, act: Act::Enter, t_act: 0.0, step: 0, beer, seed, stay: 0.0 });
                 }
                 None => {}
@@ -614,6 +791,8 @@ impl Floor {
         }
         let at_bar = self.people.iter().filter(|p| matches!(p.act, Act::ToBar | Act::Bar)).count();
         let mut bar_q = 0usize;
+        // one walker back from the bar at a time, so they don't walk through each other
+        let mut backing = self.people.iter().any(|p| p.act == Act::Back);
         let mut want_bar: Option<usize> = None;
         let n = self.people.len();
         for i in 0..n {
@@ -622,7 +801,7 @@ impl Floor {
             p.t_act += dt;
             let home = (p.slot * SLOT + (SLOT - FW) / 2) as f32;
             let speed = if p.m.fresh && p.m.cpu > 0.05 { 16.0 } else { 9.0 };
-            let mut go = |p: &mut Person, target: f32| -> bool {
+            let go = |p: &mut Person, target: f32| -> bool {
                 let d = target - p.x;
                 let s = speed * dt;
                 let old = p.x.round() as i32;
@@ -650,7 +829,7 @@ impl Floor {
                     }
                 }
                 Act::ToBar => {
-                    let spot = fw as f32 - FW as f32 - 1.0 - 3.0 * bar_q as f32;
+                    let spot = fw as f32 - FW as f32 - 1.0 - (FW + 1) as f32 * bar_q as f32;
                     bar_q += 1;
                     if go(p, spot) {
                         p.act = Act::Bar;
@@ -660,7 +839,8 @@ impl Floor {
                 }
                 Act::Bar => {
                     bar_q += 1;
-                    if p.t_act > p.stay || vibe == Vibe::Hype {
+                    if (p.t_act > p.stay || vibe == Vibe::Hype) && !backing {
+                        backing = true;
                         p.act = Act::Back;
                         p.t_act = 0.0;
                     }
@@ -706,27 +886,36 @@ mod tests {
     fn crowd_figures_are_clean_and_fixed_width() {
         let acts = [Act::Enter, Act::Here, Act::ToBar, Act::Bar, Act::Back, Act::Wave, Act::Leave];
         let vibes = [Vibe::Hype, Vibe::Applause, Vibe::Chill, Vibe::Normal];
-        for st in crate::style::STYLES {
-            for &act in &acts {
-                for &vibe in &vibes {
-                    for k in 0..16 {
-                        let l = Look { style: st.id, act, vibe, beats: k as f64 * 0.37, t: k as f32 * 0.29, cpu: (k % 4) as f32 * 0.25, disk: k % 5 == 0, chat: k % 3 == 0, idle: (k * 5) as f32, step: k as i32, beer: k % 2 == 0, seed: k as u32 };
-                        let (rows, _) = fig(&l);
-                        for r in rows.iter() {
-                            assert_eq!(r.width(), FW, "{} {act:?} {vibe:?}: {r:?}", st.id);
-                            assert_eq!(r.chars().count(), FW);
-                            assert!(r.chars().all(|c| (' '..='~').contains(&c)), "non-ASCII in {r:?}");
+        let names = ["firefox", "bash", "cargo", "node", "sysjam", "tmux: server", "kworker", "x", "python3", "gnome-shell", "Xorg", "zsh"];
+        let mut looks = std::collections::HashSet::new();
+        for name in names {
+            let id = name_id(name);
+            assert_eq!(id, name_id(name));
+            looks.insert(format!("{:?}", persona(id)));
+            for st in crate::style::STYLES {
+                for &act in &acts {
+                    for &vibe in &vibes {
+                        for k in 0..24 {
+                            let l = Look { style: st.id, act, vibe, beats: k as f64 * 0.37, t: k as f32 * 0.29, cpu: (k % 4) as f32 * 0.25, disk: k % 5 == 0, chat: k % 3 == 0, idle: (k * 5) as f32, step: k as i32, beer: k % 2 == 0, id, surge: k % 7 == 0 };
+                            let (rows, _, dx) = fig(&l);
+                            assert!(dx.abs() <= 2);
+                            for r in rows.iter() {
+                                assert_eq!(r.width(), FW, "{} {name} {act:?} {vibe:?}: {r:?}", st.id);
+                                assert_eq!(r.chars().count(), FW);
+                                assert!(r.chars().all(|c| (' '..='~').contains(&c)), "non-ASCII in {r:?}");
+                            }
                         }
                     }
                 }
             }
         }
+        assert!(looks.len() >= 10, "names should look different: {}", looks.len());
         for a in [true, false] {
             for r in bar_rows(a) {
                 assert_eq!(r.width(), BARW - 1, "{r:?}");
             }
         }
-        assert_eq!(tag("firefox", 4123, 9), "fire:4123");
-        assert_eq!(tag("sh", 7, 9), "sh:7");
+        assert_eq!(tag("firefox", 4), "fire");
+        assert_eq!(tag("sh", 9), "sh");
     }
 }

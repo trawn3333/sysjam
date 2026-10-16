@@ -154,6 +154,9 @@ struct Ev {
 }
 
 pub struct Engine {
+    pub orph: crate::orphans::Orphans,
+    /// keys/lead/colour: committed to play through bar index < in_until[i] (a whole statement)
+    in_until: [u64; 6],
     sr: f32,
     tbl: Vec<f32>,
     rng: Rng,
@@ -321,6 +324,8 @@ pub struct Engine {
     like_t: f32,
     /// the audience's excitement 0..1, when the crowd last got a word, last walk-in seen
     crowd_hype: f32,
+    /// time of the last `n` (next idea), seconds
+    next_t: f32,
     crowd_said: f32,
     walkin_seen: u64,
     prev_ag: f32,
@@ -333,6 +338,10 @@ pub struct Engine {
     react_dom: usize,
     react_bar: u64,
     pub mood_log: Option<Vec<String>>,
+    pub ds: crate::deadtime::DeadStats,
+    /// the conductor may break stagnation himself (off with SYSJAM_NO_DEVELOP, for A/B)
+    develop_ok: bool,
+    stag: crate::deadtime::Stag,
     /// engine sample of every synth kick (SYSJAM_KICKLOG, sync measurement)
     pub kick_log: Option<Vec<u64>>,
     /// seconds per style, GM picks per instrument family, tempo samples (bench / like test)
@@ -542,6 +551,8 @@ impl Engine {
         crate::harmony::set_root_pc((69.0 + 12.0 * (c.root / 440.0).log2()).round() as i32);
         let harm = Harmony::new(c.seed, c.minor);
         let mut e = Engine {
+            orph: crate::orphans::Orphans { log: std::env::var_os("SYSJAM_ORPH_LOG").is_some(), ..Default::default() },
+            in_until: [0; 6],
             sr,
             tbl,
             root: c.root,
@@ -695,6 +706,7 @@ impl Engine {
             like_lvl: 0.0,
             like_t: -99.0,
             crowd_hype: 0.0,
+            next_t: -99.0,
             crowd_said: -60.0,
             walkin_seen: 0,
             prev_ag: 0.0,
@@ -707,6 +719,9 @@ impl Engine {
             react_dom: 99,
             react_bar: 0,
             mood_log: std::env::var_os("SYSJAM_BENCH").map(|_| Vec::new()),
+            ds: Default::default(),
+            develop_ok: std::env::var_os("SYSJAM_NO_DEVELOP").is_none(),
+            stag: Default::default(),
             kick_log: std::env::var_os("SYSJAM_KICKLOG").map(|_| Vec::new()),
             style_secs: vec![0.0; STYLES.len()],
             fam_picks: Default::default(),
@@ -946,6 +961,9 @@ impl Engine {
         let st = self.st_idx();
         self.dens[st][i] += 1;
         self.cond.bar_notes[i] += 1;
+        if i != 2 {
+            self.ds.last_onset = self.now;
+        }
     }
     /// who is crowding whom: same register within a beat, or on top of the lead
     fn track(&mut self, i: usize, semi: i32) {
@@ -1076,49 +1094,75 @@ impl Engine {
     /// The restraint gate every melodic note passes: the player's own rest/hold
     /// decision, the conductor's lay-out and hush, and extra thinning for synth voices.
     fn gate(&mut self, who: usize, vel: i32, steps: f32, synth: bool) -> Option<(i32, f32)> {
+        self.gate_x(who, vel, steps, synth, false)
+    }
+    /// Keys, lead and colour only sound inside a statement they committed to at a phrase
+    /// start (see `declare_bar`); inside it nothing is deleted, restraint only shapes
+    /// velocity and length. `lone` = an idiomatic single hit (bells), allowed on its own.
+    fn gate_x(&mut self, who: usize, vel: i32, steps: f32, synth: bool, lone: bool) -> Option<(i32, f32)> {
         if !(3..=5).contains(&who) || self.quote_owner(who) {
             return Some((vel, steps));
         }
-        if self.cond.lay[who] > 0 || self.rmode[who] == RMode::Rest {
-            return None;
-        }
-        if self.rmode[who] == RMode::Hold && steps < 8.0 {
+        let bar = self.step.saturating_sub(1) / 16;
+        let committed = bar < self.in_until[who];
+        if !committed && (!lone || self.cond.lay[who] > 0 || self.rmode[who] == RMode::Rest) {
             return None;
         }
         let (mut vel, mut steps) = (vel, steps);
+        if self.rmode[who] == RMode::Hold {
+            vel = (vel as f32 * 0.85) as i32;
+        }
         let h = self.cond.hushv[who];
         if h < 1.0 {
-            if steps < 4.0 && self.rng.chance(1.0 - h) {
-                return None;
-            }
             vel = (vel as f32 * (0.55 + 0.45 * h)) as i32;
         }
-        // self-designed synth patches are the easiest to overdo: by default a background
-        // pad — fewer, longer notes; only when the drums are out may they do more
-        if synth && self.feel != Feel::Surge && !self.quote_owner(who) {
+        // self-designed synth patches sit back (quieter, longer) unless the drums are out
+        if synth && self.feel != Feel::Surge {
             match self.space_for(who) {
-                Space::Duck => {
-                    if steps < 8.0 {
-                        return None; // lay out under the GM / lead, keep only long tones
-                    }
-                    vel = (vel as f32 * 0.8) as i32;
-                }
-                Space::Back => {
-                    if steps < 4.0 && self.rng.chance(0.6) {
-                        return None;
-                    }
-                    steps = (steps * 2.0).max(4.0);
-                }
-                Space::Stretch => {
-                    if steps < 3.0 && self.rng.chance(0.15) {
-                        return None;
-                    }
-                    steps *= 1.2;
-                }
+                Space::Duck => vel = (vel as f32 * 0.7) as i32,
+                Space::Back => steps = (steps * 1.5).max(3.0),
+                Space::Stretch => steps *= 1.2,
             }
         }
         Some((vel, steps))
     }
+
+    /// Bar line: who commits to a statement now. A player that is out may only come
+    /// in at a phrase start (keys also half way), and then plays through to the phrase
+    /// end; restraint (hush, synth sitting back) makes the statement shorter, never gappy.
+    fn declare_bar(&mut self, bar: u64) {
+        let surge = self.feel == Feel::Surge;
+        for i in 3..6 {
+            if bar < self.in_until[i] {
+                continue;
+            }
+            if !self.on[i] || self.cond.lay[i] > 0 || self.rmode[i] == RMode::Rest {
+                continue;
+            }
+            let p = [P::Keys, P::Lead, P::Colour][i - 3];
+            let featured = self.leader.soloist == Some(p) || self.leader.lone == Some(p) || self.quote_owner(i);
+            let ph = (bar % 4) as u32;
+            if !(featured || ph == 0 || (i == 3 && ph == 2)) {
+                continue;
+            }
+            let mut len = 4 - ph;
+            if !featured {
+                let h = self.cond.hushv[i];
+                if h < 1.0 && self.rng.chance(1.0 - h) {
+                    len = (len / 2).max(1);
+                }
+                if self.has_synth(i) && !surge {
+                    match self.space_for(i) {
+                        Space::Duck if self.rmode[i] != RMode::Hold => continue,
+                        Space::Back if len > 1 && self.rng.chance(0.4) => len /= 2,
+                        _ => {}
+                    }
+                }
+            }
+            self.in_until[i] = bar + len as u64;
+        }
+    }
+
     fn heard(&mut self, i: usize, label: String, vel: f32) {
         self.mark_hit(i, vel);
         self.count(i);
@@ -1289,6 +1333,7 @@ impl Engine {
             liked: self.time() - self.like_t,
             likes_n: self.likes.likes.len(),
             crowd_hype: self.crowd_hype,
+            skipped: self.time() - self.next_t,
         };
     }
 
@@ -1342,6 +1387,9 @@ impl Engine {
         }
         if crate::shared::KEY_LIKE.swap(0, Relaxed) > 0 {
             self.like_now();
+        }
+        if crate::shared::KEY_NEXT.swap(0, Relaxed) > 0 {
+            self.next_idea(true);
         }
     }
 
@@ -1420,6 +1468,143 @@ impl Engine {
         self.pub_now = true;
     }
 
+
+    /// `n` / Tab (user = true) or the conductor's own "new section" (user = false):
+    /// a fresh idea within the current style, right now. New key (away from recent
+    /// history) and progression from the next beat, new motifs and patterns for
+    /// everyone, new sounds for at least half the band, the resting players called in.
+    fn next_idea(&mut self, user: bool) {
+        let now = self.now;
+        if user {
+            self.ds.nexts += 1;
+            self.next_t = self.time();
+            // the one explicit negative: a small skip for the moment we moved on from
+            let snap = self.like_snapshot();
+            self.likes.skip(snap);
+            self.likes.save_async();
+            self.mood.impulse(crate::mood::Mood::Inspired, 0.6);
+        }
+        self.mark(if user { "next" } else { "develop" });
+        self.stag.player_t = now;
+        // a quote or surge in flight steps aside
+        if self.feel == Feel::Surge {
+            self.surge_left = 1;
+        }
+        self.leader.lone = None;
+        self.leader.breakdown = 0;
+        // harmony: straight to a new key at the next beat, fresh plan there
+        let key = self.harm.jump();
+        self.bars_since_change = self.cur_bpc;
+        // new motifs and patterns for everyone
+        let dens = match self.leader.state {
+            State::Chill => 0.25,
+            State::Awaken => 0.35,
+            State::Alive => 0.45,
+            State::Subside => 0.3,
+        };
+        self.motif = Motif::random(&mut self.rng, dens, 32);
+        let w: &[f32; 5] = match self.leader.state {
+            State::Chill | State::Subside => &[0.45, 0.3, 0.0, 0.25, 0.0],
+            _ => &[0.2, 0.25, 0.15, 0.2, 0.2],
+        };
+        let old = self.comp;
+        for _ in 0..4 {
+            self.comp = [Comp::Sparse, Comp::Arp, Comp::ArpUD, Comp::Broken, Comp::Offbeat][self.rng.weighted(w)];
+            if self.comp != old {
+                break;
+            }
+        }
+        self.make_bass_pattern();
+        self.make_drum_pattern();
+        if self.acid_on {
+            self.make_acid();
+        }
+        // new sounds for at least half the band (players 1-5)
+        let why = if user { "next idea".to_string() } else { "the conductor called a new section".to_string() };
+        let slots: Vec<usize> = (0..self.slots.len()).filter(|&i| self.slots[i].on).collect();
+        let band = 5usize;
+        let need = if user { band.div_ceil(2) } else { 2 };
+        let mut picked: Vec<usize> = Vec::new();
+        let mut order: Vec<usize> = slots.clone();
+        for k in (1..order.len()).rev() {
+            order.swap(k, self.rng.below(k + 1));
+        }
+        for si in order {
+            let pl = Self::player_of(self.slots[si].role);
+            if picked.len() >= need && !(user && self.rng.chance(0.4)) {
+                continue;
+            }
+            self.insp[pl] = Some(why.clone());
+            self.slot_instant(si);
+            if !picked.contains(&pl) {
+                picked.push(pl);
+            }
+        }
+        if picked.len() < need && self.gm.is_some() && self.on[2] {
+            self.insp[2] = Some(why.clone());
+            self.instant_kit();
+            picked.push(2);
+        }
+        if picked.len() < need && !self.acid_on && !self.slot_on(Role::Bass) {
+            let p = (self.bass_patch + 1 + self.rng.below(BASS_PATCHES.len() - 1)) % BASS_PATCHES.len();
+            self.bass_patch = p;
+            self.bass_saw_t = BASS_PATCHES[p].1;
+            self.bass_drive_t = BASS_PATCHES[p].2;
+            self.insp[1] = Some(why.clone());
+            self.changed_sound(1, format!("switching to a {} patch", BASS_PATCHES[p].0));
+            picked.push(1);
+        }
+        if picked.len() < need || !self.slot_on(Role::Colour) {
+            let p = (self.bell_patch + 1 + self.rng.below(BELL_PATCHES.len() - 1)) % BELL_PATCHES.len();
+            self.bell_patch = p;
+        }
+        for i in 1..6 {
+            if self.insp[i].as_deref() == Some(why.as_str()) {
+                self.insp[i] = None;
+            }
+        }
+        // everybody listens again: lay-outs and hushes lifted, two melodic players in
+        for i in 2..6 {
+            self.cond.lay[i] = 0;
+            self.cond.hushv[i] = 1.0;
+            self.cond.hush_ph[i] = 0;
+        }
+        self.cond.drone_cue = 0;
+        self.cond.pending.clear();
+        let mut mel: Vec<usize> = (3..6).collect();
+        for k in (1..mel.len()).rev() {
+            mel.swap(k, self.rng.below(k + 1));
+        }
+        let bar_now = self.step / 16;
+        for i in 3..6 {
+            self.in_until[i] = 0; // the conductor cuts the old statements off
+        }
+        for &i in mel.iter().take(2) {
+            self.in_until[i] = bar_now + 2;
+            self.on[i] = true;
+            self.rmode[i] = RMode::Play;
+            self.rest_run[i] = 0;
+            self.play_run[i] = 0;
+            self.hold[i] = 0;
+            self.think(i, "following", format!("{why} → fresh motif in {}", key.name()));
+            self.hold[i] = now + (self.sr * 6.0) as u64;
+        }
+        // a kick-off: the drummer fills into it when the drums are up
+        if self.on[2] && self.rmode[2] == RMode::Play {
+            self.fill = true;
+        }
+        let line = if user {
+            if self.ds.nexts == 1 { "right, moving on!" } else { ["right, moving on!", "ok — next idea!", "fresh page, here we go", "let's try something else"][self.rng.below(4)] }
+        } else {
+            ["getting stale — new section, let's go somewhere", "same old loop… new section!"][self.rng.below(2)]
+        };
+        self.cond_say(line.into(), Pose::Point, None);
+        self.say(format!("~ {why}: straight to {} at the next beat, new motifs, {} new sound{}", key.name(), picked.len(), if picked.len() == 1 { "" } else { "s" }));
+        self.stag.cool = now + (self.sr * 45.0) as u64;
+        // give the new idea a few bars before anyone gets told off
+        self.cond.cool = self.cond.cool.max(now + (self.sr * 10.0) as u64);
+        self.pub_now = true;
+    }
 
     /// ↑/↓: ±7 bpm of user bias on the living tempo, ramped over a bar.
     fn nudge(&mut self, n: i32) {
@@ -1560,6 +1745,7 @@ impl Engine {
 
     fn switch_style(&mut self, to: usize, why: &str) {
         let from = self.style;
+        self.mark("style");
         self.n_style += 1;
         self.style = to;
         self.style_from = Some(from);
@@ -1902,6 +2088,9 @@ impl Engine {
         self.n_tsec[next as usize] += 1;
         self.make_acid();
         let name = ["groove", "breakdown", "build", "drop"][next as usize];
+        if next != was {
+            self.mark("techno section");
+        }
         if next != was || next != 0 {
             self.say(format!("~ techno: {name} for {} bars (intensity {e:.2})", len * 4));
             if !line.is_empty() {
@@ -2253,6 +2442,7 @@ impl Engine {
             self.say(format!("~ {who}: {why} → {what}"));
         }
         self.since[i] = self.now;
+        self.stag.player_t = self.now;
         self.dwell[i] = (self.sr * self.rng.range(8.0, 10.0)) as u64;
         let st = self.minds[i].status;
         self.hold[i] = 0;
@@ -2417,6 +2607,7 @@ impl Engine {
         }
         let why = if kb > 0.6 { "the typing is racing" } else if st == State::Alive { "the band is running hot" } else { "felt like opening the throttle" };
         self.feel = Feel::Surge;
+        self.mark("surge");
         self.surge_left = 2 + self.rng.below(3) as u32;
         self.on[1] = true;
         self.on[2] = true;
@@ -2565,7 +2756,7 @@ impl Engine {
                     let i = who[self.rng.below(who.len())];
                     let name = w.split(':').next().unwrap_or(&w).to_string();
                     self.set_think(i, format!("nods at the door: {name} just walked in"));
-                    self.band_say(format!("~ {w} walked in; the {} nods", self.minds[i].name));
+                    self.band_say(format!("~ {name} walked in; the {} nods", self.minds[i].name));
                 }
             }
         }
@@ -2777,6 +2968,17 @@ impl Engine {
             return;
         }
         self.hit_delay = delay;
+        {
+            let prog = if self.slots[si].synth.is_some() { None } else { self.slots[si].program };
+            let ex = crate::orphans::lone_ok(prog, steps);
+            let at = self.now + (delay.max(0.0) * self.step_len) as u64;
+            let win = (self.step_len * 8.0) as u64;
+            let ch = (self.sr * 0.04) as u64;
+            if self.orph.log {
+                self.orph.what[who] = format!("t {:.1}s {:?} prog {:?} steps {steps:.1} delay {delay:.1} step {} rmode {:?} comp {:?} st {} in_until {} sty {}", self.time(), r, prog, self.step, self.rmode[who], self.comp, self.leader.state.name(), self.in_until[who.min(5)], STYLES[self.style].id);
+            }
+            self.orph.note(who, at, ex, win, ch);
+        }
         self.heard_semi(who, semi, vel as f32 / 100.0);
     }
 
@@ -2999,6 +3201,8 @@ impl Engine {
             self.on_bar_line(bar);
             self.conductor_bar(bar);
             self.space_bar();
+            self.stag_bar();
+            self.declare_bar(bar);
         }
         // a user style switch lands on the next beat: new layers and the new harmony
         if s % 4 == 0 && s != 0 && self.harm.restarting() {
@@ -3012,6 +3216,7 @@ impl Engine {
         self.lead_step(s, bar);
         self.colour_step(s, bar);
         self.industrial_step(s);
+        self.dead_step();
     }
 
     /// Colour player's industrial texture: only when the band hears real chaos
@@ -3058,6 +3263,195 @@ impl Engine {
         }
     }
 
+    /// a meaningful section change happened (for the stagnation detector + bench)
+    fn mark(&mut self, why: &'static str) {
+        let t = self.time() as f64;
+        self.ds.mark(t, why);
+        self.stag.mark_t = self.now;
+    }
+
+    /// per 16th: is the music thin, silent or static right now? (bookkeeping only)
+    fn dead_step(&mut self) {
+        let now = self.now;
+        let relax = self.sty().relax;
+        let ds = &mut self.ds;
+        ds.steps += 1;
+        let pad = self.tones.iter().any(|t| t.on) && self.bed_g > 0.05;
+        let bass = self.bass_env > 0.02 || self.mel_until[1] > now;
+        let mut mel = 0;
+        for i in 3..6 {
+            if self.mel_until[i] > now {
+                mel += 1;
+            }
+        }
+        if self.guest_on && self.guest_gain > 0.05 {
+            mel += 1;
+        }
+        let voices = pad as u32 + bass as u32 + mel;
+        let thin = voices < 2;
+        let stat = now.saturating_sub(ds.last_onset) as f32 > self.sr * 4.0;
+        ds.thin += thin as u64;
+        ds.static_ += stat as u64;
+        ds.dead += (thin || stat) as u64;
+        let brk = self.leader.breakdown > 0 || self.cond.drone_cue > 0 || (relax && self.tsec == 1);
+        let mut act = (self.on[1] && self.cond.lay[1] == 0) as u64 + (self.on[2] && self.rmode[2] == RMode::Play && self.cond.lay[2] == 0) as u64;
+        for i in 3..6 {
+            act += (self.on[i] && self.rmode[i] != RMode::Rest && self.cond.lay[i] == 0) as u64;
+        }
+        ds.act_sum += act;
+        if act < 2 && !brk {
+            ds.few += 1;
+        }
+        if mel == 0 {
+            ds.no_mel += 1;
+            let sti = match self.leader.state {
+                State::Chill => 0,
+                State::Awaken => 1,
+                State::Alive => 2,
+                State::Subside => 3,
+            };
+            ds.why_state[sti] += 1;
+            for i in 3..6 {
+                let k = if !self.on[i] {
+                    0
+                } else if self.cond.lay[i] > 0 {
+                    1
+                } else if self.rmode[i] == RMode::Rest {
+                    2
+                } else if self.rmode[i] == RMode::Hold {
+                    3
+                } else {
+                    4
+                };
+                ds.why[i - 3][k] += 1;
+            }
+        }
+    }
+
+    /// once a bar: how stale is it? (time since a section change, chord novelty,
+    /// flat intensity, no player changes)
+    fn stag_bar(&mut self) {
+        let ch = self.history.back().cloned().unwrap_or_default();
+        let e = self.leader.energy;
+        let now = self.now;
+        let sr = self.sr;
+        let st = &mut self.stag;
+        st.chords.push_back(ch);
+        st.en.push_back(e);
+        while st.chords.len() > 16 {
+            st.chords.pop_front();
+        }
+        while st.en.len() > 16 {
+            st.en.pop_front();
+        }
+        let mut distinct: Vec<&String> = Vec::new();
+        for c in st.chords.iter() {
+            if !distinct.contains(&c) {
+                distinct.push(c);
+            }
+        }
+        let (lo, hi) = st.en.iter().fold((1f32, 0f32), |a, &x| (a.0.min(x), a.1.max(x)));
+        let since_mark = now.saturating_sub(st.mark_t) as f32 / sr;
+        let since_pl = now.saturating_sub(st.player_t) as f32 / sr;
+        let mut sc = ((since_mark - 40.0) / 50.0).clamp(0.0, 1.0) * 0.5;
+        if st.chords.len() >= 12 && distinct.len() <= 2 {
+            sc += 0.2;
+        }
+        if st.en.len() >= 12 && hi - lo < 0.06 {
+            sc += 0.15;
+        }
+        if since_pl > 40.0 {
+            sc += 0.15;
+        }
+        st.score = sc;
+        st.flagged = sc >= 0.6;
+        self.ds.bars += 1;
+        if st.flagged {
+            self.ds.stale_bars += 1;
+        }
+        if st.flagged && now >= st.cool && self.step >= 16 * 8 && self.develop_ok {
+            self.develop();
+        }
+    }
+
+    /// the conductor hears it going nowhere and does something about it (and says why)
+    fn develop(&mut self) {
+        if self.quote.is_some() || self.feel == Feel::Surge || self.style_left > 0 || self.harm.restarting() {
+            return;
+        }
+        let st = self.leader.state;
+        let mel: Vec<usize> = (3..6).collect();
+        let can_trade = self.on[3] || self.on[4];
+        // weights: new section, new key, feature a player, call-and-response, build
+        let w = [
+            0.3,
+            if self.sty().harm == Harm::Blues { 0.0 } else { 0.25 },
+            0.25,
+            if can_trade { 0.12 } else { 0.0 },
+            if matches!(st, State::Awaken | State::Alive) { 0.2 } else { 0.06 },
+        ];
+        let k = self.rng.weighted(&w);
+        let what: &'static str;
+        match k {
+            0 => {
+                self.ds.develops.push("new section");
+                self.next_idea(false);
+                return;
+            }
+            1 => {
+                self.harm.request_modulation();
+                what = "new key";
+                self.cond_say("getting stale — let's go somewhere: new key".into(), Pose::Point, None);
+            }
+            2 => {
+                let i = mel[self.rng.below(mel.len())];
+                let p = [P::Keys, P::Lead, P::Colour][i - 3];
+                self.leader.feature(p, 2);
+                self.on[i] = true;
+                self.rmode[i] = RMode::Play;
+                self.rest_run[i] = 0;
+                self.cond.lay[i] = 0;
+                self.cond.hushv[i] = 1.0;
+                self.cond.hush_ph[i] = 0;
+                let who = self.pname(i);
+                what = "feature";
+                self.cond_say(format!("getting stale — {who}, take a little solo"), Pose::Point, Some(i));
+                self.hold[i] = 0;
+                self.think(i, "soloing", "conductor: it's going nowhere → featured for two phrases");
+                self.hold[i] = self.now + (self.sr * 8.0) as u64;
+            }
+            3 => {
+                self.leader.trade = true;
+                for i in [3, 4] {
+                    self.on[i] = true;
+                    self.rmode[i] = RMode::Play;
+                    self.cond.lay[i] = 0;
+                }
+                what = "call and response";
+                self.cond_say("getting stale — keys, answer the lead".into(), Pose::Point, None);
+            }
+            _ => {
+                self.harm.request_tension();
+                if self.on[2] && self.rmode[2] == RMode::Play {
+                    self.fill = true;
+                }
+                for i in 2..6 {
+                    self.cond.lay[i] = 0;
+                    self.cond.hushv[i] = 1.0;
+                    self.cond.hush_ph[i] = 0;
+                }
+                what = "build";
+                self.cond_say("getting stale — build it up!".into(), Pose::Surge, None);
+            }
+        }
+        self.ds.develops.push(what);
+        self.mark("develop");
+        self.stag.player_t = self.now;
+        self.stag.cool = self.now + (self.sr * self.rng.range(40.0, 70.0)) as u64;
+        self.cond.cool = self.cond.cool.max(self.now + (self.sr * 8.0) as u64);
+        self.say(format!("~ the conductor hears it going nowhere → {what}"));
+    }
+
     fn meander(&self) -> bool {
         matches!(self.leader.state, State::Chill)
     }
@@ -3080,7 +3474,17 @@ impl Engine {
         }
         self.style_phrase();
         let mut msgs = Vec::new();
+        let (so0, br0, lo0) = (self.leader.soloist, self.leader.breakdown, self.leader.lone);
         let req = self.leader.on_phrase(&mut msgs);
+        if self.leader.soloist.is_some() && self.leader.soloist != so0 {
+            self.mark("solo");
+        }
+        if self.leader.breakdown > 0 && br0 == 0 {
+            self.mark("breakdown");
+        }
+        if self.leader.lone.is_some() && self.leader.lone != lo0 {
+            self.mark("alone");
+        }
         if req.modulate {
             self.harm.request_modulation();
         }
@@ -3091,6 +3495,9 @@ impl Engine {
             self.say(m);
         }
         let changed = before != self.leader.state;
+        if changed {
+            self.mark("state");
+        }
         self.tempo_phrase(changed);
         self.key_phrase();
         if changed {
@@ -3117,6 +3524,7 @@ impl Engine {
             let now = if p == P::Drone { true } else { self.persona[i].decide(was, inv, &mut self.rng) };
             self.on[i] = now;
             if now != was {
+                self.stag.player_t = self.now;
                 let m = match (p, now) {
                     (P::Lead, false) => "lead resolves the melody and lays out".to_string(),
                     (p, true) => format!("{} joins", p.name()),
@@ -3154,7 +3562,7 @@ impl Engine {
         self.make_drum_pattern();
         // keys comping style for this phrase
         let w: &[f32; 5] = match self.leader.state {
-            State::Chill => &[0.9, 0.0, 0.0, 0.1, 0.0],
+            State::Chill => &[0.65, 0.2, 0.0, 0.15, 0.0],
             State::Awaken => &[0.55, 0.25, 0.0, 0.15, 0.05],
             State::Alive => &[0.25, 0.3, 0.1, 0.15, 0.2],
             State::Subside => &[0.75, 0.15, 0.0, 0.1, 0.0],
@@ -3172,6 +3580,7 @@ impl Engine {
         self.phrase_minds();
         self.restraint_phrase();
         self.layer_cap();
+        self.floor_phrase();
         if let Some(q) = self.quote.as_ref() {
             let pl = q.player;
             self.rmode[pl] = RMode::Play; // keep the quoting player on
@@ -3232,11 +3641,12 @@ impl Engine {
                     5 if self.rmode[3] == RMode::Play && self.rmode[4] == RMode::Play => 0.12,
                     _ => 0.0,
                 };
+                // restraint means fewer notes, not silence: calm states lean to "hold"
                 let base = match st {
-                    State::Chill => -0.42,
-                    State::Awaken => -0.12,
+                    State::Chill => -0.14,
+                    State::Awaken => 0.0,
                     State::Alive => 0.12,
-                    State::Subside => -0.3,
+                    State::Subside => -0.1,
                 } - if surge { 0.1 } else { 0.0 }
                     + 0.4 * (self.sty().density - 1.0);
                 let pe = self.persona[i];
@@ -3280,6 +3690,49 @@ impl Engine {
         }
     }
 
+    /// The floor: outside a deliberate cue there is always at least one gentle melodic
+    /// voice playing and (unless someone was asked to play alone) two melodic players
+    /// in, so the pad + bass never sit there on their own.
+    fn floor_phrase(&mut self) {
+        let lone = self.leader.lone.is_some();
+        let in_ = |e: &Engine, i: usize| e.on[i] && e.cond.lay[i] == 0 && e.rmode[i] != RMode::Rest;
+        let n_play = (3..6).filter(|&i| in_(self, i) && self.rmode[i] == RMode::Play).count();
+        let n_in = (3..6).filter(|&i| in_(self, i)).count();
+        let need_in = if lone { 1 } else { 2 };
+        if n_play >= 1 && n_in >= need_in {
+            return;
+        }
+        // longest-resting first; players the conductor just laid out stay out
+        let mut cand: Vec<usize> = (3..6).filter(|&i| self.cond.lay[i] == 0 && !(in_(self, i) && self.rmode[i] == RMode::Play)).collect();
+        cand.sort_by_key(|&i| (std::cmp::Reverse(self.rest_run[i] + if in_(self, i) { 10 } else { 0 }), self.rng.below(4)));
+        let mut n_play = n_play;
+        let mut n_in = n_in;
+        for i in cand {
+            if n_play >= 1 && n_in >= need_in {
+                break;
+            }
+            let was_in = in_(self, i);
+            let mode = if n_play == 0 { RMode::Play } else { RMode::Hold };
+            if !self.on[i] {
+                self.on[i] = true;
+                self.stag.player_t = self.now;
+            }
+            self.rmode[i] = mode;
+            self.rest_run[i] = 0;
+            if mode == RMode::Play {
+                n_play += 1;
+                // a gentle line, not a solo
+                self.cond.hushv[i] = self.cond.hushv[i].min(0.8);
+                self.cond.hush_ph[i] = self.cond.hush_ph[i].max(1);
+            }
+            if !was_in {
+                n_in += 1;
+            }
+            let why = if mode == RMode::Play { "it's getting bare → a slow, sparse line over the drone" } else { "keeping a long tone going so it never goes empty" };
+            self.think(i, if mode == RMode::Play { "following" } else { "holding" }, why);
+        }
+    }
+
     fn ctl_tied_name(&self, i: usize) -> String {
         let g = self.ctl.sig;
         match i {
@@ -3300,12 +3753,47 @@ impl Engine {
         self.say(format!("♩ conductor: {speech}"));
     }
 
+    /// pass the baton: when `i` lays out and fewer than two melodic players are left,
+    /// invite the longest-resting one in (softly)
+    fn baton(&mut self, i: usize) -> Option<usize> {
+        let left = (3..6).filter(|&j| j != i && self.on[j] && self.cond.lay[j] == 0 && self.rmode[j] != RMode::Rest).count();
+        if left >= 2 {
+            return None;
+        }
+        let mut cand: Vec<usize> = (3..6).filter(|&j| j != i && self.cond.lay[j] == 0 && self.rmode[j] != RMode::Play).collect();
+        if cand.is_empty() {
+            return None;
+        }
+        cand.sort_by_key(|&j| std::cmp::Reverse(self.rest_run[j]));
+        let j = cand[0];
+        if !self.on[j] {
+            self.on[j] = true;
+            self.stag.player_t = self.now;
+        }
+        self.rmode[j] = RMode::Play;
+        self.rest_run[j] = 0;
+        self.cond.hushv[j] = 0.8;
+        self.cond.hush_ph[j] = 1;
+        self.cond.n_invite += 1;
+        self.hold[j] = 0;
+        let who = self.pname(i);
+        self.think(j, "following", format!("conductor: {who} is out → “my turn”"));
+        self.hold[j] = self.now + (self.sr * 8.0) as u64;
+        Some(j)
+    }
+
     /// put an order into effect
     fn obey(&mut self, i: usize, o: Order) {
         match o {
             Order::Hush(n) => {
                 self.cond.hushv[i] = 0.5;
                 self.cond.hush_ph[i] = n;
+            }
+            Order::LayOut(_) if (3..6).contains(&i) && self.step / 16 < self.in_until[i] => {
+                // commit to the end: the phrase finishes, then the lay-out lands
+                let at = self.in_until[i];
+                self.cond.pending.retain(|p| p.0 != i);
+                self.cond.pending.push((i, o, at));
             }
             Order::LayOut(n) => {
                 self.cond.lay[i] = n;
@@ -3333,7 +3821,13 @@ impl Engine {
             Order::LayOut(n) => (if n == 1 { "lay out a phrase" } else { "lay out 2 phrases" }, "ok, resting"),
         };
         let pose = if matches!(o, Order::Hush(_)) { Pose::Shh } else { Pose::Point };
-        let said = speech.unwrap_or_else(|| format!("{who}, {what}"));
+        let mut said = speech.unwrap_or_else(|| format!("{who}, {what}"));
+        // a melodic lay-out always hands the space to someone else
+        if matches!(o, Order::LayOut(_)) && (3..6).contains(&i) {
+            if let Some(j) = self.baton(i) {
+                said = format!("{said} — {}, you take it", self.pname(j));
+            }
+        }
         let what = said.strip_prefix(&format!("{who}, ")).unwrap_or(&said).to_string();
         self.cond_say(said, pose, Some(i));
         match o {
@@ -3428,7 +3922,11 @@ impl Engine {
                 let said = if base == Pose::Calm && self.brain_intent != 0 && self.rng.chance(0.6) { crate::speech::line(&mut self.rng, self.brain_intent, STYLES[self.style].id) } else { String::new() };
                 self.cond.speech = if !said.is_empty() { said } else { match base {
                     Pose::Surge => "open it up!".into(),
-                    Pose::Rest => "the drone has it — I'll sit this one out".into(),
+                    Pose::Rest => match (3..6).find(|&i| self.on[i] && self.cond.lay[i] == 0 && self.rmode[i] == RMode::Play) {
+                        // he only sits back once someone has a line going
+                        Some(i) => format!("the drone and the {} have it — I'll sit back", self.pname(i)),
+                        None => "the drone has it — I'll sit this one out".into(),
+                    },
                     _ => match st {
                         State::Alive => "keep it tight, leave some space".into(),
                         State::Subside => "let it breathe… easing down".into(),
@@ -3507,13 +4005,14 @@ impl Engine {
             self.cond.n_cue += 1;
             self.cond.cool = now + (self.sr * 25.0) as u64;
             if matches!(st, State::Chill | State::Subside) && !surge {
-                self.cond_say("everyone drop to the drone".into(), Pose::Shh, None);
-                for i in 2..6 {
-                    self.obey(i, Order::LayOut(2));
+                // softer, not silent: the drums sit out a phrase, everyone else plays half as much
+                self.cond_say("everyone, softer — let the drone breathe".into(), Pose::Shh, None);
+                self.obey(2, Order::LayOut(1));
+                for i in 3..6 {
+                    self.obey(i, Order::Hush(1));
                 }
-                self.cond.drone_cue = 2;
             } else {
-                let n = 1 + self.rng.below(2) as u32;
+                let n = 1;
                 self.cond_say(format!("bass and drums only{}", if n > 1 { ", 2 phrases" } else { "" }), Pose::Point, None);
                 for i in 3..6 {
                     self.obey(i, Order::LayOut(n));
@@ -3834,6 +4333,40 @@ impl Engine {
         self.patch_manage();
         self.bars_since_change += 1;
         self.harmony_bar();
+        if self.bars_since_change >= 1 && matches!(self.leader.state, State::Chill | State::Subside) {
+            self.pad_drift();
+        }
+    }
+
+    /// between chord changes one inner pad voice steps to a neighbouring chord tone
+    /// (or the 9th) and back: slow voice-leading so a held chord never sits still
+    fn pad_drift(&mut self) {
+        let root = self.chord().root;
+        let mut pcs = self.pad_pcs.clone();
+        if pcs.is_empty() {
+            return;
+        }
+        pcs.push((root + 2).rem_euclid(12));
+        let on: Vec<usize> = (1..self.tones.len()).filter(|&i| self.tones[i].on).collect();
+        if on.is_empty() {
+            return;
+        }
+        let ti = on[self.rng.below(on.len())];
+        let cur = self.tones[ti].target.round() as i32;
+        let taken: Vec<i32> = self.tones.iter().filter(|t| t.on).map(|t| t.target.round() as i32).collect();
+        let up = self.rng.chance(0.5);
+        let mut best = None;
+        for d in 1..=4 {
+            let c = if up { cur + d } else { cur - d };
+            if (2..=27).contains(&c) && pcs.contains(&c.rem_euclid(12)) && !taken.contains(&c) {
+                best = Some(c);
+                break;
+            }
+        }
+        if let Some(c) = best {
+            self.tones[ti].target = c as f32;
+            self.ds.last_onset = self.now;
+        }
     }
 
     fn harmony_bar(&mut self) {
@@ -3847,6 +4380,7 @@ impl Engine {
             }
             self.on_chord(ch.chord, note, false);
             if kc {
+                self.mark("key change");
                 self.band_say(format!("key change -> {}", ch.key.name()));
                 let k = ch.key.name();
                 for i in 1..6 {
@@ -3867,6 +4401,7 @@ impl Engine {
 
     fn on_chord(&mut self, c: Chord, note: Option<String>, init: bool) {
         self.bars_since_change = 0;
+        self.ds.last_onset = self.now;
         let t = self.time();
         let locked = matches!(self.sty().harm, Harm::Blues | Harm::Loop | Harm::Country);
         if let Some(l) = self.chord_log.as_mut() {
@@ -3875,10 +4410,11 @@ impl Engine {
         // harmonic rhythm depends on the arrangement state
         let cb = self.chord_bars;
         self.cur_bpc = match self.leader.state {
-            State::Chill => cb * 2 + self.rng.below(2) as u32,
+            // chilling still moves: a chord every 1-2 bars (plus inner-voice drift between)
+            State::Chill => cb.min(2).max(1) - self.rng.chance(0.25) as u32 * (cb >= 2) as u32,
             State::Awaken => cb,
             State::Alive => if self.rng.chance(0.5) { (cb / 2).max(1) } else { cb },
-            State::Subside => cb + self.rng.below(2) as u32,
+            State::Subside => cb,
         };
         // 12-bar blues: one bar per chord, always
         if self.sty().harm == Harm::Blues {
@@ -4408,14 +4944,15 @@ impl Engine {
             return;
         }
         if self.rmode[3] == RMode::Hold {
-            // one sustained chord tone per chord, nothing else
+            // a slow rolled chord on each chord change, left to ring (a whole gesture, not one note)
             if s == 0 && self.bars_since_change == 0 {
                 let c = self.chord();
-                let pcs = c.pcs();
-                let pc = pcs[(1 + self.rng.below(2)).min(pcs.len() - 1)];
-                let p = Self::fold(pc, 14, 25);
+                let mut v: Vec<i32> = c.pcs().iter().map(|&pc| Self::fold(pc, 12, 23)).collect();
+                v.sort();
                 let len = (self.cur_bpc.max(1) * 16) as f32;
-                self.role_note(Role::Comp, p, 42, len, 0.0);
+                for (k, &p) in v.iter().take(4).enumerate() {
+                    self.role_note(Role::Comp, p, 42 - 2 * k as i32, len - 2.0 * k as f32, 2.0 * k as f32);
+                }
             }
             return;
         }
@@ -4430,9 +4967,11 @@ impl Engine {
         let v = 40 + (self.leader.invite(P::Keys) * 25.0) as i32 + if s % 4 == 0 { 6 } else { 0 };
         match self.comp {
             Comp::Sparse => {
-                if s == 0 || (s == 8 && alive && self.rng.chance(0.25)) {
-                    let p = up[self.rng.below(up.len())];
-                    self.role_note(Role::Comp, p, v - 6, 12.0, 0.0);
+                // a gentle broken chord per bar: low, middle, top, each left ringing
+                let at = [0usize, 6, 10];
+                if let Some(k) = at.iter().position(|&x| x == s) {
+                    let p = up[(k * 2).min(up.len() - 1)];
+                    self.role_note(Role::Comp, p, v - 6 - 3 * k as i32, (16 - s) as f32, 0.0);
                 }
             }
             Comp::Arp => {
@@ -4478,21 +5017,25 @@ impl Engine {
         let state = self.leader.state;
         let phase = bar % 4;
         if self.rmode[4] == RMode::Hold && !soloing {
-            // one long note at the top of the phrase, then space
+            // a short, complete phrase at the top of the phrase (3 notes, the last one held), then space
             if s == 0 && phase == 0 {
                 let center = 31 + (self.persona[4].register * 4.0) as i32;
-                let deg = [0, 2, 4][self.rng.below(3)];
-                let p = self.motif_pitch(deg, true, center);
-                if self.slot_on(Role::Lead) {
-                    self.role_note(Role::Lead, p, 48, 24.0, 0.0);
-                } else {
-                    self.bell_for(4, p as f32 + 12.0, 0.45, 0.0);
+                let m = self.motif.phrase(&mut self.rng, 3);
+                let k = m.notes.len().min(3);
+                for (j, n) in m.notes.iter().take(k).enumerate() {
+                    let p = self.motif_pitch(n.deg, n.at % 4 == 0, center);
+                    let len = if j + 1 == k { 16.0 } else { n.len as f32 };
+                    if self.slot_on(Role::Lead) {
+                        self.role_note(Role::Lead, p, 48, len, n.at as f32);
+                    } else if j == 0 {
+                        self.bell_for(4, p as f32 + 12.0, 0.45, 0.0);
+                    }
                 }
             }
             return;
         }
         // call (bar 0, plus bar 1 when alive) / rest for the remainder unless soloing
-        let calling = soloing || phase == 0 || (state == State::Alive && phase == 1) || (state == State::Alive && self.persona[4].busy > 0.75 && phase == 2);
+        let calling = soloing || phase == 0 || (state == State::Alive && phase == 1) || (state == State::Alive && self.persona[4].busy > 0.75 && phase == 2) || (matches!(state, State::Chill | State::Subside) && phase == 1);
         if self.leader.trade && (bar / 2) % 2 == 1 && !soloing {
             return; // the keys have this phrase
         }
@@ -4504,7 +5047,8 @@ impl Engine {
                 State::Subside => 0.2,
             } * (0.7 + 0.6 * self.persona[4].busy);
             let (m, what) = self.motif.develop(&mut self.rng, density);
-            self.motif = m;
+            // only complete statements: at least 3 notes, ending on a held chord tone
+            self.motif = m.phrase(&mut self.rng, 3);
             self.lead_calls += 1;
             if what == "new idea" {
                 self.band_say("lead starts a new melodic idea".into());
@@ -4525,7 +5069,7 @@ impl Engine {
             let blues = self.sty().harm == Harm::Blues;
             if self.on[5] && self.rng.chance(if blues { 0.9 } else { 0.25 + 0.5 * self.persona[5].reply }) {
                 let (m, _) = self.motif.develop(&mut self.rng, 0.4);
-                self.reply = Some((m, bar));
+                self.reply = Some((m.phrase(&mut self.rng, 3), bar));
                 self.band_say("colour player answers the lead".into());
                 self.think(5, "trading", if blues { "blues call-and-response → answering the lead's lick" } else { "heard the lead's call → answering it a 3rd up" });
                 self.inspire(4, "liked the colour player's answer".into(), 0.25);
@@ -4538,9 +5082,7 @@ impl Engine {
         let notes: Vec<_> = self.motif.notes.iter().filter(|n| n.at == t).cloned().collect();
         let center = 31 + (self.persona[4].register * 4.0) as i32; // ~E5
         for (i, n) in notes.iter().enumerate() {
-            if state == State::Chill && !soloing && (n.at > 8 || i > 0) {
-                continue; // just fragments while chilling
-            }
+            let _ = i;
             let p = self.motif_pitch(n.deg, n.at % 4 == 0, center);
             if self.slot_on(Role::Lead) {
                 self.role_note(Role::Lead, p, n.vel - 10, n.len as f32, 0.0);
@@ -4558,8 +5100,9 @@ impl Engine {
         }
         // shimmer: listens to the network (a few bells per bar at most)
         let net = self.ctl.sig.net;
-        let p = (0.003 + 0.06 * net) * if self.on[5] { 1.0 } else { 0.3 };
-        if self.rng.chance(p) {
+        // bells are idiomatic lone hits, but placed: on the beat only
+        let p = (0.012 + 0.24 * net) * if self.on[5] { 1.0 } else { 0.3 };
+        if s % 4 == 0 && self.rng.chance(p) {
             let pcs = self.chord().pcs();
             let pc = pcs[self.rng.below(pcs.len())];
             let oct = 12 * self.rng.below(2) as i32;
@@ -4586,15 +5129,16 @@ impl Engine {
         // landscape swells
         if s == 0 {
             let lone = self.leader.lone == Some(P::Colour) || self.leader.soloist == Some(P::Colour);
-            let pr = if lone { 0.6 } else if self.meander() { 0.12 } else { 0.08 };
+            // chilling: slow overlapping swells are the landscape (a held one is lush, not busy)
+            let pr = if lone { 0.6 } else if self.meander() { 0.28 } else if self.leader.state == State::Subside { 0.18 } else { 0.08 };
             if self.rng.chance(pr) {
                 let pcs = self.chord().pcs();
                 let pc = pcs[self.rng.below(pcs.len())];
                 let semi = Self::fold(pc + 24, 24, 40);
                 let len = 16.0 * (1 + self.rng.below(3)) as f32;
                 let v = 38 + self.rng.below(15) as i32;
-                let d = self.rng.f() * 2.0;
-                self.role_note(Role::Colour, semi, v, len, d);
+                // swells land on the bar line (idiomatic lone notes, but placed)
+                self.role_note(Role::Colour, semi, v, len, 0.0);
                 if self.rng.chance(0.4) {
                     let pc2 = pcs[self.rng.below(pcs.len())];
                     self.role_note(Role::Colour, Self::fold(pc2 + 24, 24, 40), 34, len, 4.0);
@@ -4772,6 +5316,9 @@ impl Engine {
         let who = self.pname(pl);
         let kname = self.player_key(pl).name();
         let what = if pass == 0 { var.desc().to_string() } else { format!("{} (passed on)", var.desc()) };
+        if pass == 0 {
+            self.mark("quote");
+        }
         self.quote = Some(Quote { theme: ti, player: pl, var, ev, next: 0, start, end, pass, cite: cite.clone(), what: what.clone() });
 
         self.n_quotes += 1;
@@ -5280,9 +5827,14 @@ impl Engine {
     }
     fn bell_for(&mut self, who: usize, semi: f32, gain: f32, delay_s: f32) {
         let _ = delay_s;
-        let Some((v, _)) = self.gate(who, (gain * 100.0) as i32, 2.0, true) else { return };
+        let Some((v, _)) = self.gate_x(who, (gain * 100.0) as i32, 2.0, true, true) else { return };
         let gain = v as f32 / 100.0;
         let semi = self.in_key(who, semi.round() as i32, 40) as f32;
+        {
+            let win = (self.step_len * 8.0) as u64;
+            let ch = (self.sr * 0.04) as u64;
+            self.orph.note(who, self.now, true, win, ch);
+        }
         self.heard_semi(who, semi.round() as i32, gain);
         self.mel_until[who] = self.mel_until[who].max(self.now + (self.step_len * 6.0) as u64);
         let sr = self.sr;
@@ -5347,7 +5899,8 @@ impl Engine {
         self.voices_f += ((3.0 + (e > 0.5) as i32 as f32) - self.voices_f) * k;
         self.lfo_ph = (self.lfo_ph + (0.04 + 0.08 * e) * CR as f32 / sr) % 1.0;
         let lfo = sine(&self.tbl, self.lfo_ph);
-        let fc = self.cutoff * (1.0 + 0.1 * lfo) * (1.0 + 0.25 * d1 + 0.1 * d2);
+        let depth = if self.leader.state == State::Chill { 0.22 } else { 0.1 };
+        let fc = self.cutoff * (1.0 + depth * lfo) * (1.0 + 0.25 * d1 + 0.1 * d2);
         self.pad_f[0].set(fc, 0.7, sr);
         self.pad_f[1].set(fc * 1.04, 0.7, sr);
         let glide = 1.0 - (-(CR as f32) / (sr * 2.5)).exp();
@@ -5460,7 +6013,7 @@ impl Engine {
     pub fn render(&mut self, out: &mut [f32]) {
         let frames = out.len() / 2;
         // style keys act per audio block, not per step
-        if crate::shared::KEY_STYLE.load(Relaxed) != 0 {
+        if crate::shared::KEY_STYLE.load(Relaxed) != 0 || crate::shared::KEY_NEXT.load(Relaxed) != 0 {
             self.steer();
         }
         let ui_on = self.ui.is_some();
@@ -5750,6 +6303,23 @@ impl Engine {
             }
             self.now = end;
             fi += n;
+        }
+        {
+            let ds = &mut self.ds;
+            let mut acc = 0.0f64;
+            for x in out.iter() {
+                acc += (*x as f64) * (*x as f64);
+            }
+            ds.rms_acc += acc;
+            ds.rms_n += out.len() as u64;
+            if ds.rms_n as f32 >= self.sr {
+                ds.rms_win += 1;
+                if 10.0 * (ds.rms_acc / ds.rms_n as f64).max(1e-20).log10() < -45.0 {
+                    ds.rms_gap += 1;
+                }
+                ds.rms_acc = 0.0;
+                ds.rms_n = 0;
+            }
         }
         if ui_on && (self.pub_now || self.now.saturating_sub(self.last_pub) as f32 >= self.sr * 0.1) {
             self.pub_now = false;

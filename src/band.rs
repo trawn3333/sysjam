@@ -316,6 +316,13 @@ impl Leader {
         req
     }
 
+    /// the conductor features a player for a few phrases (stagnation breaker)
+    pub fn feature(&mut self, p: P, phrases: u32) {
+        self.soloist = Some(p);
+        self.solo_left = phrases;
+        self.since_surprise = 0;
+    }
+
     /// How much the leader invites a player in, 0..1.
     pub fn invite(&self, p: P) -> f32 {
         let base = match self.state {
@@ -427,6 +434,52 @@ impl Motif {
             notes.push(MNote { at: 0, deg: 0, len: 4, vel: 70 });
         }
         Motif { notes, len }
+    }
+
+    /// A complete statement: at least `min` notes with a contour, ending on a held
+    /// chord tone (the cadence point). Short fragments get stepwise notes added.
+    pub fn phrase(&self, rng: &mut Rng, min: usize) -> Motif {
+        let mut m = self.clone();
+        m.notes.sort_by_key(|n| n.at);
+        while m.notes.len() < min {
+            let last = *m.notes.last().unwrap();
+            let at = last.at + last.len.max(2);
+            if at + 2 > m.len {
+                break;
+            }
+            let d = if rng.chance(0.5) { 1 } else { -1 };
+            m.notes.push(MNote { at, deg: (last.deg + d).clamp(-6, 10), len: 2, vel: (last.vel - 4).max(40) });
+        }
+        // squeeze into the bar if it ran out of room
+        if m.notes.len() < min {
+            let n = min.max(1) as u8;
+            let step = (m.len / n).max(2);
+            let base = m.notes[0].deg;
+            m.notes = (0..n).map(|k| MNote { at: k * step, deg: base + [0, 1, 2, 1, 0][k as usize % 5], len: step, vel: 64 }).collect();
+        }
+        // a connected statement: no gap longer than a beat and a half inside the phrase
+        let mut t = m.notes[0].at.min(m.len.saturating_sub(2));
+        let mut keep = Vec::new();
+        for n in m.notes.iter() {
+            if t + 1 >= m.len {
+                break;
+            }
+            let gap = n.len.clamp(2, 6);
+            keep.push(MNote { at: t, len: gap, ..*n });
+            t += gap;
+        }
+        if !keep.is_empty() {
+            m.notes = keep;
+        }
+        // cadence: the last note lands on a chord tone and rings
+        let k = m.notes.len() - 1;
+        let d = m.notes[k].deg;
+        let tones = [-7, -5, -3, 0, 2, 4, 7, 9, 11];
+        let near = *tones.iter().min_by_key(|t| (*t - d).abs()).unwrap();
+        m.notes[k].deg = near;
+        let room = m.len.saturating_sub(m.notes[k].at).max(2);
+        m.notes[k].len = room.min(8).max(m.notes[k].len);
+        m
     }
 
     /// Develop the idea: returns the new motif and what was done.

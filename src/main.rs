@@ -17,7 +17,9 @@ mod band;
 mod brain;
 mod conductor;
 mod dbus;
+mod deadtime;
 mod dsp;
+mod orphans;
 mod figure;
 mod gm;
 mod harmony;
@@ -102,6 +104,7 @@ fn parse_keys() -> Vec<(f32, u8)> {
                 "left" => 3,
                 "right" => 4,
                 "like" => 5,
+                "next" | "n" | "tab" => 6,
                 _ => return None,
             };
             Some((t, k))
@@ -116,6 +119,7 @@ fn press(k: u8) {
         2 => shared::KEY_TEMPO.fetch_add(-1, Relaxed),
         3 => shared::KEY_STYLE.fetch_add(-1, Relaxed),
         5 => shared::KEY_LIKE.fetch_add(1, Relaxed),
+        6 => shared::KEY_NEXT.fetch_add(1, Relaxed),
         _ => shared::KEY_STYLE.fetch_add(1, Relaxed),
     };
 }
@@ -365,7 +369,7 @@ fn main() {
                         if t > now {
                             return true;
                         }
-                        say!("  [{now:5.1}s] key: {}", ["", "up", "down", "left", "right", "like"][k as usize]);
+                        say!("  [{now:5.1}s] key: {}", ["", "up", "down", "left", "right", "like", "next"][k as usize]);
                         press(k);
                         false
                     });
@@ -393,6 +397,10 @@ fn main() {
             say!("bench {l}");
         }
         say!("bench {}", en.conductor_stats());
+        say!("bench {}", en.orph.report(en.time() as f64));
+        for l in en.ds.report(en.time() as f64) {
+            say!("bench {l}");
+        }
         for l in en.quote_report() {
             say!("bench {l}");
         }

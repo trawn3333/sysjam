@@ -3,7 +3,9 @@
 //! playing, the quote in the air) and nudges a small table of preference weights
 //! toward it. The conductor then leans toward similar moments: which style auto mode
 //! wanders to, tempos, instruments, who he invites, quotes, major vs minor, density.
-//! Nothing else is ever learned: not skips, not history, not usage.
+//! The one other explicit button is `n` (next idea): it stores a small negative
+//! "skip" for the moment you moved on from (a fifth of a like, the other way).
+//! Nothing else is ever learned: not history, not usage.
 //!
 //! Stored as human-readable YAML in $XDG_CONFIG_HOME/sysjam/likes.yaml
 //! (default ~/.config/sysjam/likes.yaml). Delete it or run --reset-likes to forget.
@@ -87,6 +89,8 @@ pub struct Likes {
     pub path: Option<PathBuf>,
     pub bias: BTreeMap<String, BTreeMap<String, f32>>,
     pub likes: Vec<Snapshot>,
+    /// moments skipped with `n` (style, state, key, tempo; a small negative each)
+    pub skips: Vec<Snapshot>,
     /// liked something this session
     pub dirty: bool,
 }
@@ -100,6 +104,8 @@ pub fn config_path() -> Option<PathBuf> {
 }
 
 const LR: f32 = 0.3;
+/// a skip weighs a fifth of a like, the other way
+const SKIP: f32 = 0.06;
 
 impl Likes {
     pub fn load() -> Likes {
@@ -155,11 +161,39 @@ impl Likes {
         self.dirty = true;
     }
 
+    /// the small negative for one `n` press: only the coarse context (style, state,
+    /// tempo, mode, density) is pushed down; instruments and players are left alone
+    pub fn skip(&mut self, s: Snapshot) {
+        for (g, v) in s.features() {
+            if matches!(g, "instruments" | "players" | "quote") {
+                continue;
+            }
+            let m = self.bias.entry(g.to_string()).or_default();
+            if let Some(all) = one_hot(g) {
+                let k = (all.len() - 1).max(1) as f32;
+                for o in all {
+                    let e = m.entry(o.to_string()).or_insert(0.0);
+                    *e = if *o == v { *e - SKIP } else { *e + SKIP / k };
+                }
+            } else {
+                *m.entry(v).or_insert(0.0) -= SKIP;
+            }
+            for x in m.values_mut() {
+                *x = x.clamp(-2.0, 2.0);
+            }
+        }
+        self.skips.push(s);
+        while self.skips.len() > 200 {
+            self.skips.remove(0);
+        }
+        self.dirty = true;
+    }
+
     pub fn to_yaml(&self) -> String {
         let q = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
         let mut o = String::new();
         o.push_str("# sysjam likes: written when you press `l` in the TUI. Plain YAML, safe to edit.\n");
-        o.push_str("# Only these likes are learned from; delete this file or run `sysjam --reset-likes` to forget.\n");
+        o.push_str("# Only these likes (and the small negative of each `n` skip) are learned from; delete this file or run `sysjam --reset-likes` to forget.\n");
         o.push_str("version: 1\n");
         o.push_str("# preference weights the conductor leans on (0 = neutral, clamped to ±2)\n");
         o.push_str("learned_bias:\n");
@@ -187,6 +221,18 @@ impl Likes {
             o.push_str(&format!("    instruments: [{}]\n", s.instruments.iter().map(|x| q(x)).collect::<Vec<_>>().join(", ")));
             o.push_str(&format!("    players: [{}]\n", s.players.iter().map(|x| q(x)).collect::<Vec<_>>().join(", ")));
             o.push_str(&format!("    quote: {}\n", s.quote.as_deref().map(q).unwrap_or_else(|| "null".into())));
+        }
+        o.push_str("# moments you moved on from with `n` (each a small negative)\n");
+        o.push_str(&format!("skips:{}\n", if self.skips.is_empty() { " []" } else { "" }));
+        for s in &self.skips {
+            o.push_str(&format!("  - time: {}\n", q(&s.time)));
+            o.push_str(&format!("    style: {}\n", q(&s.style)));
+            o.push_str(&format!("    style_id: {}\n", q(&s.style_id)));
+            o.push_str(&format!("    tempo: {:.0}\n", s.tempo));
+            o.push_str(&format!("    state: {}\n", q(&s.state)));
+            o.push_str(&format!("    key: {}\n", q(&s.key)));
+            o.push_str(&format!("    mode: {}\n", if s.minor { "minor" } else { "major" }));
+            o.push_str(&format!("    density: {:.2}\n", s.density));
         }
         o
     }
@@ -241,10 +287,15 @@ impl Likes {
             let indent = t.len() - t.trim_start().len();
             let body = t.trim_start();
             if indent == 0 {
+                if let Some(s) = cur.take() {
+                    if section == "skips" { self.skips.push(s) } else { self.likes.push(s) }
+                }
                 section = if body.starts_with("learned_bias:") {
                     "bias"
                 } else if body.starts_with("likes:") {
                     "likes"
+                } else if body.starts_with("skips:") {
+                    "skips"
                 } else {
                     ""
                 };
@@ -258,14 +309,14 @@ impl Likes {
                         self.bias.entry(group.clone()).or_default().insert(unq(k), x.clamp(-2.0, 2.0));
                     }
                 }
-            } else if section == "likes" {
+            } else if section == "likes" || section == "skips" {
                 let (body, start) = match body.strip_prefix("- ") {
                     Some(b) => (b, true),
                     None => (body, false),
                 };
                 if start {
                     if let Some(s) = cur.take() {
-                        self.likes.push(s);
+                        if section == "skips" { self.skips.push(s) } else { self.likes.push(s) }
                     }
                     cur = Some(Snapshot::default());
                 }
@@ -289,7 +340,7 @@ impl Likes {
             }
         }
         if let Some(s) = cur.take() {
-            self.likes.push(s);
+            if section == "skips" { self.skips.push(s) } else { self.likes.push(s) }
         }
     }
 
@@ -368,5 +419,15 @@ mod tests {
         assert!((m.b("style", "country") - l.b("style", "country")).abs() < 1e-3);
         assert!(m.b("tempo", "90-109") > 0.29);
         assert_eq!(m.to_yaml(), y);
+        // a skip is a small negative, stored separately, and round-trips too
+        let before = m.b("style", "country");
+        m.skip(Snapshot { time: "t".into(), style: "Country".into(), style_id: "country".into(), tempo: 96.0, state: "chilling".into(), key: "G major".into(), ..Default::default() });
+        assert!(m.b("style", "country") < before && before - m.b("style", "country") < 0.1);
+        let y2 = m.to_yaml();
+        let mut k = Likes::default();
+        k.parse(&y2);
+        assert_eq!(k.likes.len(), 1);
+        assert_eq!(k.skips.len(), 1);
+        assert_eq!(k.to_yaml(), y2);
     }
 }

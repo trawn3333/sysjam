@@ -25,6 +25,7 @@ ap.add_argument("--crop", default="", help="rows a:b of the terminal to keep (gi
 ap.add_argument("--scale", type=float, default=1.0)
 ap.add_argument("--env", default="")
 a = ap.parse_args()
+COLS = int(os.environ.get("COLS", "140")); ROWS = int(os.environ.get("ROWS", "46"))
 
 work = tempfile.mkdtemp(prefix="sysjam-rec-")
 S = "rec"
@@ -39,7 +40,7 @@ if os.environ.get("LOAD"):
     n = os.environ["LOAD"]
     for _ in range(4):
         load.append(subprocess.Popen(["timeout", n, "sh", "-c", "while :; do :; done"], start_new_session=True))
-subprocess.run(["tmux", "-f", "/dev/null", "new-session", "-d", "-s", S, "-x", "140", "-y", "46", cmd], check=True)
+subprocess.run(["tmux", "-f", "/dev/null", "new-session", "-d", "-s", S, "-x", str(COLS), "-y", str(ROWS), cmd], check=True)
 time.sleep(a.warm)
 keys = sorted((float(t), k) for t, k in (e.split(":", 1) for e in a.keys.split(",") if e))
 frames = []
@@ -84,10 +85,10 @@ with open(os.path.join(work, "frames.ans"), "w") as f:
         f.write(f"@@FRAME {t - frames[0][0]:.3f}\n{txt}\n")
 
 imgs = []
-r0, r1 = (int(x) for x in a.crop.split(":")) if a.crop else (0, 46)
+r0, r1 = (int(x) for x in a.crop.split(":")) if a.crop else (0, ROWS)
 for t, txt in frames:
     lines = txt.split("\n")[r0:r1]
-    im = render("\n".join(lines), 140, r1 - r0)
+    im = render("\n".join(lines), COLS, r1 - r0)
     if a.scale != 1.0:
         im = im.resize((int(im.width * a.scale) // 2 * 2, int(im.height * a.scale) // 2 * 2))
     imgs.append(im)

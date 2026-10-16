@@ -12,7 +12,7 @@ if [ -n "$LOAD" ]; then
   timeout "$LOAD" sh -c 'while :; do dd if=/dev/zero of=/tmp/sysjam-load bs=1M count=64 conv=fsync 2>/dev/null; sleep 1; done' &
 fi
 tmux kill-session -t "$s" 2>/dev/null
-tmux -f /dev/null new-session -d -s "$s" -x 140 -y 46 "env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor ./target/release/sysjam --null $args; sleep 100"
+tmux -f /dev/null new-session -d -s "$s" -x ${COLS:-140} -y ${ROWS:-46} "env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor ./target/release/sysjam --null $args; sleep 100"
 sleep 2
 for k in "$@"; do
   case $k in sleep:*) sleep "${k#sleep:}";; *) tmux send-keys -t "$s" "$k";; esac
@@ -23,6 +23,6 @@ tmux capture-pane -t "$s" -p -e -N > "/tmp/$name.ans"
 tmux capture-pane -t "$s" -p > "/tmp/$name.txt"
 tmux send-keys -t "$s" q; sleep 0.5; tmux send-keys -t "$s" q
 tmux kill-session -t "$s" 2>/dev/null
-python3 tools/ansi2png.py "/tmp/$name.ans" "docs/styles/$name.png" 140 46
+python3 tools/ansi2png.py "/tmp/$name.ans" "docs/styles/$name.png" ${COLS:-140} ${ROWS:-46}
 wait
 rm -f /tmp/sysjam-load

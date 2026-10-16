@@ -227,11 +227,38 @@ pub fn conductor(style: &str, pose: Pose, mood: Mood, energy: f32, pos: Option<P
                 None => (9.0, 2.0),
             };
             arm(&mut gr, (6, 2), (tx.round() as i32, ty.round() as i32), prop);
+            conductor_feet(&mut gr, pose, beat_i, frac);
             return gr.rows();
         }
     }
+    conductor_feet(&mut gr, pose, beat_i, frac);
     marks(&mut gr, extra, beat_i, frac);
     gr.rows()
+}
+
+/// the conductor shifts his weight every two beats and taps the free foot on the beat;
+/// in a surge his knees bounce and he stamps
+fn conductor_feet(gr: &mut Grid, pose: Pose, beat: i64, frac: f32) {
+    let on = frac < 0.2;
+    let f = match pose {
+        Pose::Rest => return,
+        Pose::Surge => {
+            if frac >= 0.5 {
+                "╲ ╱"
+            } else if beat % 2 == 0 {
+                "┴ ╰"
+            } else {
+                "╯ ┴"
+            }
+        }
+        _ => match (beat.rem_euclid(4) < 2, on) {
+            (true, true) => "│ ─",
+            (true, false) => "│ ╰",
+            (false, true) => "─ │",
+            (false, false) => "╯ │",
+        },
+    };
+    gr.put(4, 3, f);
 }
 
 /// mood marks around the head (sparkles blink on the beat, Zzz drifts)
@@ -343,6 +370,8 @@ pub struct PlayerIn<'a> {
     pub quoting: bool,
     pub cond_mood: Mood,
     pub t: f32,
+    /// the band is surging: knee bounces and stomps
+    pub surge: bool,
 }
 
 const SWAP_S: f32 = 1.0;
@@ -550,6 +579,10 @@ pub fn player(p: &PlayerIn, rows: usize) -> Vec<String> {
         }
     }
     gr.put(2, dx, &format!("{la}|{robe}|{ra}"));
+    if p.state == PState::Play && p.walk <= 0.0 {
+        let kick = fam == Fam::Drums && age < 0.16 && matches!(key, 35 | 36);
+        gr.put(3, dx, feet(p.style, p.beats, p.surge, kick));
+    }
     if p.quoting {
         gr.put(0, 6, "(♫)");
     }
@@ -569,6 +602,36 @@ pub fn player(p: &PlayerIn, rows: usize) -> Vec<String> {
         }
     }
     finish(gr, rows)
+}
+
+/// a musician's feet (4 cells): taps on the beat in the style's own way; the
+/// drummer's right foot comes down on the kick pedal on real kick hits
+fn feet(style: &str, beats: f64, surge: bool, kick: bool) -> &'static str {
+    if kick {
+        return " ╯ ─";
+    }
+    let beat = beats.floor() as i64;
+    let frac = beats.fract() as f32;
+    let on = frac < 0.2;
+    if surge {
+        return if frac >= 0.5 { " ╲ ╱" } else if beat % 2 == 0 { " ┴ ╰" } else { " ╯ ┴" };
+    }
+    match style {
+        "techno" | "house" if on => " ╯ ─",
+        "blues" | "jazz" if on && beat % 2 == 1 => " ╯ ─",
+        // heel-toe
+        "country" if on => if beat % 2 == 0 { " ╯ └" } else { " ╯ ─" },
+        "baroque" if on && beat.rem_euclid(4) == 0 => " ╯ ─",
+        "biker" | "industrial" if on => " ╯ ┴",
+        // jig: both feet on the eighths
+        "celtic" => match ((beats * 2.0).floor() as i64).rem_euclid(4) {
+            0 => " ╯ ─",
+            2 => " ─ ╰",
+            _ => " ╯ ╰",
+        },
+        _ if on && beat % 2 == 0 => " ╯ ─",
+        _ => " ╯ ╰",
+    }
 }
 
 /// players glance at the conductor: a sweat drop when he's cross, a sparkle when he beams
@@ -643,6 +706,7 @@ mod tests {
                             quoting: k % 4 == 0,
                             cond_mood: crate::mood::ALL[k as usize % 16],
                             t: k as f32 * 0.21,
+                            surge: k % 4 == 1,
                         };
                         for rows in [3, 4] {
                             let p = player(&pin, rows);
@@ -716,7 +780,7 @@ mod show {
         for st in ["country", "techno"] {
             let mut out = vec![String::new(); 4];
             for (i, fam) in FAMS.iter().enumerate() {
-                let pin = PlayerIn { style: st, fam: *fam, state: if i == 14 { PState::Rest(0) } else { PState::Play }, hit: Some((0.05, 40 + i as i32 * 3, 110, i as u64)), beats: 0.2, swap: None, walk: 0.0, quoting: i == 3, cond_mood: Mood::Content, t: 0.0 };
+                let pin = PlayerIn { style: st, fam: *fam, state: if i == 14 { PState::Rest(0) } else { PState::Play }, hit: Some((0.05, 40 + i as i32 * 3, 110, i as u64)), beats: 0.2, swap: None, walk: 0.0, quoting: i == 3, cond_mood: Mood::Content, t: 0.0, surge: false };
                 for (o, l) in out.iter_mut().zip(player(&pin, 4)) { o.push_str(&l); o.push('|'); }
             }
             println!("{st}"); for o in &out { println!("{o}"); }

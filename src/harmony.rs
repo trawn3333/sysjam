@@ -739,6 +739,42 @@ impl Harmony {
         self.phrases_away = 0;
     }
 
+    /// "next idea": drop the plan and jump straight to a key the band hasn't used
+    /// lately (its tonic lands at the next beat), then plan a fresh progression there.
+    pub fn jump(&mut self) -> Key {
+        let recent: Vec<Key> = self.hist.iter().map(|h| h.1).collect();
+        let k = self.key;
+        let mut cands: Vec<Key> = Vec::new();
+        for step in [2, 3, 4, 5, 7, 8, 9, 10] {
+            for minor in [k.minor, !k.minor] {
+                let t = Key { tonic: (k.tonic + step).rem_euclid(12), minor };
+                if !recent.contains(&t) && t != k {
+                    cands.push(t);
+                }
+            }
+        }
+        if cands.is_empty() {
+            cands.push(Key { tonic: (k.tonic + 5).rem_euclid(12), minor: k.minor });
+        }
+        let to = cands[self.rng.below(cands.len())];
+        self.queue.clear();
+        self.key_after = None;
+        self.tension = false;
+        self.modulate = false;
+        self.resolve = false;
+        self.key = to;
+        self.home = to;
+        self.settle = 2;
+        self.phrases_away = 0;
+        self.bars = 0;
+        let tonic = self.seventh(roman(if to.minor { "i" } else { "I" }, to));
+        self.queue.push_back((tonic, Some(format!("next idea: modulation straight to {}", to.name()))));
+        self.plan_desc = format!("next idea: a fresh start in {}", to.name());
+        self.plans.push(self.plan_desc.clone());
+        self.restart = true;
+        to
+    }
+
     /// Called on every bar line. Returns a Change when the chord moves.
     pub fn restart(&mut self) {
         self.queue.clear();
