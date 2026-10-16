@@ -203,6 +203,10 @@ pub struct Gm {
     pub l: Vec<f32>,
     pub r: Vec<f32>,
     sr: f32,
+    /// the modeled electric guitars and basses (src/guitar.rs); `SYSJAM_GUITAR=gm` keeps the samples
+    rig: Option<crate::guitar::Rig>,
+    vol: [f32; 17],
+    panv: [f32; 17],
 }
 
 impl Gm {
@@ -218,7 +222,10 @@ impl Gm {
         gs.enable_reverb_and_chorus = false;
         gs.block_size = 64;
         let guest = Synthesizer::new(sf, &gs).map_err(|e| format!("{e:?}"))?;
-        let mut g = Gm { synth, drum, dl: vec![0.0; 64], dr: vec![0.0; 64], chans: [Chan::default(); 17], guest, gl: vec![0.0; 64], gr: vec![0.0; 64], guest_tail: 0, l: vec![0.0; 64], r: vec![0.0; 64], sr: sr as f32 };
+        let mut g = Gm { synth, drum, dl: vec![0.0; 64], dr: vec![0.0; 64], chans: [Chan::default(); 17], guest, gl: vec![0.0; 64], gr: vec![0.0; 64], guest_tail: 0, l: vec![0.0; 64], r: vec![0.0; 64], sr: sr as f32, rig: None, vol: [0.85; 17], panv: [0.5; 17] };
+        if std::env::var("SYSJAM_GUITAR").map_or(true, |v| v != "gm") {
+            g.rig = Some(crate::guitar::Rig::new(sr as f32));
+        }
         for ch in 0..17 {
             g.cc(ch, 11, 0);
             g.cc(ch, 7, 100);
@@ -246,7 +253,27 @@ impl Gm {
         let (s, c) = self.sy(ch);
         s.process_midi_message(c, 0xB0, cc, v.clamp(0, 127));
     }
+    /// this channel's notes go to the guitar model: Some(bass?)
+    fn model(&self, ch: usize) -> Option<bool> {
+        if ch == 9 || self.rig.is_none() {
+            return None;
+        }
+        crate::guitar::modeled(self.chans[ch].program)
+    }
+    /// the style sets the amp preset
+    pub fn set_style(&mut self, id: &str) {
+        if let Some(r) = self.rig.as_mut() {
+            r.set_style(id);
+        }
+    }
     pub fn program(&mut self, ch: usize, p: u8, gain: f32) {
+        if self.model(ch).is_some() {
+            if let Some(r) = self.rig.as_mut() {
+                r.all_off(ch);
+            }
+        }
+        let v = (gain * 110.0).clamp(0.0, 127.0) / 127.0;
+        self.vol[ch] = v * v;
         let (s, c) = self.sy(ch as i32);
         s.process_midi_message(c, 0xC0, p as i32, 0);
         self.cc(ch as i32, 7, (gain * 110.0) as i32);
@@ -254,6 +281,7 @@ impl Gm {
     }
     /// pan (CC10), 0 left .. 127 right
     pub fn pan(&mut self, ch: usize, v: i32) {
+        self.panv[ch] = v.clamp(0, 127) as f32 / 127.0;
         self.cc(ch as i32, 10, v);
     }
     pub fn note_on(&mut self, ch: usize, key: i32, vel: i32, now: u64) {
@@ -262,6 +290,12 @@ impl Gm {
             return;
         }
         sound_log(now as f64 / self.sr as f64, "gm", ch, self.chans[ch].program as i32, key, vel);
+        if let Some(bass) = self.model(ch) {
+            self.rig.as_mut().unwrap().note_on(ch, key, vel.clamp(1, 127), bass);
+            self.chans[ch].last_note = now;
+            self.chans[ch].active += 1;
+            return;
+        }
         let (s, c) = self.sy(ch as i32);
         s.note_on(c, key, vel.clamp(1, 127));
         if ch == GUEST {
@@ -273,12 +307,18 @@ impl Gm {
     /// pitch bend, 0..16383 (8192 = centre; default range ±2 semitones)
     pub fn bend(&mut self, ch: usize, v: i32) {
         let v = v.clamp(0, 16383);
+        if let Some(r) = self.rig.as_mut() {
+            r.bend(ch, v);
+        }
         let (s, c) = self.sy(ch as i32);
         s.process_midi_message(c, 0xE0, v & 0x7F, v >> 7);
     }
     pub fn note_off(&mut self, ch: usize, key: i32, now: u64) {
         if !(0..128).contains(&key) {
             return;
+        }
+        if self.model(ch).is_some() {
+            self.rig.as_mut().unwrap().note_off(ch, key);
         }
         let (s, c) = self.sy(ch as i32);
         s.note_off(c, key);
@@ -298,6 +338,9 @@ impl Gm {
         }
     }
     pub fn all_off(&mut self, ch: usize) {
+        if let Some(r) = self.rig.as_mut() {
+            r.all_off(ch);
+        }
         let (s, c) = self.sy(ch as i32);
         s.note_off_all_channel(c, false);
         self.chans[ch].active = 0;
@@ -342,6 +385,9 @@ impl Gm {
                 if left <= n {
                     let (s, c) = self.sy(ch as i32);
                     s.note_off_all_channel(c, true);
+                    if let Some(r) = self.rig.as_mut() {
+                        r.cut_ch(ch);
+                    }
                     let cc = &mut self.chans[ch];
                     cc.choke = None;
                     cc.active = 0;
@@ -368,6 +414,17 @@ impl Gm {
             }
         }
         self.synth.render(&mut self.l[..n], &mut self.r[..n]);
+        if let Some(r) = self.rig.as_mut() {
+            let mut lv = [0.0f32; 17];
+            for (k, c) in self.chans.iter().enumerate() {
+                lv[k] = self.vol[k] * c.expr * RIG_LEVEL;
+            }
+            r.render(n, &lv, &self.panv);
+            for i in 0..n {
+                self.l[i] += r.l[i];
+                self.r[i] += r.r[i];
+            }
+        }
         if let Some(d) = self.drum.as_mut() {
             d.render(&mut self.dl[..n], &mut self.dr[..n]);
         }
@@ -384,6 +441,9 @@ impl Gm {
         }
     }
 }
+
+/// the modeled guitars' level against the GM samples (matched by ear and RMS)
+const RIG_LEVEL: f32 = 0.4;
 
 /// measurement: every note that actually starts sounding (SYSJAM_SOUNDLOG=path):
 /// time, source (gm / pool), channel or owner, program, key, velocity

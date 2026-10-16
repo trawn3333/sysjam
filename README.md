@@ -1109,6 +1109,44 @@ does not link or embed it; it only reads it as an input file at run time, just
 like any other `.sf2` it finds. You can delete `assets/`, use `--soundfont`
 with another file, or pass `--no-gm`. sysjam works fine without it.
 
+## Modeled electric guitar and bass
+
+The GM electric guitars (Jazz, Clean, Muted, Overdriven and Distortion Guitar) and the fingered
+and picked basses are not played from samples. They go through a guitar model (`src/guitar.rs`),
+and the engines' parts, bends and slides drive it unchanged.
+
+- **Strings:** an extended Karplus-Strong plucked string per note. The pick is a band-limited
+  noise burst whose brightness follows the velocity, with a pick-position comb; a fractional
+  delay line follows pitch bends and slides and adds a gentle vibrato on long notes; a one-pole
+  loop filter sets the brightness and a loss sets the decay. Low single notes and chugs in the
+  heavy styles are palm-muted (short and dark) unless accented, a note-off damps the string,
+  and chords are strummed with each string 4–9 ms after the last. Metal's down-tuned riffs and
+  power chords ring on the low strings.
+- **Amp, per channel:** a noise gate for high gain, a compressor (Country), then a tight
+  high-pass and a mid boost in front of the clipper (a "screamer"). The clipper is a 2×
+  oversampled asymmetric soft clipper, band-limited before it so there is no aliasing fizz,
+  with power-supply sag. After it come a tone stack (bass shelf, mid peak or scoop, treble
+  shelf) and a speaker-cab EQ (box thump around 115 Hz, presence, a steep roll-off from about
+  5 kHz, so nothing piercing), then slapback, spring reverb or chorus. The bass gets a DI
+  blended with a little drive, and its lows are kept.
+- **Per-style presets:**
+  - Country: a clean Tele twang, compressed, with slapback.
+  - Blues: edge-of-breakup crunch with spring reverb.
+  - Biker: fuzzy crunch.
+  - Metal: tight high gain, gated and scooped; the band's two rhythm channels are already
+    hard left and right, so it is double-tracked.
+  - Industrial: harsh and gated.
+  - Jazz: a warm archtop.
+  - Everything else: clean with chorus.
+- **Cost:** the whole engine stays under 3 % of one core in Metal (offline bench, 60 s idle
+  profile: Metal 2.76 % vs 2.32 % with samples, Country 1.68 % vs 1.18 %). The level above
+  8 kHz and the high-frequency noise floor are within about 1 dB of the sampled guitars
+  (Metal +1.4 dB in gated rests). `SYSJAM_GUITAR=gm` plays the GM samples again (for A/B).
+
+The amp's stage layout (pre-boost, oversampled asymmetric clipping, tone stack, cab) follows
+the classic designs as documented by the [Guitarix](https://guitarix.org) project (GPL), whose
+models were studied for this; no Guitarix code is used.
+
 ## Sound / spectrum
 
 The bands are filled deliberately:
@@ -1373,6 +1411,8 @@ Foundation, either version 3 of the License, or (at your option) any later
 version (**GPL-3.0-or-later**). The full text is in `LICENSE`.
 
 `assets/TimGM6mb.sf2` is a separately licensed asset (GPL-2.0-only); see above.
+
+The guitar amp model's design was informed by Guitarix (GPL, guitarix.org); no code was copied.
 
 `assets/themes/themes.txt` holds short melodic incipits of public-domain compositions taken from the
 music21 corpus. Sources, transcriber credits and exclusions are listed in `assets/themes/LICENSE`.

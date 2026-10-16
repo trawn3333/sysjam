@@ -12,6 +12,7 @@ macro_rules! say {
 
 mod audio;
 mod clock;
+mod guitar;
 mod audience;
 mod band;
 mod blues;

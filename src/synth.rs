@@ -7462,6 +7462,7 @@ impl Engine {
                 }
             }
             let gm_on = if let Some(g) = self.gm.as_mut() {
+                g.set_style(STYLES[self.style].id);
                 g.render(n);
                 true
             } else {
