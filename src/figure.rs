@@ -29,12 +29,12 @@ pub fn gear(style: &str) -> Gear {
     let g = |hat, sides, shades, robe, props, wave| Gear { hat, sides, shades, robe, props, wave };
     match style {
         "monk" => g("╭───╮", ('(', ')'), false, ':', &['.', 'o', '.', ' '], None),
-        "jazz" => g(" ▄▄▀ ", ('(', ')'), false, '=', &['♪', '♫', '♪', '♫'], None),
-        "blues" => g("_▄█▄_", ('(', ')'), true, '#', &['♪', ' ', '♪', '♪'], None),
-        "country" => g("▃▅█▅▃", ('(', ')'), false, 'x', &['o', 'O', 'o', '*'], None),
-        "biker" => g("▁███▁", ('(', ')'), false, '#', &['•', '*', '•', '*'], None),
+        "jazz" => g(" _=_ ", ('(', ')'), false, '=', &['♪', '♫', '♪', '♫'], None),
+        "blues" => g("_┌#┐_", ('(', ')'), true, '#', &['♪', ' ', '♪', '♪'], None),
+        "country" => g("~╭^╮~", ('(', ')'), false, 'x', &['o', 'O', 'o', '*'], None),
+        "biker" => g("╭───╮", ('(', ')'), false, '#', &['•', '*', '•', '*'], None),
         "baroque" => g("@@@@@", ('{', '}'), false, '+', &['♪', '•', '♪', '•'], None),
-        "celtic" => g("▁▃▃▃▃", ('(', ')'), false, '%', &['*', '•', '*', '•'], None),
+        "celtic" => g("_╭──┐", ('(', ')'), false, '%', &['*', '•', '*', '•'], None),
         "industrial" => g("┌┬─┬┐", ('[', ']'), false, '#', &['*', 'x', '*', 'x'], None),
         "techno" => g("╭───╮", ('d', 'b'), true, '=', &['|', '/', '-', '\\'], Some('!')),
         "space" => g("╭─*─╮", ('|', '|'), false, 'o', &['*', '+', '*', '.'], None),
@@ -99,7 +99,7 @@ fn face_str(g: &Gear, m: Mood) -> String {
     let (l, mo, r, _) = face(m);
     // sunglasses stay on while he's cool; strong feelings show his eyes
     let cool = matches!(m, Mood::Content | Mood::Proud | Mood::Focused | Mood::Impatient | Mood::Bored | Mood::Tender | Mood::Amused);
-    let (l, r) = if g.shades && cool { ('▀', '▀') } else { (l, r) };
+    let (l, r) = if g.shades && cool { ('=', '=') } else { (l, r) };
     format!("{}{l}{mo}{r}{}", g.sides.0, g.sides.1)
 }
 
@@ -592,7 +592,7 @@ fn finish(gr: Grid, rows: usize) -> Vec<String> {
 
 /// glyphs the figures may use: ASCII, light box drawing, a few block elements for hats
 pub fn safe_glyph(c: char) -> bool {
-    (' '..='~').contains(&c) || "─│┌┐└┘├┤┬┴┼╭╮╯╰╱╲▀▄█▁▂▃▅▆♪♫•·".contains(c)
+    (' '..='~').contains(&c) || "─│┌┐└┘├┤┬┴┼╭╮╯╰╱╲♪♫•·".contains(c)
 }
 
 #[cfg(test)]

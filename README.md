@@ -178,8 +178,8 @@ dots) are redrawn, at about 16 fps, straight to the changed cells, plus one extr
 every beat. Frames where nothing moved are skipped. That keeps the UI thread at about 0.45% of one
 core (measured below).
 
-All figures are drawn only from ASCII, light box drawing (`─│┌┐└┘├┤┬┴┼╭╮╯╰╱╲`), a few block
-elements for hats (`▀▄█▁▂▃▅▆`) and `♪ ♫ • ·`: no shade blocks, no heavy/light mixing, no rare
+All figures are drawn only from ASCII, light box drawing (`─│┌┐└┘├┤┬┴┼╭╮╯╰╱╲`) and `♪ ♫ • ·`:
+no block or shade elements (hats are drawn with box lines, e.g. the cowboy hat `~╭^╮~`), no heavy/light mixing, no rare
 IPA letters, no emoji, no combining characters or variation selectors. Every frame of every pose,
 mood, style and instrument is checked by a unit test to be exactly 12 (conductor) or 10
 (musician) cells wide by `unicode-width`, so nothing shears in any terminal font. (The old Tribal

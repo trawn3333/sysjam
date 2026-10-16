@@ -61,6 +61,16 @@ while True:
         time.sleep(nxt - time.time())
 subprocess.run(["tmux", "send-keys", "-t", S, "q"]); time.sleep(0.4)
 subprocess.run(["tmux", "send-keys", "-t", S, "q"]); time.sleep(1.5)
+def wav_ok():
+    try:
+        with open(wav, "rb") as f:
+            return f.read(4) == b"RIFF"
+    except OSError:
+        return False
+for _ in range(40):  # let the WAV header be finalised before the session goes
+    if a.kind != "mp4" or wav_ok():
+        break
+    time.sleep(0.25)
 subprocess.run(["tmux", "kill-session", "-t", S], stderr=subprocess.DEVNULL)
 import signal
 for p in load:
@@ -68,7 +78,10 @@ for p in load:
         os.killpg(p.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-print(f"captured {len(frames)} frames in {a.secs:.1f}s", file=sys.stderr)
+print(f"captured {len(frames)} frames in {a.secs:.1f}s; work dir {work}", file=sys.stderr)
+with open(os.path.join(work, "frames.ans"), "w") as f:
+    for t, txt in frames:
+        f.write(f"@@FRAME {t - frames[0][0]:.3f}\n{txt}\n")
 
 imgs = []
 r0, r1 = (int(x) for x in a.crop.split(":")) if a.crop else (0, 46)
@@ -89,20 +102,24 @@ if a.kind == "gif":
     print(f"{a.out}: {len(imgs)} frames, {sum(durs)/1000:.1f}s, {os.path.getsize(a.out)/1024:.0f} KiB")
 else:
     t0 = int(open(t0f).read()) / 1e9
-    lst = os.path.join(work, "frames.txt")
-    with open(lst, "w") as f:
-        for k, im in enumerate(imgs):
-            p = os.path.join(work, f"f{k:05d}.png"); im.save(p)
-            d = (frames[k + 1][0] - frames[k][0]) if k + 1 < len(frames) else dt
-            f.write(f"file '{p}'\nduration {d:.4f}\n")
-        f.write(f"file '{p}'\n")
+    # resample the captured frames onto a constant 15 fps grid (each output frame shows the
+    # latest capture at or before its time), then mux with the WAV from that same instant
+    for k, im in enumerate(imgs):
+        im.save(os.path.join(work, f"f{k:05d}.png"))
     off = frames[0][0] - t0  # audio second shown by the first frame
     dur = frames[-1][0] - frames[0][0] + dt
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst,
+    ofps = 15
+    k = 0
+    for j in range(int(dur * ofps)):
+        while k + 1 < len(frames) and frames[k + 1][0] - frames[0][0] <= j / ofps:
+            k += 1
+        dst = os.path.join(work, f"s{j:05d}.png")
+        if os.path.lexists(dst):
+            os.remove(dst)
+        os.symlink(os.path.join(work, f"f{k:05d}.png"), dst)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(ofps), "-i", os.path.join(work, "s%05d.png"),
+                    *([] if wav_ok() else ["-f", "s16le", "-ar", "44100", "-ac", "2"]),
                     "-ss", f"{off:.3f}", "-t", f"{dur:.3f}", "-i", wav,
-                    "-vf", "fps=15,format=yuv420p", "-c:v", "libx264", "-preset", "slow", "-crf", "26", "-tune", "animation",
+                    "-vf", "format=yuv420p", "-c:v", "libx264", "-preset", "slow", "-crf", "26", "-tune", "animation",
                     "-c:a", "aac", "-b:a", "160k", "-shortest", "-movflags", "+faststart", a.out], check=True)
     print(f"{a.out}: {dur:.1f}s, audio from {off:.2f}s of the run, {os.path.getsize(a.out)/1e6:.1f} MB")
-    with open(a.out + ".frames.txt", "w") as f:
-        for k, (t, txt) in enumerate(frames):
-            f.write(f"{t - frames[0][0]:.2f}\n")
