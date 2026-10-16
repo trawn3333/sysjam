@@ -57,7 +57,7 @@ Telecaster** break, the next verse; −15.3 LUFS, peaks −1.0 dBFS) and
 Scott*, then the set moves on to the reel *Belles of Tipperary*, 6 bpm faster, and its A and B
 parts; −13.4 LUFS, peaks −1.5 dBFS). Above 12 kHz they sit at −40 / −40 / −53 dB of the total.
 
-![sysjam's live terminal UI just after a style switch: two ↑ presses gave tempo bias +14, then ← switched Country to Blues; the band is on a lit stage with its instruments (grand piano, upright bass, drum kit, guitar, harp), the conductor says "Lord have mercy… let's play the blues", the header shows the I7–IV7–V7 12-bar shuffle, and the crowd of processes dances below](docs/tui.png)
+![sysjam's live terminal UI about 12 s after five → presses switched Country to the Celtic Session: the band plays a reel in A major (driving 8ths, the A part again) at 104 bpm on a lit stage with guitar, bouzouki, drum kit, fiddle and flute, the conductor says "steady now", the lead plays in unison with the tune with cuts and rolls, and the crowd of processes dances below](docs/tui.png)
 
 One static-ish binary (`sysjam`, ~2.2 MB, x86_64, needs glibc ≥ 2.29). It
 links only libc, libm, libpthread and libdl. ALSA, D-Bus and PipeWire are
