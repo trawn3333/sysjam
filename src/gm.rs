@@ -181,13 +181,22 @@ struct Chan {
     active: u32,
 }
 
+/// the guest musician's channel (its own synthesizer)
+pub const GUEST: usize = 16;
+
 pub struct Gm {
     synth: Synthesizer,
     /// measurement only (SYSJAM_RMS): channel 10 on its own synthesizer so drums can be metered apart
     drum: Option<Synthesizer>,
     pub dl: Vec<f32>,
     pub dr: Vec<f32>,
-    chans: [Chan; 16],
+    chans: [Chan; 17],
+    /// the guest musician: channel `GUEST` on its own small synthesizer, rendered only
+    /// while it plays (and a release tail after)
+    guest: Synthesizer,
+    gl: Vec<f32>,
+    gr: Vec<f32>,
+    guest_tail: usize,
     pub l: Vec<f32>,
     pub r: Vec<f32>,
     sr: f32,
@@ -201,8 +210,13 @@ impl Gm {
         st.block_size = 64;
         let synth = Synthesizer::new(sf, &st).map_err(|e| format!("{e:?}"))?;
         let drum = if std::env::var_os("SYSJAM_RMS").is_some() { Synthesizer::new(sf, &st).ok() } else { None };
-        let mut g = Gm { synth, drum, dl: vec![0.0; 64], dr: vec![0.0; 64], chans: [Chan::default(); 16], l: vec![0.0; 64], r: vec![0.0; 64], sr: sr as f32 };
-        for ch in 0..16 {
+        let mut gs = SynthesizerSettings::new(sr);
+        gs.maximum_polyphony = 8;
+        gs.enable_reverb_and_chorus = false;
+        gs.block_size = 64;
+        let guest = Synthesizer::new(sf, &gs).map_err(|e| format!("{e:?}"))?;
+        let mut g = Gm { synth, drum, dl: vec![0.0; 64], dr: vec![0.0; 64], chans: [Chan::default(); 17], guest, gl: vec![0.0; 64], gr: vec![0.0; 64], guest_tail: 0, l: vec![0.0; 64], r: vec![0.0; 64], sr: sr as f32 };
+        for ch in 0..17 {
             g.cc(ch, 11, 0);
             g.cc(ch, 7, 100);
             g.cc(ch, 91, 0);
@@ -215,17 +229,23 @@ impl Gm {
         g.chans[9].sent = 127;
         Ok(g)
     }
-    fn sy(&mut self, ch: i32) -> &mut Synthesizer {
+    /// the synthesizer and its MIDI channel for one of our channels
+    fn sy(&mut self, ch: i32) -> (&mut Synthesizer, i32) {
+        if ch == GUEST as i32 {
+            return (&mut self.guest, 0);
+        }
         match self.drum.as_mut() {
-            Some(d) if ch == 9 => d,
-            _ => &mut self.synth,
+            Some(d) if ch == 9 => (d, 9),
+            _ => (&mut self.synth, ch),
         }
     }
     fn cc(&mut self, ch: i32, cc: i32, v: i32) {
-        self.sy(ch).process_midi_message(ch, 0xB0, cc, v.clamp(0, 127));
+        let (s, c) = self.sy(ch);
+        s.process_midi_message(c, 0xB0, cc, v.clamp(0, 127));
     }
     pub fn program(&mut self, ch: usize, p: u8, gain: f32) {
-        self.sy(ch as i32).process_midi_message(ch as i32, 0xC0, p as i32, 0);
+        let (s, c) = self.sy(ch as i32);
+        s.process_midi_message(c, 0xC0, p as i32, 0);
         self.cc(ch as i32, 7, (gain * 110.0) as i32);
         self.chans[ch].program = p;
     }
@@ -237,25 +257,32 @@ impl Gm {
         if !(0..128).contains(&key) {
             return;
         }
-        self.sy(ch as i32).note_on(ch as i32, key, vel.clamp(1, 127));
+        let (s, c) = self.sy(ch as i32);
+        s.note_on(c, key, vel.clamp(1, 127));
+        if ch == GUEST {
+            self.guest_tail = (self.sr * 5.0) as usize;
+        }
         self.chans[ch].last_note = now;
         self.chans[ch].active += 1;
     }
     /// pitch bend, 0..16383 (8192 = centre; default range ±2 semitones)
     pub fn bend(&mut self, ch: usize, v: i32) {
         let v = v.clamp(0, 16383);
-        self.sy(ch as i32).process_midi_message(ch as i32, 0xE0, v & 0x7F, v >> 7);
+        let (s, c) = self.sy(ch as i32);
+        s.process_midi_message(c, 0xE0, v & 0x7F, v >> 7);
     }
     pub fn note_off(&mut self, ch: usize, key: i32, now: u64) {
         if !(0..128).contains(&key) {
             return;
         }
-        self.sy(ch as i32).note_off(ch as i32, key);
+        let (s, c) = self.sy(ch as i32);
+        s.note_off(c, key);
         self.chans[ch].last_note = now;
         self.chans[ch].active = self.chans[ch].active.saturating_sub(1);
     }
     pub fn all_off(&mut self, ch: usize) {
-        self.sy(ch as i32).note_off_all_channel(ch as i32, false);
+        let (s, c) = self.sy(ch as i32);
+        s.note_off_all_channel(c, false);
         self.chans[ch].active = 0;
     }
     /// Expression fade (CC11) towards `target` (0..1) over `secs`.
@@ -284,7 +311,7 @@ impl Gm {
     /// Advance CC ramps by `n` samples and render them.
     pub fn render(&mut self, n: usize) {
         let dt = n as f32 / self.sr;
-        for ch in 0..16 {
+        for ch in 0..17 {
             let c = self.chans[ch];
             if c.expr != c.target {
                 let step = c.rate * dt;
@@ -301,6 +328,17 @@ impl Gm {
         self.synth.render(&mut self.l[..n], &mut self.r[..n]);
         if let Some(d) = self.drum.as_mut() {
             d.render(&mut self.dl[..n], &mut self.dr[..n]);
+        }
+        if self.guest_tail > 0 {
+            self.guest_tail = self.guest_tail.saturating_sub(n);
+            if self.chans[GUEST].active > 0 {
+                self.guest_tail = self.guest_tail.max(n);
+            }
+            self.guest.render(&mut self.gl[..n], &mut self.gr[..n]);
+            for i in 0..n {
+                self.l[i] += self.gl[i];
+                self.r[i] += self.gr[i];
+            }
         }
     }
 }

@@ -316,6 +316,7 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
     let mut cpu_s = 0.0f32;
     // single, rare lead voice with long hold + cooldown
     let mut lead: Option<(LeadInfo, f32, f32)> = None; // (info, held s, below s)
+    let mut sitin: Option<String> = None;
     let mut sustain: HashMap<i32, f32> = HashMap::new();
     let mut cooldown = 0.0f32;
     let mut last_msg: Option<Instant> = None;
@@ -406,6 +407,11 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
             if tui {
                 top = cands.iter().filter(|c| !c.pcomm.starts_with("sysjam")).take(4).map(|c| (c.name.clone(), c.cpu)).collect();
             }
+            if cfg.leads {
+                if let Some(c) = cands.iter().find(|c| !c.pcomm.starts_with("sysjam") && !ignored(&c.pcomm, &c.name)) {
+                    sitin = Some(c.name.clone());
+                }
+            }
             let heavy: Vec<&Cand> = cands.iter().filter(|c| cfg.leads && c.cpu >= 0.40 && !ignored(&c.pcomm, &c.name)).collect();
             let mut ns = HashMap::new();
             for c in &heavy {
@@ -492,6 +498,8 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
             c.screen_valid = sc.valid;
             c.click_rate = if cfg.clicks <= 0.0 || fd_e < 4.0 { 0.0 } else { ((fd_e / 4.0).log2() * 0.6).min(3.0) };
             c.leads = [lead.as_ref().map(|l| l.0.clone()), None, None];
+            c.sitin = sitin.clone();
+            c.leads_ok = cfg.leads;
             c.version += 1;
             *ctl.lock().unwrap() = c.clone();
             if let Some(ui) = &cfg.ui {

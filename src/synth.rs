@@ -160,6 +160,23 @@ const RAGE_GTR: [usize; 2] = [11, 12];
 const COUNTRY_CH: [usize; 2] = [13, 14];
 /// Blues machine channels: piano, organ, rhythm guitar, the solo seat (harp / sax / slide), bass
 const BLUES_CH: [usize; 5] = [11, 12, 13, 14, 15];
+/// the featured guest per style: (style, instrument, GM program (255 = our own theremin
+/// voice), register centre in semitones over A2, rhythm (0 long, 1 mid, 2 shred, 3 chop), gain)
+const GUESTS: [(&str, &str, u8, i32, u8, f32); 13] = [
+    ("house", "sax", 65, 16, 1, 0.6),
+    ("monk", "shakuhachi", 77, 19, 0, 0.55),
+    ("jazz", "trumpet", 56, 19, 1, 0.55),
+    ("blues", "tenor sax", 66, 14, 1, 0.6),
+    ("country", "fiddle", 110, 24, 1, 0.55),
+    ("biker", "lead vocal", 53, 14, 0, 0.6),
+    ("metal", "shred guitar", 30, 22, 2, 0.5),
+    ("industrial", "screamer", 54, 14, 3, 0.5),
+    ("baroque", "recorder", 74, 27, 1, 0.55),
+    ("celtic", "uilleann pipes", 109, 24, 1, 0.45),
+    ("techno", "vocal-chop MC", 54, 12, 3, 0.5),
+    ("space", "theremin", 255, 21, 0, 0.6),
+    ("tribal", "suling", 75, 26, 1, 0.55),
+];
 const RAGE_CH: [usize; 6] = [11, 12, 13, 14, 15, 15];
 
 /// each style's own musical drive on an idle machine: the internal arc's (low, high) energy
@@ -278,6 +295,17 @@ pub struct Engine {
     guest_cpu: f32,
     guest_vib: f32,
     guest_f: Svf,
+    /// the featured guest: which instrument (GUESTS), who (a program's name), the bars it
+    /// sits in for, no new guest before `guest_cd`, its melodic position, the busy program
+    guest_k: usize,
+    guest_name: String,
+    guest_start: u64,
+    guest_until: u64,
+    guest_cd: u64,
+    guest_deg: i32,
+    guest_busy: Option<String>,
+    guest_semi_t: f32,
+    guest_snd: u64,
     rev: Reverb,
     dl: Vec<f32>,
     dr: Vec<f32>,
@@ -688,6 +716,15 @@ impl Engine {
             guest_cpu: 0.0,
             guest_vib: 0.0,
             guest_f: Svf::default(),
+            guest_k: 0,
+            guest_name: String::new(),
+            guest_start: 0,
+            guest_until: 0,
+            guest_cd: 24,
+            guest_deg: 0,
+            guest_busy: None,
+            guest_semi_t: 24.0,
+            guest_snd: 0,
             rev: Reverb::new(sr),
             dl: vec![0.0; dmax],
             dr: vec![0.0; dmax],
@@ -1337,7 +1374,7 @@ impl Engine {
             },
             gm_name(Role::Lead, &self.slots).unwrap_or_else(|| format!("synth {}", BELL_PATCHES[self.bell_patch].0)),
             match gm_name(Role::Colour, &self.slots) { Some(g) => format!("{g} + {}", BELL_PATCHES[self.bell_patch].0), None => format!("synth {}", BELL_PATCHES[self.bell_patch].0) },
-            if self.guest_on { "saw/sine guest voice".into() } else { "—".into() },
+            if self.guest_on { format!("{} on {}", self.guest_name, GUESTS[self.guest_k].1) } else { "—".into() },
         ];
         let mut inst = inst;
         if self.rage_live && self.rage.kind == crate::rage::Kind::Metal {
@@ -1392,7 +1429,7 @@ impl Engine {
             format!("input {}", pct(sig.input)),
             format!("cores {}", pct(sig.cores)),
             format!("net {}", pct(sig.net)),
-            if self.guest_on { format!("its thread {}", pct(self.guest_cpu)) } else { "busiest thread".into() },
+            if self.guest_busy.is_some() { format!("its program {}", pct(self.guest_cpu)) } else { "the band's arc".into() },
         ];
         let band = key;
         for i in 0..7 {
@@ -1560,7 +1597,10 @@ impl Engine {
             0 => return Fam::Drone,
             1 => return Fam::Bass,
             2 => return Fam::Drums,
-            6 => return Fam::Guest,
+            6 => {
+                let g = GUESTS[self.guest_k];
+                return if g.2 == 255 { Fam::Synth } else { crate::figure::fam_of_gm(g.2) };
+            }
             3 => &[Role::Comp, Role::Pad],
             4 => &[Role::Lead],
             _ => &[Role::Colour],
@@ -1580,6 +1620,10 @@ impl Engine {
 
     /// the GM program (or synth) behind this player's instrument, for the stage props
     fn player_prog(&self, i: usize) -> (Option<u8>, bool) {
+        if i == 6 {
+            let g = GUESTS[self.guest_k];
+            return if g.2 == 255 { (None, true) } else { (Some(g.2), false) };
+        }
         if self.blues_live {
             if let Some(p) = self.blues.prog_of(i) {
                 return (Some(p), false);
@@ -3053,33 +3097,16 @@ impl Engine {
         for m in msgs {
             self.say(m);
         }
-        // guest musician: a sustained heavy thread from the monitor
+        // a sustained heavy thread makes a guest sit in sooner (and more often)
         match &c.leads[0] {
             Some(l) => {
-                if !self.guest_on || self.guest_hash != l.hash {
-                    self.guest_hash = l.hash;
-                    self.guest_semi = self.guest_pitch();
+                if self.guest_busy.is_none() {
+                    self.guest_cd = self.guest_cd.min(self.step / 16 + 2);
                 }
-                if !self.guest_on {
-                    let n = l.name.clone();
-                    self.inspire(5, format!("thread {n} sat in as a guest"), 0.4);
-                    self.inspire(4, format!("thread {n} sat in as a guest"), 0.25);
-                }
-                self.guest_on = true;
-                if self.ui.is_some() {
-                    let semi = self.guest_semi.round() as i32;
-                    let n = self.note_name(semi);
-                    self.think(6, "soloing", format!("thread {} at {:.0}% cpu sits in → long {n}", l.name, l.cpu * 100.0));
-                    self.heard(6, n, 0.6);
-                }
+                self.guest_busy = Some(l.name.clone());
                 self.guest_cpu = l.cpu;
             }
-            None => {
-                if self.guest_on {
-                    self.think(6, "laying out", "my thread calmed down → bowing out");
-                }
-                self.guest_on = false
-            }
+            None => self.guest_busy = None,
         }
     }
 
@@ -3137,6 +3164,166 @@ impl Engine {
         }
         s
     }
+    /// the featured moment that invites a guest on an idle machine: solos and choruses,
+    /// the loud sections, a hot arc
+    fn guest_moment(&self) -> bool {
+        if self.blues_live {
+            let f = self.blues.feel();
+            return f.contains("SOLO") || f.contains("CHORUS") || f.contains("B part") || self.leader.energy > 0.75;
+        }
+        if self.rage_live {
+            return self.rage.sec.loud() || self.leader.energy > 0.75;
+        }
+        // the calm styles peak lower on their own arcs
+        let hot = match self.sty().id {
+            "monk" => 0.3,
+            "space" => 0.5,
+            _ => 0.6,
+        };
+        self.feel == Feel::Surge || self.leader.energy > hot
+    }
+
+    fn guest_in(&mut self, bar: u64) {
+        let id = self.sty().id;
+        let k = GUESTS.iter().position(|g| g.0 == id).unwrap_or(0);
+        let g = GUESTS[k];
+        let busy = self.guest_busy.is_some();
+        let name = self.guest_busy.clone().or_else(|| self.ctl.sitin.clone()).unwrap_or_else(|| "a friend".into());
+        if g.2 != 255 {
+            let Some(gm) = self.gm.as_mut() else { return };
+            gm.program(crate::gm::GUEST, g.2, g.5);
+            gm.pan(crate::gm::GUEST, 84);
+            gm.snap(crate::gm::GUEST, 1.0);
+        }
+        self.guest_k = k;
+        self.guest_name = name.chars().take(14).collect();
+        self.guest_on = true;
+        self.guest_start = bar;
+        self.guest_until = bar + if busy { 16 } else { 12 };
+        self.guest_deg = (self.rng.below(5) as i32) - 2;
+        self.guest_hash = crate::music::fnv1a(&self.guest_name);
+        let who = format!("{} on {}", self.guest_name, g.1);
+        self.say(format!("+ guest: {who}{}", if busy { " (a busy program sits in)" } else { "" }));
+        self.think(6, "soloing", format!("{who}: trading 2-bar phrases"));
+        self.inspire(4, format!("guest {who} sat in"), 0.25);
+    }
+
+    fn guest_off(&mut self, bar: u64) {
+        let busy = self.guest_busy.is_some();
+        self.guest_on = false;
+        self.guest_cd = bar + if busy { 12 } else { 40 };
+        if let Some(gm) = self.gm.as_mut() {
+            gm.fade(crate::gm::GUEST, 0.0, 2.0);
+        }
+        self.think(6, "laying out", format!("{} bows out", self.guest_name));
+        self.say(format!("- guest: {} bows out", self.guest_name));
+    }
+
+    /// the featured guest: complete phrases over the harmony, trading two bars on, two off
+    fn guest_step(&mut self, s: usize, bar: u64) {
+        if s == 0 {
+            let ok = self.ctl.leads_ok;
+            if self.guest_on {
+                if bar >= self.guest_until || !ok || GUESTS[self.guest_k].0 != self.sty().id {
+                    self.guest_off(bar);
+                }
+            } else if ok && bar >= self.guest_cd && bar % 4 == 0 {
+                let st = self.leader.state;
+                let busy = self.guest_busy.is_some();
+                let lively = st == State::Alive || (self.sty().id == "monk" && st == State::Awaken);
+                let go = (busy && st != State::Chill) || (lively && self.guest_moment());
+                if go {
+                    self.guest_in(bar);
+                }
+            }
+        }
+        if !self.guest_on {
+            return;
+        }
+        let g = GUESTS[self.guest_k];
+        let rel = bar.saturating_sub(self.guest_start) % 4;
+        let plays = if g.4 == 0 { 3 } else { 2 };
+        if rel >= plays {
+            if s == 0 && rel == plays {
+                self.set_think(6, format!("{} on {}: listening, then answering", self.guest_name, g.1));
+            }
+            return;
+        }
+        let last_bar = rel == plays - 1;
+        const LONG: [&[(usize, f32)]; 4] = [&[(0, 6.0), (6, 2.0), (8, 8.0)], &[(0, 4.0), (4, 4.0), (8, 4.0), (12, 4.0)], &[(0, 8.0), (10, 6.0)], &[(2, 6.0), (8, 8.0)]];
+        const MID: [&[(usize, f32)]; 4] = [
+            &[(0, 2.0), (2, 2.0), (4, 3.0), (7, 1.0), (8, 2.0), (10, 2.0), (12, 4.0)],
+            &[(0, 3.0), (3, 1.0), (4, 2.0), (6, 2.0), (8, 4.0), (12, 2.0), (14, 2.0)],
+            &[(2, 2.0), (4, 2.0), (6, 2.0), (8, 6.0), (14, 2.0)],
+            &[(0, 2.0), (2, 1.0), (3, 1.0), (4, 4.0), (8, 2.0), (10, 2.0), (12, 4.0)],
+        ];
+        const CHOP: [&[(usize, f32)]; 2] = [&[(0, 1.0), (1, 1.0), (3, 1.0), (6, 1.0), (8, 1.0), (10, 1.0), (11, 1.0), (14, 1.0)], &[(0, 1.0), (2, 1.0), (4, 1.0), (5, 1.0), (8, 2.0), (12, 1.0), (13, 1.0)]];
+        let pick = ((self.guest_hash >> 3) as u64 + bar) as usize;
+        let pat: &[(usize, f32)] = match g.4 {
+            0 => LONG[pick % 4],
+            1 => MID[pick % 4],
+            3 => CHOP[pick % 2],
+            _ => &[],
+        };
+        let len = if g.4 == 2 {
+            // shred: sixteenths, the phrase ends on a held bent note
+            if last_bar && s >= 12 {
+                if s == 12 { 4.0 } else { 0.0 }
+            } else {
+                1.0
+            }
+        } else {
+            match pat.iter().find(|e| e.0 == s) {
+                Some(e) => e.1,
+                None => 0.0,
+            }
+        };
+        if len <= 0.0 {
+            return;
+        }
+        let end = last_bar && (pat.last().map_or(s == 12, |e| e.0 == s));
+        // the line: a stepwise walk with leaps now and then, sequences when shredding
+        let stepv: i32 = if g.4 == 2 {
+            if (s / 4) % 2 == 0 { 1 } else { -1 }
+        } else {
+            [-2, -1, -1, 1, 1, 2, 3, -3][self.rng.below(8) as usize]
+        };
+        self.guest_deg = (self.guest_deg + stepv).clamp(-5, 8);
+        if end {
+            // land home: the root or the third of the chord
+            self.guest_deg = if self.rng.chance(0.5) { 0 } else { 2 };
+        }
+        let strong = s % 4 == 0 || len >= 3.0 || end;
+        let mut semi = self.motif_pitch(self.guest_deg, strong, g.3);
+        let key = self.key();
+        if g.0 == "blues" && !strong && (semi - key.tonic).rem_euclid(12) == 4 && self.rng.chance(0.5) {
+            semi -= 1; // a blue third
+        }
+        let accent = if s % 4 == 0 { 12 } else { 0 };
+        let vel = 82 + accent + if end { 6 } else { 0 };
+        let swing = matches!(g.0, "blues" | "jazz") && s % 4 == 2;
+        let d = if swing { 0.33 } else { 0.0 };
+        if g.2 == 255 {
+            // the theremin: our own sine voice, gliding into each note
+            self.guest_semi_t = semi as f32;
+            self.guest_snd = self.now + ((len * 0.95) * self.step_len) as u64;
+        } else {
+            // ornaments: a cut above the long notes (fiddle, pipes), a grace slide on the harp
+            if matches!(g.0, "celtic" | "country") && len >= 3.0 && self.rng.chance(0.5) {
+                self.note(crate::gm::GUEST, semi + 2, vel - 20, 0.25, d);
+                self.note(crate::gm::GUEST, semi, vel, len * 0.95, d + 0.2);
+            } else {
+                self.note(crate::gm::GUEST, semi, vel, len * 0.95, d);
+            }
+        }
+        self.hit_delay = d;
+        self.heard_semi(6, semi, vel as f32 / 127.0);
+        if s == 0 && rel == 0 {
+            let cn = self.chord().name();
+            self.set_think(6, format!("{} on {}: a phrase over {cn}", self.guest_name, g.1));
+        }
+    }
+
     fn guest_pitch(&self) -> f32 {
         let pcs = self.chord().pcs();
         let pc = pcs[(self.guest_hash % pcs.len() as u64) as usize];
@@ -3436,6 +3623,8 @@ impl Engine {
             // the blues key is set before the bar's first chord sounds (no stray first bar)
             self.blues_on();
         }
+        // the featured guest plays over every style's band
+        self.guest_step(s, bar);
         if s == 0 {
             if let Some(w) = self.notes_log.as_mut() {
                 use std::io::Write;
@@ -5539,9 +5728,6 @@ impl Engine {
         if init {
             self.sub_semi = self.sub_target;
         }
-        if self.guest_on {
-            self.guest_semi = self.guest_pitch();
-        }
         // bassist: sustain mode strikes on chord changes
         if self.bass_mode == BassMode::Sustain && !self.blues_live {
             self.bass_note(0, 0.75, 0.25, 5.0);
@@ -7043,10 +7229,15 @@ impl Engine {
             }
         }
         // guest (thread lead)
-        let gk = 1.0 - (-(CR as f32) / (sr * 6.0)).exp();
-        let gt = if self.guest_on { 0.45 + 0.3 * self.guest_cpu.min(1.0) } else { 0.0 };
+        // only the theremin guest (Space Cadet) uses our own voice: a sine gliding between
+        // the notes of its phrases, with a wide singing vibrato
+        let theremin = self.guest_on && GUESTS[self.guest_k].2 == 255;
+        let gk = 1.0 - (-(CR as f32) / (sr * 0.08)).exp();
+        let gt = if theremin && self.now < self.guest_snd { 0.75 } else { 0.0 };
         self.guest_gain += (gt - self.guest_gain) * gk;
-        self.guest_vib = (self.guest_vib + 4.5 * CR as f32 / sr) % 1.0;
+        let gl = 1.0 - (-(CR as f32) / (sr * 0.07)).exp();
+        self.guest_semi += (self.guest_semi_t - self.guest_semi) * gl;
+        self.guest_vib = (self.guest_vib + 5.5 * CR as f32 / sr) % 1.0;
         // click scheduling
         self.click_gap -= CR as f32 / sr;
         if self.click_level > 0.0 && self.ctl.click_rate > 0.0 && self.click_gap <= 0.0 && self.rng.f() < self.ctl.click_rate * CR as f32 / sr {
@@ -7271,16 +7462,16 @@ impl Engine {
                 // guest thread lead
                 let (mut gl, mut gr) = (0.0, 0.0);
                 if self.guest_gain > 1e-4 {
-                    let semi = self.guest_semi + sine(tbl, self.guest_vib) * 0.08;
+                    let semi = self.guest_semi + sine(tbl, self.guest_vib) * 0.18;
                     let f = semi_to_freq(self.root, semi) / sr;
-                    let s = (saw(self.guest_ph[0], f * 1.0035) + saw(self.guest_ph[1], f * 0.9965)) * 0.25 + sine(tbl, self.guest_ph[2]) * 0.6;
-                    adv(&mut self.guest_ph[0], f * 1.0035);
+                    let s = sine(tbl, self.guest_ph[2]) * 0.9 + sine(tbl, self.guest_ph[0]) * 0.08;
+                    adv(&mut self.guest_ph[0], f * 2.0);
                     adv(&mut self.guest_ph[1], f * 0.9965);
                     adv(&mut self.guest_ph[2], f);
                     if self.cr_count == CR - 1 {
                         self.guest_f.set(f * sr * 2.5, 0.8, sr);
                     }
-                    let y = self.guest_f.run(s).0 * self.guest_gain * 0.07;
+                    let y = self.guest_f.run(s).0 * self.guest_gain * 0.1;
                     gl = y * 0.6;
                     gr = y * 0.4;
                 }

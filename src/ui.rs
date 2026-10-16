@@ -976,7 +976,7 @@ fn draw_band(f: &mut Frame, r: Rect, b: &BandSnap, anim: &mut Anim, ctx: &Ctx) {
 
 /// one musician's frame (also used for the in-between animation frames)
 fn sprite_for(pi: usize, mi: &Mind, b: &BandSnap, anim: &mut Anim, ctx: &Ctx, per: usize) -> Vec<String> {
-    use crate::figure::{player, Fam, PState, PlayerIn, PW};
+    use crate::figure::{player, PState, PlayerIn, PW};
     let now = Instant::now();
     let rate = crate::clock::rate().max(1.0);
     let cond_mood = crate::mood::ALL[b.mood.min(crate::mood::N - 1)];
@@ -1018,7 +1018,7 @@ fn sprite_for(pi: usize, mi: &Mind, b: &BandSnap, anim: &mut Anim, ctx: &Ctx, pe
     if walk >= 1.0 {
         vec![" ".repeat(PW); per.min(4)]
     } else {
-        let pin = PlayerIn { style: b.style_id, fam: if pi == 6 { Fam::Guest } else { mi.fam }, state, hit, beats, swap, walk, quoting: mi.quoting, cond_mood, t: ctx.t, surge: b.feel.starts_with("surge") || b.feel.starts_with("RAGE") };
+        let pin = PlayerIn { style: b.style_id, fam: mi.fam, state, hit, beats, swap, walk, quoting: mi.quoting, cond_mood, t: ctx.t, surge: b.feel.starts_with("surge") || b.feel.starts_with("RAGE") };
         let mut v = player(&pin, per.min(4));
         v.truncate(per);
         v
@@ -1196,7 +1196,7 @@ fn stage_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> 
         if !mi.present && !walking {
             continue;
         }
-        let mut prop = if pi == 6 { None } else { stage::prop_for(st, pi, mi.prog, mi.synth) };
+        let mut prop = stage::prop_for(st, pi, mi.prog, mi.synth);
         // the biker frontman sings: the colour seat holds the mic
         if pi == 5 && b.front.is_some() {
             prop = Some(Prop::Mic);
@@ -1379,7 +1379,13 @@ fn stage_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> 
         let room = sw + gap - 1;
         let word = anim.prop[pi].map_or(mi.fam.name(), |p| p.word());
         let key = mi.key.split_whitespace().next().unwrap_or("");
-        let mut c = format!("{}·{}", mi.name, word);
+        // the guest: who sits in and on what ("guest firefox·fiddle")
+        let mut c = if pi == 6 && mi.instrument.contains(" on ") {
+            let (who, on) = mi.instrument.split_once(" on ").unwrap_or(("", ""));
+            format!("{}·{}", who, on.split_whitespace().next().unwrap_or(word))
+        } else {
+            format!("{}·{}", mi.name, word)
+        };
         if c.chars().count() + 1 + key.chars().count() <= room && key.chars().next().map_or(false, |k| k.is_ascii_alphabetic()) {
             c = format!("{c}·{key}");
         }
@@ -1541,7 +1547,19 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
         // far away (the small figures) moves only on the beat: fewer cells to repaint;
         // a deep (5-row) crowd moves on the eighths, so a big screen stays cheap
         let star = p.act == Act::Star;
-        let (lb, lt) = if star { (beats, t) } else if depth >= 2 { (beats.floor(), (t * 2.0).floor() * 0.5) } else if (depth == 1 && layers >= 3) || layers >= 5 { ((beats * 2.0).floor() * 0.5, (t * 4.0).floor() * 0.25) } else { (beats, t) };
+        // far back moves every other beat, the middle on the beat, the front on the eighths:
+        // still locked to the beat, but a deep crowd repaints far fewer cells
+        let (lb, lt) = if star {
+            (beats, t)
+        } else if depth >= 2 {
+            ((beats * 0.5).floor(), (t * 2.0).floor() * 0.5) // half-time dancing
+        } else if depth == 1 && layers >= 4 {
+            (beats.floor(), (t * 2.0).floor() * 0.5)
+        } else if (depth == 1 && layers >= 3) || layers >= 5 {
+            ((beats * 2.0).floor() * 0.5, (t * 4.0).floor() * 0.25)
+        } else {
+            (beats, t)
+        };
         let look = Look { style: b.style_id, act: p.act, vibe: v, beats: lb, t: lt + (p.seed % 1000) as f32 * 0.013, cpu: m.cpu, disk: m.disk > 2e5, chat: m.chat > 2e4, idle: m.idle, step: p.step, beer: p.beer, id: p.seed, surge, chorus, phase: p.t_act, dizzy: p.dizzy > 0.0 };
         let base = if star {
             Color::White

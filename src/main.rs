@@ -381,6 +381,7 @@ fn main() {
                     let mut c = Control::default();
                     ver += 1;
                     c.version = ver;
+                    c.leads_ok = leads;
                     let ts = en.time();
                     match profile.as_deref() {
                         Some("idle") => {

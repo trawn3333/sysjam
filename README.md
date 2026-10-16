@@ -88,7 +88,7 @@ loaded at run time with `dlopen`, so it starts even when one of them is missing.
 | `--seed N` | repeat a run exactly (same input → same music) |
 | `--soundfont PATH`, `--no-gm`, `--gm-layers N` | General MIDI layer (see below); N = 1–4 simultaneous layers (default 3, +1 at peaks) |
 | `--clicks L` | file open/close click texture 0–1 (default 0.25) |
-| `--no-leads` | never let a busy thread sit in as a guest soloist |
+| `--no-leads` | no guest musician (neither a busy program nor the band's own featured guest) |
 | `--no-input` | don't watch keyboard/mouse activity (see below) |
 | `--no-audience` | no process crowd under the band, and no audience scan at all (see [the audience](#the-audience-your-processes-on-the-dance-floor)) |
 | `--no-screen`, `--screen-method auto\|portal\|grim\|x11\|cmd`, `--screen-cmd CMD`, `--screen-interval S` | screen colour (see below) |
@@ -119,7 +119,7 @@ crossterm) that shows how the band is thinking. Piped or redirected output, or
   theme it shows a progress meter, the player and the full citation, e.g.
   `♫ now quoting ██▍ lead: Wachet auf, ruft uns die Stimme (J.S. Bach, BWV 140.7) · music21 corpus (Bach chorales) · public domain — a straight quote`.
 - **The band**: one panel per member: drone, bassist, drummer, keys, lead,
-  colour/FX, plus the guest voice when a busy thread sits in. On the left of each panel is the
+  colour/FX, plus the featured guest when one sits in. On the left of each panel is the
   member as a small animated character (10 columns × 4 rows, 3 on short terminals), driven by the
   notes the engine actually plays, at the moment you hear them:
   - **drummer**: the sticks come down on each hit (alternating hands), the snare flashes, the kick
@@ -131,7 +131,8 @@ crossterm) that shows how the band is thinking. Piped or redirected output, or
     tilts up on high notes (with a bend squiggle in Blues), a sax with notes floating up, a flute
     with moving fingers, mallets on bells, knobs turning on a synth; leads sway on the beat;
   - **drone**: eyes closed, breathing every two beats, humming `~ ~ ~`;
-  - **guest**: walks on from the right when a busy thread sits in, and walks off again;
+  - **guest**: walks on from the right holding the style's guest instrument (a sax, a fiddle, a
+    mic, a flute…) when one sits in, captioned with who and on what (`firefox·fiddle`), and walks off again;
   - **resting** players put the instrument down: coffee (`c[_]`), dozing (`zZ`) or a phone (`[:]`);
     a **hushed** player looks sheepish (`(._.)` and `shh`); an **instrument swap** slides the old
     instrument out and the new one in; a player quoting a theme gets a `(♫)` bubble;
@@ -393,11 +394,26 @@ how many kernel threads stay backstage.
   like the same person, on every run and every machine: hair or hat (spiky, bun, cap, beanie,
   top hat, mohawk, curls, bald …), clothes (hoodie, suit, stripes, dress, vest, jacket …), an
   accessory (headphones, earring, scarf, bag, a flower), height (short people have no knee row),
-  and a dance personality (bouncer, swayer, stepper, headbanger, shuffler, twirler, wallflower).
+  and **their own dance vibe**, kept for as long as they're on the floor and different from their
+  neighbours: a **hip shaker** (hands on the hips, the hips swinging out on every beat), a **hand
+  waver** (hands up and waving on the eighths while stepping side to side), **hips and hands**, a
+  **head bopper** (the head nods and sways on the beat, knees bouncing), a **stomper** (fists pumping),
+  a **side-stepper** (step, together, step back), a **kicker**, a **twister** (heels in and out, the
+  hips going the other way) and a **robot** (angular arms, a knee on every beat). Every one of them
+  moves the legs and feet on the beat, twice as fast when the band is hot.
   The style's theme (cowboy hat, glowsticks, wig) goes over the top. Their **faces change with the
   music and what they are doing**: `(*o*)`/`(^O^)` when the band is hot, `(O)` mouths in a surge,
   `(^v^)` applauding a like, `(>o>)` when the process is CPU-hungry, `(@_@)` busy on disk, `('o')`
-  chatting, `(-.-)` dozing, `(^_^)`/`(-_-)` swaying to a chill groove, `(^-^)` waving goodbye, plus blinks.
+  chatting, `(^_^)`/`(-_-)` swaying to a chill groove, `(^-^)` waving goodbye, `(@~@)` dizzy, plus blinks.
+- **The standout dancer:** now and then one person (far more often when the band is really going)
+  breaks out and **roams through the audience**, crossing the rows and sliding along the floor,
+  drawn a row brighter and on top, cycling through **spins** (the head turning round), **high
+  kicks**, **slides**, **arm waves** rolling through the body and **jumps into the splits**, a new
+  move every two beats; after 16–26 s they go back to their place.
+- **Passing out:** rarely (one at a time, every few minutes at most) someone in the front rows
+  keels over and **lies flat on the floor** `(x)[#]<` seeing stars for a while, then either gets
+  back up a bit dizzy, is **crowd-surfed off** on a sea of hands `^ ^ ^`, or gets up and walks off.
+  (`SYSJAM_CROWD_PASSOUT=SECS` and `SYSJAM_CROWD_STAR=SECS` force one at that time, for demos.)
 - **Legs and feet, on the beat clock:** multi-frame cycles synced to the same beat clock as the
   band. A 4-frame walk cycle when coming in, going to the bar and leaving; foot taps on the beat;
   knee bounces; kicks, stomps and jumps with both feet off the ground (the whole figure lifts into
@@ -426,7 +442,8 @@ how many kernel threads stay backstage.
   at most one per 4 s, and not a second copy of a name already on the floor, so a shell that
   spawns all the time can't flood it. Kernel threads are only counted, never shown.
 - **What they do, from real numbers:** CPU-hungry processes (over 50% of a core) dance hard; a
-  little CPU makes them groove; idle ones sway, and after 40 s they sit down (`z`). Processes
+  little CPU makes them groove; nobody sleeps on the dance floor: a long-idle process that checks
+  out just **waves and leaves**, and someone else comes in. Processes
   doing storage I/O (over 200 kB/s from `/proc/<pid>/io`, `read_bytes + write_bytes`) carry a box
   `[#]` over their heads; processes with a lot of other I/O (sockets, pipes, ttys and page-cache
   reads: `rchar + wchar` minus the storage part, which is the cheap stand-in for "network" a
@@ -435,22 +452,26 @@ how many kernel threads stay backstage.
 - **What they do with the music:** when the band is alive and hot, in a surge, or the crowd is
   roaring, everyone puts their hands up and jumps on the beat (from the same beat clock as the
   conductor). When it's chilling they mingle and nod. A like gets a round of applause. By style:
+  a third of the crowd (the followers) picks up the style's own dance when the band is hot:
   cowboy hats and a grapevine in Country, glowsticks and the running man in Techno, a swing step
-  with lighters in Blues, wigs, minuets and a polite golf clap in Baroque. After `n` they cheer briefly.
+  with lighters in Blues, wigs, minuets and a polite golf clap in Baroque, a jig in Celtic; the
+  rest keep dancing their own way. After `n` they cheer briefly.
   Industrial's wall of sound starts a mosh pit (headbanging hair flips, flailing fists, people
   shoved sideways, stomps); in Biker everyone throws the horns `\m/` and puts their fists up to
   sing along in the chorus; in Blues they swing-step on the shuffle and cheer the solos.
 - **Depth:** each row stands 3 rows behind the one in front of it, so the legs of the back rows
   are hidden behind the heads in front (painted back to front: whoever is in front hides who is
-  behind), and alternate rows are staggered by half a slot so faces peek through the gaps. The
-  front two rows are full size; everyone further back is a smaller 3-row figure, hazier (colour
-  blended toward the background, precomputed per theme; 256-colour terminals get the nearest
-  dimmer step). Name tags only for the two front rows, held-up items only for full-size people.
+  behind), and alternate rows are staggered by half a slot so faces peek through the gaps.
+  **Everyone is full size**; depth comes only from colour: each row further back is dimmer, greyer
+  and blended further toward the floor (precomputed per theme; 256-colour terminals get the
+  nearest dimmer step), the front row is bright. If fewer full-size people fit, fewer come in.
+  Name tags only for the two front rows; held-up items for everyone, dimmed with their row.
   Newcomers take the frontmost free spot. **People move between rows:** one at a time, someone
   steps forward while the band is hot and back toward the bar when it's chilling, and anyone
   going for a drink walks back through the rows and returns to a free spot. A floor gradient and
-  a little drifting haze sit behind them. ASCII / NO_COLOR terminals keep the depth through the
-  small back figures.
+  a little drifting haze sit behind them. On ASCII / NO_COLOR terminals the rows are told apart
+  by the overlap alone. To keep the UI cheap the front row moves on the eighths, the next row on
+  the beat and the rows behind in half time, still on the beat.
 - **Held up overhead, now and then:** a beer 🍺, wine 🍷, an eggplant 🍆 or a phone 📱 (filming, its
   screen glowing cyan in the big moments), swaying on the beat; lighters in Blues, glowsticks in
   Techno (alternating green and magenta). Only a few at a time, mostly while the crowd is hyped,
@@ -697,7 +718,7 @@ the bandleader's invitation, the shared energy and what the others are doing.
 | **Keys** | GM pads hold chord tones (common tones are kept between chords). Keys/plucks play arps, broken chords or offbeat comping, and take solos when invited | energy, the lead (trading) |
 | **Lead / melody** | Sparse two-bar call phrases built from a motif it develops (repeat, sequence, invert, vary, fragment, new idea). Rests between phrases, and resolves the melody before laying out | agitation, colour player, keys |
 | **Colour / FX** | Bells, shimmer clouds driven by network traffic, swells, odd GM colours (FX Atmosphere, Seashore, …). Answers the lead's phrases. **Industrial texture:** only when the band hears real chaos, i.e. agitation above 0.68 for 6 s, or alive with 3+ hot signals at once, or a rare deliberate colour move while alive. It is 1–3 bars of gated, rhythmic band-passed noise with a metallic resonance (peak ≈ 0.018, about −12 dB under the old continuous air bed and gated, so it averages far lower). It fades out as soon as things calm down, then waits 25 s before it can come back | network, the lead, chaos |
-| *Guest* | A thread using >40% of a core for >10 s may sit in as a single quiet guest voice. It holds for ≥25 s, is released 10 s after it drops below 25%, then a 20 s cooldown applies. Compositor, audio-server and sysjam threads are ignored | that thread |
+| *Guest* | A **featured sit-in with the style's own instrument**, playing complete solo phrases over the harmony (a stepwise line with leaps, chord tones on the beats, landing on the root or third at the end of each phrase), trading two bars on and two off for 12 bars: House **sax**, Ambient Monk **shakuhachi** (long breaths), Jazz **trumpet** and Blues **tenor sax** (swung, the odd blue third), Country **fiddle** and Celtic **uilleann pipes** (with cuts), Biker **lead vocal**, Metal **shred guitar** (sixteenth-note sequences ending on a held note), Industrial **screamer** and Techno **vocal-chop MC** (chopped sixteenths), Baroque **recorder**, Space Cadet **theremin** (our own gliding sine with a wide vibrato), Tribal/Gamelan **suling**. On an idle machine the band's own arc brings one in at its featured moments (solo and chorus sections, the loud sections, a hot arc), about every 1.5–3 minutes; a thread using >40% of a core for >10 s makes one come in within two bars and more often (16 bars, 12-bar gaps), and the guest takes that program's name (`guest: firefox on fiddle`); otherwise it's the busiest of your programs. The guest plays on its own small GM synthesizer that only renders while it plays. `--no-leads` turns it off | the band's arc, a busy program |
 
 **Restraint: play only when there's something to add.** Players are calm by
 default. At every phrase, keys, lead and colour each decide to **play**, **hold**
