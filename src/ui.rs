@@ -1973,7 +1973,7 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
                         let sticks = if ascii { ['|', '/', '-', '\\'] } else { ['│', '╱', '─', '╲'] };
                         first = sticks[k.rem_euclid(4) as usize];
                         if !ascii {
-                            let halo = crate::theme::light_bg(crate::audience::neon(p.seed), 0.14);
+                            let halo = crate::theme::light_bg(crate::audience::neon(p.seed), 0.07);
                             for xx in [x - 1, x + 1] {
                                 if xx >= 0 && (xx as usize) < fw && halo != Color::Reset {
                                     g[yy][xx as usize].2 = halo;
@@ -1993,9 +1993,7 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
                             g[yy][x as usize + 1] = (c2, ic, bgs[yy]);
                         }
                     }
-                    if let Some(h) = hbg {
-                        g[yy][x as usize].2 = h;
-                    }
+                    let _ = hbg; // the stick itself stays on the floor colour; only its neighbours glow
                 }
             }
         }

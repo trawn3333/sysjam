@@ -121,6 +121,6 @@ else:
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(ofps), "-i", os.path.join(work, "s%05d.png"),
                     *([] if wav_ok() else ["-f", "s16le", "-ar", "44100", "-ac", "2"]),
                     "-ss", f"{off:.3f}", "-t", f"{dur:.3f}", "-i", wav,
-                    "-vf", "format=yuv420p", "-c:v", "libx264", "-preset", "slow", "-crf", "26", "-tune", "animation",
+                    "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p", "-c:v", "libx264", "-preset", "slow", "-crf", "26", "-tune", "animation",
                     "-c:a", "aac", "-b:a", "160k", "-shortest", "-movflags", "+faststart", a.out], check=True)
     print(f"{a.out}: {dur:.1f}s, audio from {off:.2f}s of the run, {os.path.getsize(a.out)/1e6:.1f} MB")
