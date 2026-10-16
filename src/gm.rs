@@ -413,7 +413,10 @@ impl Gm {
                 }
             }
         }
+        let t0 = pt();
         self.synth.render(&mut self.l[..n], &mut self.r[..n]);
+        eprof(2, t0);
+        let t1 = pt();
         if let Some(r) = self.rig.as_mut() {
             let mut lv = [0.0f32; 17];
             for (k, c) in self.chans.iter().enumerate() {
@@ -425,6 +428,7 @@ impl Gm {
                 self.r[i] += r.r[i];
             }
         }
+        eprof(3, t1);
         if let Some(d) = self.drum.as_mut() {
             d.render(&mut self.dl[..n], &mut self.dr[..n]);
         }
@@ -440,6 +444,26 @@ impl Gm {
             }
         }
     }
+}
+
+/// engine profile (ns) for the bench, only with SYSJAM_EPROF=1: 0 total render, 1 steps,
+/// 2 GM synth, 3 guitar rig, 4 voice pool, 5 rage, 6 mix loop (pad + bed + fx + limiter)
+pub static EPROF: [std::sync::atomic::AtomicU64; 7] = [const { std::sync::atomic::AtomicU64::new(0) }; 7];
+pub static EPROF_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// a start time when profiling, else nothing (no clock reads on the audio thread)
+#[inline]
+pub fn pt() -> Option<std::time::Instant> {
+    if EPROF_ON.load(std::sync::atomic::Ordering::Relaxed) { Some(std::time::Instant::now()) } else { None }
+}
+#[inline]
+pub fn eprof(k: usize, t: Option<std::time::Instant>) {
+    if let Some(t) = t {
+        EPROF[k].fetch_add(t.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+pub fn eprof_line(secs: f64) -> String {
+    let n = ["total", "steps", "gm", "guitar", "pool", "rage", "mix"];
+    (0..7).map(|k| format!("{} {:.2}%", n[k], EPROF[k].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e9 / secs * 100.0)).collect::<Vec<_>>().join(", ")
 }
 
 /// the modeled guitars' level against the GM samples (matched by ear and RMS)

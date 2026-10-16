@@ -480,6 +480,29 @@ pub fn colors(id: u32) -> [Rgb; 6] {
     [SKIN[b(1, SKIN.len())], HAIRC[b(4, HAIRC.len())], SHIRT[b(8, SHIRT.len())], PANTS[b(13, PANTS.len())], SHOES[b(17, SHOES.len())], ACC[b(21, ACC.len())]]
 }
 
+/// someone's outfit as at most three colours, by slot (skin, hair, top, pants, shoes,
+/// accessory): skin + a top, and for two in three people a third for the hair or the pants;
+/// the hat / bag / shoes take one of those. `f` turns a colour into the terminal's.
+pub fn wear<C: Copy>(id: u32, f: impl Fn(Rgb) -> C) -> [C; 6] {
+    let pal = colors(id);
+    let skin = f(pal[0]);
+    let top = f(pal[2]);
+    match (id >> 27) % 3 {
+        // skin + top + hair
+        1 => {
+            let hair = f(pal[1]);
+            [skin, hair, top, top, top, hair]
+        }
+        // skin + top + pants (shoes and bag match the pants)
+        2 => {
+            let pants = f(pal[3]);
+            [skin, top, top, pants, pants, pants]
+        }
+        // skin + top (a hat / cap in the same colour)
+        _ => [skin, top, top, top, top, top],
+    }
+}
+
 /// a neon glow-stick colour of its own
 pub fn neon(id: u32) -> Rgb {
     [(57, 255, 20), (255, 40, 160), (0, 240, 255), (255, 240, 0), (190, 60, 255), (255, 120, 0)][(id.wrapping_mul(2654435761) >> 28) as usize % 6]

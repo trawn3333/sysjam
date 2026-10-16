@@ -202,7 +202,8 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
         restore();
         prev(info);
     }));
-    let mut term = match Terminal::new(CrosstermBackend::new(std::io::stdout())) {
+    // buffered: ratatui's frame goes out in a few large writes, not one per KB
+    let mut term = match Terminal::new(Fast { w: std::io::BufWriter::with_capacity(1 << 16, std::io::stdout()), esc: Esc::new() }) {
         Ok(t) => t,
         Err(_) => {
             TUI_ON.store(false, Ordering::SeqCst);
@@ -233,7 +234,9 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
     let mut dirty = false;
     let mut prof = (Duration::ZERO, Duration::ZERO, 0u64, Instant::now(), 0u64);
     let mut prof_full = Duration::ZERO;
+    let mut prof_term_full = Duration::ZERO;
     let mut last_cells: Vec<(u16, u16, String, usize, Style)> = Vec::new();
+    let mut esc = Esc::new();
     // stage/crowd runs written since the last full frame
     let mut touched: Vec<(u16, u16, String, usize, Style)> = Vec::new();
     let mut last_hit_seen = 0.0f64;
@@ -392,14 +395,12 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
             // last in-between frame left something different on screen
             if dirty {
                 if let Some(c) = cache.as_ref() {
-                    let mut out = std::io::stdout().lock();
                     for cell in last_cells.iter().chain(touched.iter()) {
                         if !run_matches(c, cell.0, cell.1, &cell.2, cell.4, cell.3) {
-                            emit(&mut out, c, cell.0, cell.1, None, cell.3);
+                            emit(&mut esc, c, cell.0, cell.1, None, cell.3);
                         }
                     }
-                    let _ = crossterm::queue!(out, crossterm::style::SetAttribute(crossterm::style::Attribute::Reset), crossterm::style::ResetColor);
-                    let _ = out.flush();
+                    esc.flush();
                 }
                 dirty = false;
             }
@@ -412,8 +413,19 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
             let (cells, delta) = anim_cells(&band, &mut anim, &ctx);
             let td = Instant::now();
             // compare by position: a run that splits or merges doesn't resend the rest
-            let prev: std::collections::HashMap<(u16, u16), (&String, Style, usize)> = last_cells.iter().map(|c| ((c.0, c.1), (&c.2, c.4, c.3))).collect();
-            let fresh: Vec<bool> = cells.iter().map(|c| prev.get(&(c.0, c.1)).map_or(true, |p| *p.0 != c.2 || p.1 != c.4 || p.2 != c.3)).collect();
+            // (last_cells is in position order: a binary search, no map built per frame)
+            let mut prev_ix: Vec<(u16, u16, usize)> = last_cells.iter().enumerate().map(|(i, c)| (c.1, c.0, i)).collect();
+            prev_ix.sort_unstable();
+            let fresh: Vec<bool> = cells
+                .iter()
+                .map(|c| match prev_ix.binary_search_by(|p| (p.0, p.1).cmp(&(c.1, c.0))) {
+                    Ok(k) => {
+                        let p = &last_cells[prev_ix[k].2];
+                        p.2 != c.2 || p.4 != c.4 || p.3 != c.3
+                    }
+                    Err(_) => true,
+                })
+                .collect();
             let same = !fresh.iter().any(|&f| f) && cells.len() == last_cells.len() && delta.is_empty();
             PROF_DIFF.fetch_add(td.elapsed().as_nanos() as u64, Ordering::Relaxed);
             tw = t.elapsed();
@@ -421,19 +433,17 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
                 // straight to the terminal, only the lines that changed; ratatui's own idea of
                 // the screen (the cached full frame) is restored before its next full draw
                 if let Some(c) = cache.as_ref() {
-                    let mut out = std::io::stdout().lock();
                     for (i, cell) in cells.iter().enumerate() {
                         if fresh[i] {
                             PROF_EMIT.fetch_add(cell.3 as u64, Ordering::Relaxed);
-                            emit(&mut out, c, cell.0, cell.1, Some((&cell.2, cell.4)), cell.3);
+                            emit(&mut esc, c, cell.0, cell.1, Some((&cell.2, cell.4)), cell.3);
                         }
                     }
                     for cell in &delta {
                         PROF_EMIT.fetch_add(cell.3 as u64, Ordering::Relaxed);
-                        emit(&mut out, c, cell.0, cell.1, Some((&cell.2, cell.4)), cell.3);
+                        emit(&mut esc, c, cell.0, cell.1, Some((&cell.2, cell.4)), cell.3);
                     }
-                    let _ = crossterm::queue!(out, crossterm::style::SetAttribute(crossterm::style::Attribute::Reset), crossterm::style::ResetColor);
-                    let _ = out.flush();
+                    esc.flush();
                     dirty = true;
                 }
                 last_cells = cells;
@@ -444,6 +454,9 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
         }
         prof.0 += tw;
         prof.1 += tp.elapsed() - tw;
+        if full {
+            prof_term_full += tp.elapsed() - tw;
+        }
         prof.2 += 1;
         if let (Some(w), Some(h)) = (hit_log.as_mut(), ctx.heard) {
             let rate = crate::clock::rate().max(1.0);
@@ -472,7 +485,7 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
     }
     if let Some(p) = std::env::var_os("SYSJAM_UIPROF") {
         let el = prof.3.elapsed().as_secs_f64();
-        let _ = std::fs::write(p, format!("frames {} ({} unchanged, skipped) in {el:.1}s; widgets {:.3}% core (full frames {:.3}%, stage {:.3}%, crowd {:.3}%, diff {:.3}%, emitted cells/s {:.0}, crowd {:.0}), terminal diff+write {:.3}% core\n", prof.2, prof.4, prof.0.as_secs_f64() / el * 100.0, prof_full.as_secs_f64() / el * 100.0, PROF_STAGE.load(Ordering::Relaxed) as f64 / 1e9 / el * 100.0, PROF_CROWD.load(Ordering::Relaxed) as f64 / 1e9 / el * 100.0, PROF_DIFF.load(Ordering::Relaxed) as f64 / 1e9 / el * 100.0, PROF_EMIT.load(Ordering::Relaxed) as f64 / el, PROF_CROWD_CELLS.load(Ordering::Relaxed) as f64 / el, prof.1.as_secs_f64() / el * 100.0));
+        let _ = std::fs::write(p, format!("frames {} ({} unchanged, skipped) in {el:.1}s; widgets {:.3}% core (full frames {:.3}%, stage {:.3}%, crowd {:.3}%, diff {:.3}%, emitted cells/s {:.0}, crowd {:.0}), terminal diff+write {:.3}% core (full frames {:.3}%)\n", prof.2, prof.4, prof.0.as_secs_f64() / el * 100.0, prof_full.as_secs_f64() / el * 100.0, PROF_STAGE.load(Ordering::Relaxed) as f64 / 1e9 / el * 100.0, PROF_CROWD.load(Ordering::Relaxed) as f64 / 1e9 / el * 100.0, PROF_DIFF.load(Ordering::Relaxed) as f64 / 1e9 / el * 100.0, PROF_EMIT.load(Ordering::Relaxed) as f64 / el, PROF_CROWD_CELLS.load(Ordering::Relaxed) as f64 / el, prof.1.as_secs_f64() / el * 100.0, prof_term_full.as_secs_f64() / el * 100.0));
     }
     TUI_ON.store(false, Ordering::SeqCst);
     restore();
@@ -744,44 +757,215 @@ fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, 
     f.render_widget(p, r);
 }
 
+/// the escape codes of the in-between frames, built by hand into one buffer and written with a
+/// single syscall (crossterm's queue! formats every cell and flushes per KB): the colour and
+/// weight carry across runs, and the cursor isn't moved when it is already there
+struct Esc {
+    buf: Vec<u8>,
+    cur: Option<(Color, Color, bool)>,
+    at: Option<(u16, u16)>,
+}
+impl Esc {
+    fn new() -> Esc {
+        Esc { buf: Vec::with_capacity(16384), cur: None, at: None }
+    }
+    fn num(&mut self, n: u32) {
+        let mut d = [0u8; 10];
+        let mut i = d.len();
+        let mut n = n;
+        loop {
+            i -= 1;
+            d[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+            if n == 0 {
+                break;
+            }
+        }
+        self.buf.extend_from_slice(&d[i..]);
+    }
+    /// ";38;5;n" / ";38;2;r;g;b" / ";39" (base 38 fg, 48 bg), the codes crossterm sends
+    fn color(&mut self, c: Color, base: u32) {
+        let ansi = |c: Color| -> Option<u32> {
+            Some(match c {
+                Color::Black => 0,
+                Color::Red => 1,
+                Color::Green => 2,
+                Color::Yellow => 3,
+                Color::Blue => 4,
+                Color::Magenta => 5,
+                Color::Cyan => 6,
+                Color::Gray => 7,
+                Color::DarkGray => 8,
+                Color::LightRed => 9,
+                Color::LightGreen => 10,
+                Color::LightYellow => 11,
+                Color::LightBlue => 12,
+                Color::LightMagenta => 13,
+                Color::LightCyan => 14,
+                Color::White => 15,
+                Color::Indexed(i) => i as u32,
+                _ => return None,
+            })
+        };
+        self.buf.push(b';');
+        match c {
+            Color::Rgb(r, g, b) => {
+                self.num(base);
+                self.buf.extend_from_slice(b";2;");
+                self.num(r as u32);
+                self.buf.push(b';');
+                self.num(g as u32);
+                self.buf.push(b';');
+                self.num(b as u32);
+            }
+            _ => match ansi(c) {
+                Some(n) => {
+                    self.num(base);
+                    self.buf.extend_from_slice(b";5;");
+                    self.num(n);
+                }
+                None => self.num(base + 1),
+            },
+        }
+    }
+    fn goto(&mut self, x: u16, y: u16) {
+        if self.at != Some((x, y)) {
+            self.buf.extend_from_slice(b"\x1b[");
+            self.num(y as u32 + 1);
+            self.buf.push(b';');
+            self.num(x as u32 + 1);
+            self.buf.push(b'H');
+            self.at = Some((x, y));
+        }
+    }
+    fn style(&mut self, st: (Color, Color, bool)) {
+        if self.cur != Some(st) {
+            self.buf.extend_from_slice(if st.2 { b"\x1b[1" } else { b"\x1b[22" });
+            self.color(st.0, 38);
+            self.color(st.1, 48);
+            self.buf.push(b'm');
+            self.cur = Some(st);
+        }
+    }
+    /// reset the attributes and send it all
+    fn flush(&mut self) {
+        if self.buf.is_empty() {
+            return;
+        }
+        self.buf.extend_from_slice(b"\x1b[0m");
+        let mut out = std::io::stdout().lock();
+        let _ = out.write_all(&self.buf);
+        let _ = out.flush();
+        self.buf.clear();
+        self.cur = None;
+        self.at = None;
+    }
+}
+
+/// ratatui's backend with the full frames' cells encoded by hand (as `Esc`): the same
+/// escape codes crossterm would send in effect, without formatting each cell; the rest is
+/// crossterm's
+struct Fast {
+    w: std::io::BufWriter<std::io::Stdout>,
+    esc: Esc,
+}
+impl ratatui::backend::Backend for Fast {
+    fn draw<'a, I>(&mut self, content: I) -> std::io::Result<()>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        let e = &mut self.esc;
+        let mut cur: Option<(Color, Color, Modifier)> = None;
+        let mut last: Option<(u16, u16)> = None;
+        for (x, y, cell) in content {
+            // move unless the cell follows the last one
+            if !matches!(last, Some((lx, ly)) if x == lx + 1 && y == ly) {
+                e.at = None;
+                e.goto(x, y);
+            }
+            last = Some((x, y));
+            let st = (cell.fg, cell.bg, cell.modifier);
+            if cur != Some(st) {
+                // one SGR: reset, the attributes, both colours
+                e.buf.extend_from_slice(b"\x1b[0");
+                for (m, code) in [(Modifier::BOLD, b'1'), (Modifier::DIM, b'2'), (Modifier::ITALIC, b'3'), (Modifier::UNDERLINED, b'4'), (Modifier::SLOW_BLINK, b'5'), (Modifier::RAPID_BLINK, b'6'), (Modifier::REVERSED, b'7'), (Modifier::HIDDEN, b'8'), (Modifier::CROSSED_OUT, b'9')] {
+                    if cell.modifier.contains(m) {
+                        e.buf.push(b';');
+                        e.buf.push(code);
+                    }
+                }
+                e.color(cell.fg, 38);
+                e.color(cell.bg, 48);
+                e.buf.push(b'm');
+                cur = Some(st);
+            }
+            e.buf.extend_from_slice(cell.symbol().as_bytes());
+        }
+        e.buf.extend_from_slice(b"\x1b[0m");
+        self.w.write_all(&e.buf)?;
+        e.buf.clear();
+        e.at = None;
+        e.cur = None;
+        Ok(())
+    }
+    fn hide_cursor(&mut self) -> std::io::Result<()> {
+        CrosstermBackend::new(&mut self.w).hide_cursor()
+    }
+    fn show_cursor(&mut self) -> std::io::Result<()> {
+        CrosstermBackend::new(&mut self.w).show_cursor()
+    }
+    fn get_cursor_position(&mut self) -> std::io::Result<ratatui::layout::Position> {
+        CrosstermBackend::new(&mut self.w).get_cursor_position()
+    }
+    fn set_cursor_position<P: Into<ratatui::layout::Position>>(&mut self, position: P) -> std::io::Result<()> {
+        CrosstermBackend::new(&mut self.w).set_cursor_position(position)
+    }
+    fn clear(&mut self) -> std::io::Result<()> {
+        CrosstermBackend::new(&mut self.w).clear()
+    }
+    fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> std::io::Result<()> {
+        CrosstermBackend::new(&mut self.w).clear_region(clear_type)
+    }
+    fn size(&self) -> std::io::Result<ratatui::layout::Size> {
+        let (width, height) = crossterm::terminal::size()?;
+        Ok(ratatui::layout::Size { width, height })
+    }
+    fn window_size(&mut self) -> std::io::Result<ratatui::backend::WindowSize> {
+        CrosstermBackend::new(&mut self.w).window_size()
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.w.flush()
+    }
+}
+
 /// write one run of cells straight to the terminal: `text` over the cached frame's cells
 /// (keeping their background), or the cached cells themselves when `text` is None
-fn emit(out: &mut impl Write, cache: &ratatui::buffer::Buffer, x: u16, y: u16, text: Option<(&String, Style)>, w: usize) {
-    use crossterm::style::{Attribute, Color as CC, Print, SetAttribute, SetBackgroundColor, SetForegroundColor};
+fn emit(out: &mut Esc, cache: &ratatui::buffer::Buffer, x: u16, y: u16, text: Option<(&String, Style)>, w: usize) {
     let a = cache.area;
     if y >= a.y + a.height {
         return;
     }
-    let _ = crossterm::queue!(out, cursor::MoveTo(x, y));
+    out.goto(x, y);
     let mut chars = text.map(|t| t.0.chars());
-    // only send attribute/colour changes (most runs are one colour on one background)
-    let mut cur: Option<(Color, Color, bool)> = None;
     let mut k: u16 = 0;
+    let mut cb = [0u8; 4];
     while (k as usize) < w {
         if x + k >= a.x + a.width {
             break;
         }
         let base = &cache[(x + k, y)];
-        let (sym, fg, bold): (String, Color, bool) = match (&mut chars, text) {
-            (Some(it), Some((_, st))) => (it.next().unwrap_or(' ').to_string(), st.fg.unwrap_or(base.fg), st.add_modifier.contains(Modifier::BOLD)),
-            _ => (base.symbol().to_string(), base.fg, base.modifier.contains(Modifier::BOLD)),
+        let (sym, fg, bold): (&str, Color, bool) = match (&mut chars, text) {
+            (Some(it), Some((_, st))) => (it.next().unwrap_or(' ').encode_utf8(&mut cb), st.fg.unwrap_or(base.fg), st.add_modifier.contains(Modifier::BOLD)),
+            _ => (base.symbol(), base.fg, base.modifier.contains(Modifier::BOLD)),
         };
         let bg = text.and_then(|t| t.1.bg).unwrap_or(base.bg);
-        let st = (fg, bg, bold);
-        if cur != Some(st) {
-            let _ = crossterm::queue!(
-                out,
-                SetAttribute(if bold { Attribute::Bold } else { Attribute::NormalIntensity }),
-                SetForegroundColor(CC::from(fg)),
-                SetBackgroundColor(CC::from(bg))
-            );
-            cur = Some(st);
-        }
+        out.style((fg, bg, bold));
         // a wide glyph (an emoji held up in the crowd) covers the next cell too
-        let wide = unicode_width::UnicodeWidthStr::width(sym.as_str()) == 2;
-        let _ = crossterm::queue!(out, Print(sym));
+        let wide = if sym.len() == 1 { false } else { unicode_width::UnicodeWidthStr::width(sym) == 2 };
+        out.buf.extend_from_slice(sym.as_bytes());
         k += if wide { 2 } else { 1 };
     }
+    out.at = Some((x + k, y));
 }
 
 /// does the cached frame already show this run (same glyphs, colours and weight)?
@@ -1901,12 +2085,12 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
             (beats, t)
         };
         let look = Look { style: b.style_id, act: p.act, vibe: v, beats: lb, t: lt + (p.seed % 1000) as f32 * 0.013, cpu: m.cpu, disk: m.disk > 2e5, chat: m.chat > 2e4, idle: m.idle, step: p.step, beer: p.beer, id: p.seed, surge, chorus, phase: p.t_act, dizzy: p.dizzy > 0.0, pit: in_pit, line };
-        // everyone wears their own colours (skin, hair, shirt, pants, shoes, hat/accessory),
-        // kept readable on the theme; depth only hazes them: each row further back is blended
-        // further toward the floor (the standout dancer shines a row brighter)
+        // everyone wears their own colours, two or three of them: skin and a top, and for some
+        // a third for the hair or the pants (hat, bag and shoes follow those); kept readable on
+        // the theme; depth only hazes them: each row further back is blended further toward
+        // the floor (the standout dancer shines a row brighter)
         let lvl = if star { depth.saturating_sub(1) } else { depth };
-        let pal = crate::audience::colors(p.seed);
-        let pcs: [Color; 6] = std::array::from_fn(|k| crate::theme::person(pal[k], lvl.min(3) as u8));
+        let pcs = crate::audience::wear(p.seed, |c| crate::theme::person(c, lvl.min(3) as u8));
         let pers = crate::audience::persona(p.seed);
         let col = pcs[2];
         let (rows, lift, dx) = fig(&look);

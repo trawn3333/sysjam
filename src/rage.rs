@@ -1515,11 +1515,11 @@ impl Rage {
             if self.kick.on {
                 let k = &mut self.kick;
                 let t = k.t;
-                let f = k.body + 150.0 * (-t / 0.028).exp() + 700.0 * (-t / 0.003).exp();
+                let f = k.body + 150.0 * crate::dsp::fexp(-t / 0.028) + 700.0 * crate::dsp::fexp(-t / 0.003);
                 adv(&mut k.ph, f * dt);
-                let env = (-t / k.dec).exp();
+                let env = crate::dsp::fexp(-t / k.dec);
                 let body = softclip(sine(tbl, k.ph) * env * k.drive) / softclip(k.drive).max(0.3);
-                let click = self.f_click.run(nz).1 * (-t / 0.0025).exp() * 1.4;
+                let click = self.f_click.run(nz).1 * crate::dsp::fexp(-t / 0.0025) * 1.4;
                 low += body * k.amp * 0.62;
                 drums += click * k.amp * 0.25;
                 self.hit_now = self.hit_now.max(k.amp * (t < 0.05) as i32 as f32);
@@ -1531,15 +1531,15 @@ impl Rage {
             if self.snare.on {
                 let sn = &mut self.snare;
                 let t = sn.t;
-                adv(&mut sn.ph[0], 190.0 * (1.0 + 0.5 * (-t / 0.01).exp()) * dt);
+                adv(&mut sn.ph[0], 190.0 * (1.0 + 0.5 * crate::dsp::fexp(-t / 0.01)) * dt);
                 adv(&mut sn.ph[1], 330.0 * dt);
                 adv(&mut sn.ph[2], 545.0 * dt);
                 adv(&mut sn.ph[3], 812.0 * dt);
-                let body = (sine(tbl, sn.ph[0]) * 0.7 + sine(tbl, sn.ph[1]) * 0.4) * (-t / 0.055).exp();
-                let gate = if t < sn.gate { (-t / 0.35).exp() } else { (-sn.gate / 0.35).exp() * (-(t - sn.gate) / 0.004).exp() };
+                let body = (sine(tbl, sn.ph[0]) * 0.7 + sine(tbl, sn.ph[1]) * 0.4) * crate::dsp::fexp(-t / 0.055);
+                let gate = if t < sn.gate { crate::dsp::fexp(-t / 0.35) } else { crate::dsp::fexp(-sn.gate / 0.35) * crate::dsp::fexp(-(t - sn.gate) / 0.004) };
                 let bp = self.f_snare.run(nz);
                 let noise = (bp.1 * 1.2 + (nz - bp.0) * 0.35) * gate;
-                let metal = sq(tbl, sn.ph[2]) * sq(tbl, sn.ph[3]) * (-t / 0.09).exp() * sn.metal;
+                let metal = sq(tbl, sn.ph[2]) * sq(tbl, sn.ph[3]) * crate::dsp::fexp(-t / 0.09) * sn.metal;
                 drums += softclip((body + noise + metal * 0.4) * 1.8) * sn.amp * 0.42;
                 sn.t += dt;
                 if t > sn.gate + 0.05 && t > 0.12 {
@@ -1554,8 +1554,8 @@ impl Rage {
             if self.tom.on {
                 let tm = &mut self.tom;
                 let t = tm.t;
-                adv(&mut tm.ph, tm.f0 * (1.0 + 0.8 * (-t / 0.03).exp()) * dt);
-                let x = softclip(sine(tbl, tm.ph) * (-t / 0.22).exp() * 2.2) + nz * (-t / 0.01).exp() * 0.3;
+                adv(&mut tm.ph, tm.f0 * (1.0 + 0.8 * crate::dsp::fexp(-t / 0.03)) * dt);
+                let x = softclip(sine(tbl, tm.ph) * crate::dsp::fexp(-t / 0.22) * 2.2) + nz * crate::dsp::fexp(-t / 0.01) * 0.3;
                 drums += x * tm.amp * 0.38;
                 tm.t += dt;
                 if t > 1.2 {
@@ -1570,9 +1570,9 @@ impl Rage {
                 let t = cl.t;
                 adv(&mut cl.pm, cl.fc * cl.ratio * dt);
                 adv(&mut cl.pc, cl.fc * dt);
-                let idx = cl.index * (-t / cl.idec).exp();
-                let ph = (cl.pc + idx * sine(tbl, cl.pm) * 0.16).rem_euclid(1.0);
-                let x = (sine(tbl, ph) + nz * cl.noise * (-t / 0.004).exp()) * (-t / cl.dec).exp() * cl.amp * 0.22;
+                let idx = cl.index * crate::dsp::fexp(-t / cl.idec);
+                let ph = { let r = crate::dsp::fract1(cl.pc + idx * sine(tbl, cl.pm) * 0.16); if r < 0.0 { r + 1.0 } else { r } };
+                let x = (sine(tbl, ph) + nz * cl.noise * crate::dsp::fexp(-t / 0.004)) * crate::dsp::fexp(-t / cl.dec) * cl.amp * 0.22;
                 ml += x * (0.5 - cl.pan * 0.5);
                 mr += x * (0.5 + cl.pan * 0.5);
                 cl.t += dt;
@@ -1582,7 +1582,7 @@ impl Rage {
             }
             if self.tick_amp > 1e-3 && self.tick_t < 0.03 {
                 let t = self.tick_t;
-                let x = (sine(tbl, (t * 3100.0).fract()) * 0.7 + nz * 0.3) * (-t / 0.004).exp() * self.tick_amp * 0.16;
+                let x = (sine(tbl, crate::dsp::fract1(t * 3100.0)) * 0.7 + nz * 0.3) * crate::dsp::fexp(-t / 0.004) * self.tick_amp * 0.16;
                 ml += x * 0.6;
                 mr += x * 0.4;
                 self.tick_t += dt;
@@ -1687,7 +1687,7 @@ impl Rage {
                 let x = (t / v.dur).min(1.0);
                 // pitch: slide in, then settle
                 v.f = if x < 0.25 { v.f0 + (v.f1 - v.f0) * (x / 0.25) } else { v.f1 + (v.f2 - v.f1) * ((x - 0.25) / 0.75) };
-                let vib = 1.0 + 0.012 * sine(tbl, (t * 5.5).fract()) + v.growl * 0.04 * sine(tbl, (t * 31.0).fract());
+                let vib = 1.0 + 0.012 * sine(tbl, crate::dsp::fract1(t * 5.5)) + v.growl * 0.04 * sine(tbl, crate::dsp::fract1(t * 31.0));
                 let inc = v.f * vib * dt;
                 let mut src = saw(v.ph[0], inc);
                 adv(&mut v.ph[0], inc);
@@ -1752,7 +1752,10 @@ impl Rage {
             // ---- tape stop
             let n_t = self.tape.len();
             self.tape[self.tw] = [l, r];
-            self.tw = (self.tw + 1) % n_t;
+            self.tw += 1;
+            if self.tw == n_t {
+                self.tw = 0;
+            }
             if self.tape_on {
                 let x = (self.tape_t / self.tape_dur).min(1.0);
                 self.tape_v = (1.0 - x) * (1.0 - x);

@@ -324,6 +324,9 @@ fn main() {
         }
     };
     let bench = std::env::var_os("SYSJAM_BENCH").is_some();
+    // the engine's per-part profile (bench only; no clock reads otherwise)
+    let eprof = std::env::var_os("SYSJAM_EPROF").is_some();
+    gm::EPROF_ON.store(eprof, std::sync::atomic::Ordering::Relaxed);
     let tui = !no_tui && !bench && unsafe { libc::isatty(1) == 1 };
     let band_ui: Option<Arc<Mutex<ui::BandSnap>>> = tui.then(|| Arc::new(Mutex::new(ui::BandSnap::default())));
     let mon_ui: Option<Arc<Mutex<ui::MonSnap>>> = tui.then(|| Arc::new(Mutex::new(ui::MonSnap::default())));
@@ -448,6 +451,9 @@ fn main() {
             say!("bench {phase} ({:.0}-{:.0}s): {secs} s audio in {e:.3} s = {:.2}% of one core", t_base, en.time(), e / secs as f64 * 100.0);
         }
         say!("bench steering: {}", en.steer_stats());
+        if eprof {
+            say!("bench profile: {}", gm::eprof_line(en.time() as f64));
+        }
         for (tag, t) in &en.sw_times {
             say!("bench switch: {tag} fully switched {t:.2} s after the key press");
         }
@@ -591,7 +597,9 @@ fn main() {
         synth.set_control(&local);
         synth.render(&mut fbuf);
         for (o, s) in ibuf.iter_mut().zip(&fbuf) {
-            *o = (s * 32767.0).round().clamp(-32768.0, 32767.0) as i16;
+            // round half away from zero (as f32::round, without its libm call)
+            let x = (s * 32767.0).clamp(-32768.0, 32767.0);
+            *o = (x + 0.5f32.copysign(x)) as i16;
         }
         if let Err(e) = sink.write(&ibuf) {
             eprintln!("sysjam: {e}");
@@ -615,6 +623,10 @@ fn main() {
     }
     if synth.likes.dirty {
         synth.likes.save();
+    }
+    // SYSJAM_EPROF=<file>: the engine's profile of a live run
+    if let Some(p) = std::env::var_os("SYSJAM_EPROF").filter(|p| p.len() > 1) {
+        let _ = std::fs::write(p, format!("{}\n", gm::eprof_line(rendered as f64 / RATE as f64)));
     }
     if let (Some(k), Some(p)) = (synth.kick_log.as_ref(), std::env::var_os("SYSJAM_KICKLOG")) {
         let _ = std::fs::write(p, k.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("\n"));

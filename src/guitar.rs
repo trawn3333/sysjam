@@ -19,6 +19,8 @@
 
 const MAXD: usize = 2048;
 const VOICES: usize = 14;
+/// strings per channel (a guitar's six)
+const STRINGS: usize = 6;
 
 #[derive(Clone, Copy, Default)]
 struct Bq {
@@ -171,17 +173,24 @@ struct Voice {
     /// excitation still to inject
     exc: Vec<f32>,
     vib: f32,
+    /// the pluck's level
+    a0: f32,
 }
 
 struct Amp {
     p: Preset,
     bass: bool,
+    /// stages that do something for this preset
+    use_boost: bool,
+    use_tone: [bool; 3],
+    os: bool,
     pre_hp: Bq,
     boost: Bq,
     band: Bq,
     up_lp: Bq,
     tone: [Bq; 3],
-    cab: [Bq; 4],
+    cab: [Bq; 3],
+    ncab: usize,
     env: f32,
     gate_env: f32,
     gate_g: f32,
@@ -202,25 +211,31 @@ impl Amp {
         Amp {
             p,
             bass,
+            use_boost: p.boost.abs() > 0.05,
+            use_tone: [p.tone[0].abs() > 0.05, p.tone[1].abs() > 0.05, !bass || p.tone[2].abs() > 0.05],
+            // a clean amp barely clips: no need to oversample it
+            os: p.gain > 2.5,
             pre_hp: Bq::new(1, p.hp, 0.707, 0.0, sr),
             boost: Bq::new(2, 800.0, 0.9, p.boost, sr),
             // band limit before the clipper (no fizz / aliasing)
             band: Bq::new(0, if p.gain > 8.0 { 6500.0 } else { 9000.0 }, 0.707, 0.0, sr),
             // the 2x decimation filter (running at 2 sr)
             up_lp: Bq::new(0, 0.42 * sr, 0.707, 0.0, 2.0 * sr),
-            tone: [Bq::new(3, 120.0, 0.707, p.tone[0], sr), Bq::new(2, if p.tone[1] < 0.0 { 650.0 } else { 900.0 }, 0.8, p.tone[1], sr), Bq::new(4, 3000.0, 0.707, p.tone[2], sr)],
+            tone: [Bq::new(3, 120.0, 0.707, p.tone[0], sr), Bq::new(2, if p.tone[1] < 0.0 { 650.0 } else { 900.0 }, 0.8, p.tone[1], sr), Bq::new(4, if bass { 3000.0 } else { 2400.0 }, 0.707, p.tone[2] + if bass { 0.0 } else { 2.5 }, sr)],
+            // the box thump and a steep roll-off (the presence lift lives in the treble shelf)
             cab: if bass {
-                [Bq::new(2, 70.0, 1.0, 2.0, sr), Bq::new(0, p.cab, 0.707, 0.0, sr), Bq::new(2, 700.0, 1.0, 0.0, sr), Bq::new(0, p.cab * 1.6, 0.6, 0.0, sr)]
+                [Bq::new(2, 70.0, 1.0, 2.0, sr), Bq::new(0, p.cab, 0.707, 0.0, sr), Bq::default()]
             } else {
-                [Bq::new(2, 115.0, 1.4, 3.0, sr), Bq::new(2, 2400.0, 1.2, 2.5, sr), Bq::new(0, p.cab, 0.8, 0.0, sr), Bq::new(0, p.cab * 1.25, 0.6, 0.0, sr)]
+                [Bq::new(2, 115.0, 1.4, 3.0, sr), Bq::new(0, p.cab, 0.8, 0.0, sr), Bq::new(0, p.cab * 1.25, 0.6, 0.0, sr)]
             },
+            ncab: if bass { 2 } else { 3 },
             env: 0.0,
             gate_env: 0.0,
             gate_g: 1.0,
             comp_env: 0.0,
             sag_env: 0.0,
             x1: 0.0,
-            dl: vec![0.0; (sr * 0.16) as usize],
+            dl: vec![0.0; ((sr * 0.16) as usize).next_power_of_two()],
             dw: 0,
             spring: [0.0; 3],
             lfo: 0.0,
@@ -234,91 +249,132 @@ impl Amp {
         tanh_f(x + b) - tanh_f(b)
     }
 
-    fn run(&mut self, x: f32, sr: f32) -> f32 {
+    /// one block (n <= 64) through the whole chain, stage by stage (coefficients stay in
+    /// registers; much cheaper than sample by sample through a dozen filters)
+    fn run_block(&mut self, buf: &mut [f32], sr: f32) {
         let p = self.p;
-        let ax = x.abs();
-        // gate (on the input, high gain only)
-        if p.gate > 0.0 {
-            self.gate_env = if ax > self.gate_env { ax } else { self.gate_env * 0.9993 };
-            let tg = if self.gate_env > p.gate { 1.0 } else { 0.0 };
-            self.gate_g += (tg - self.gate_g) * if tg > self.gate_g { 0.02 } else { 0.0015 };
+        let n = buf.len();
+        // gate (on the input, high gain only) and compressor
+        if p.gate > 0.0 || p.comp > 0.0 {
+            for x in buf.iter_mut() {
+                let ax = x.abs();
+                if p.gate > 0.0 {
+                    self.gate_env = if ax > self.gate_env { ax } else { self.gate_env * 0.9993 };
+                    let tg = if self.gate_env > p.gate { 1.0 } else { 0.0 };
+                    self.gate_g += (tg - self.gate_g) * if tg > self.gate_g { 0.02 } else { 0.0015 };
+                    *x *= self.gate_g;
+                }
+                if p.comp > 0.0 {
+                    self.comp_env += (ax - self.comp_env) * if ax > self.comp_env { 0.01 } else { 0.0004 };
+                    *x *= (1.0 + p.comp * 1.5) / (1.0 + p.comp * 6.0 * self.comp_env);
+                }
+            }
         }
-        let mut x = x * self.gate_g;
-        // compressor
-        if p.comp > 0.0 {
-            self.comp_env += (ax - self.comp_env) * if ax > self.comp_env { 0.01 } else { 0.0004 };
-            let g = 1.0 / (1.0 + p.comp * 6.0 * self.comp_env);
-            x *= g * (1.0 + p.comp * 1.5);
+        for x in buf.iter_mut() {
+            *x = self.pre_hp.run(*x);
         }
-        x = self.pre_hp.run(x);
-        x = self.boost.run(x);
-        // sag: a hard-driven amp loses a little gain
+        if self.use_boost {
+            for x in buf.iter_mut() {
+                *x = self.boost.run(*x);
+            }
+        }
+        let mut dry = [0.0f32; 64];
+        if self.bass {
+            dry[..n].copy_from_slice(buf);
+        }
+        // sag: a hard-driven amp loses a little gain (from the last block's level)
         let g = p.gain / (1.0 + p.sag * 4.0 * self.sag_env);
-        let xin = self.band.run(x) * g;
-        // 2x oversampled clipper
-        let mid = 0.5 * (xin + self.x1);
-        self.x1 = xin;
-        let y0 = self.up_lp.run(self.clip(mid));
-        let y1 = self.up_lp.run(self.clip(xin));
-        let _ = y0;
-        let mut y = y1;
-        if !self.bass {
-            self.sag_env += (y.abs() - self.sag_env) * 0.0005;
+        if self.os {
+            // 2x oversampled clipper, band-limited in front
+            for x in buf.iter_mut() {
+                let xin = self.band.run(*x) * g;
+                let mid = 0.5 * (xin + self.x1);
+                self.x1 = xin;
+                let _ = self.up_lp.run(self.clip(mid));
+                *x = self.up_lp.run(self.clip(xin));
+            }
         } else {
+            for x in buf.iter_mut() {
+                *x = self.clip(*x * g);
+            }
+        }
+        if self.bass {
             // the bass: mostly the clean DI, a little of the drive
-            y = x * 0.75 + y * 0.35;
+            for (x, d) in buf.iter_mut().zip(dry.iter()) {
+                *x = *d * 0.75 + *x * 0.35;
+            }
+        } else if p.sag > 0.0 {
+            let m = buf.iter().map(|x| x.abs()).sum::<f32>() / n as f32;
+            self.sag_env += (m - self.sag_env) * (1.0 - 0.9995f32.powi(n as i32));
         }
-        for t in self.tone.iter_mut() {
-            y = t.run(y);
+        for (t, on) in self.tone.iter_mut().zip(self.use_tone) {
+            if on {
+                for x in buf.iter_mut() {
+                    *x = t.run(*x);
+                }
+            }
         }
-        for c in self.cab.iter_mut() {
-            y = c.run(y);
+        for c in self.cab[..self.ncab].iter_mut() {
+            for x in buf.iter_mut() {
+                *x = c.run(*x);
+            }
         }
-        // fx
-        let n = self.dl.len();
-        let out = match p.fx {
+        // fx (a power-of-two delay line: masks, no divisions)
+        let m = self.dl.len() - 1;
+        match p.fx {
             1 => {
                 // slapback ~110 ms, one repeat
                 let d = (sr * 0.11) as usize;
-                let e = self.dl[(self.dw + n - d) % n];
-                self.dl[self.dw] = y;
-                y + e * p.fx_mix
+                for x in buf.iter_mut() {
+                    let e = self.dl[(self.dw.wrapping_sub(d)) & m];
+                    self.dl[self.dw] = *x;
+                    self.dw = (self.dw + 1) & m;
+                    *x += e * p.fx_mix;
+                }
             }
             2 => {
                 // spring: a short dispersive loop (allpass chirps) feeding back, darkened
                 let d = (sr * 0.037) as usize;
-                let e = self.dl[(self.dw + n - d) % n];
-                let mut s = e;
-                for (k, z) in self.spring.iter_mut().enumerate() {
-                    let a = 0.6 - k as f32 * 0.1;
-                    let o = *z - a * s;
-                    *z = s + a * o;
-                    s = o;
+                for x in buf.iter_mut() {
+                    let mut s = self.dl[(self.dw.wrapping_sub(d)) & m];
+                    for (k, z) in self.spring.iter_mut().enumerate() {
+                        let a = 0.6 - k as f32 * 0.1;
+                        let o = *z - a * s;
+                        *z = s + a * o;
+                        s = o;
+                    }
+                    self.lfo = self.lfo * 0.7 + s * 0.3;
+                    self.dl[self.dw] = *x + self.lfo * 0.72;
+                    self.dw = (self.dw + 1) & m;
+                    *x += self.lfo * p.fx_mix;
                 }
-                self.lfo = self.lfo * 0.7 + s * 0.3;
-                self.dl[self.dw] = y + self.lfo * 0.72;
-                y + self.lfo * p.fx_mix
             }
             3 => {
-                // chorus: a 7 ms delay swept by 2 ms at 0.8 Hz
-                self.lfo += 0.8 / sr;
-                if self.lfo > 1.0 {
-                    self.lfo -= 1.0;
+                // chorus: a 7 ms delay swept by 2 ms at 0.8 Hz (triangle LFO)
+                for x in buf.iter_mut() {
+                    self.lfo += 0.8 / sr;
+                    if self.lfo > 1.0 {
+                        self.lfo -= 1.0;
+                    }
+                    let tri = 4.0 * (self.lfo - 0.5).abs() - 1.0;
+                    let d = sr * (0.007 + 0.002 * tri);
+                    let i = d as usize;
+                    let fr = d - i as f32;
+                    let a = self.dl[self.dw.wrapping_sub(i) & m];
+                    let b = self.dl[self.dw.wrapping_sub(i + 1) & m];
+                    self.dl[self.dw] = *x;
+                    self.dw = (self.dw + 1) & m;
+                    *x += (a + (b - a) * fr) * p.fx_mix;
                 }
-                let d = sr * (0.007 + 0.002 * (self.lfo * std::f32::consts::TAU).sin());
-                let i = d as usize;
-                let fr = d - i as f32;
-                let a = self.dl[(self.dw + n - i) % n];
-                let b = self.dl[(self.dw + n - i - 1) % n];
-                self.dl[self.dw] = y;
-                y + (a + (b - a) * fr) * p.fx_mix
             }
-            _ => y,
-        };
-        self.dw = (self.dw + 1) % n;
-        let o = out * p.out;
-        self.idle = if o.abs() > 1e-5 { 0 } else { self.idle.saturating_add(1) };
-        o
+            _ => {}
+        }
+        let mut peak = 0.0f32;
+        for x in buf.iter_mut() {
+            *x *= p.out;
+            peak = peak.max(x.abs());
+        }
+        self.idle = if peak > 1e-5 { 0 } else { self.idle.saturating_add(n as u32) };
     }
 }
 
@@ -345,7 +401,7 @@ pub struct Rig {
 
 impl Rig {
     pub fn new(sr: f32) -> Rig {
-        let voices = (0..VOICES).map(|_| Voice { on: false, ch: 0, key: 0, buf: Box::new([0.0; MAXD]), w: 0, len: 100.0, lp: 0.0, damp: 0.5, loss: 0.99, wait: 0, age: 0, amp: 0.0, off: false, exc: Vec::with_capacity(MAXD), vib: 0.0 }).collect();
+        let voices = (0..VOICES).map(|_| Voice { on: false, ch: 0, key: 0, buf: Box::new([0.0; MAXD]), w: 0, len: 100.0, lp: 0.0, damp: 0.5, loss: 0.99, wait: 0, age: 0, amp: 0.0, off: false, exc: Vec::with_capacity(MAXD), vib: 0.0, a0: 0.0 }).collect();
         Rig { sr, voices, amps: (0..17).map(|_| None).collect(), ch: [Ch { bend: 0.0, last_on: 0, strum: 0 }; 17], preset: 6, rng: 0x1234_5678, t: 0, l: vec![0.0; 64], r: vec![0.0; 64], bus: vec![0.0; 17 * 64] }
     }
 
@@ -393,8 +449,11 @@ impl Rig {
         }
         c.last_on = self.t;
         let wait = c.strum * (sr * if p.gain > 8.0 { 0.004 } else { 0.009 }) as u32;
-        // the same string again: re-pluck it; else the quietest / oldest voice
-        let vi = self.voices.iter().position(|v| v.on && v.ch == ch && v.key == key).or_else(|| self.voices.iter().position(|v| !v.on)).unwrap_or_else(|| {
+        // the same string again: re-pluck it; a guitar has six strings, so a seventh note on
+        // the channel takes the oldest one; else a free voice, else the quietest
+        let on_ch = self.voices.iter().filter(|v| v.on && v.ch == ch).count();
+        let oldest = || self.voices.iter().enumerate().filter(|(_, v)| v.on && v.ch == ch).max_by_key(|(_, v)| v.age).map(|(i, _)| i);
+        let vi = self.voices.iter().position(|v| v.on && v.ch == ch && v.key == key).or_else(|| if on_ch >= STRINGS { oldest() } else { None }).or_else(|| self.voices.iter().position(|v| !v.on)).unwrap_or_else(|| {
             let mut best = 0;
             for (i, v) in self.voices.iter().enumerate() {
                 if v.amp * (1.0 - v.off as u8 as f32 * 0.7) < self.voices[best].amp * (1.0 - self.voices[best].off as u8 as f32 * 0.7) {
@@ -448,6 +507,7 @@ impl Rig {
         v.off = false;
         v.exc = exc;
         v.vib = 0.0;
+        v.a0 = amp;
         if v.buf.iter().any(|x| x.abs() > 1e-3) && !muted {
             // a re-pluck of a ringing string: it keeps a little of what was there
             for x in v.buf.iter_mut() {
@@ -521,41 +581,51 @@ impl Rig {
                 continue;
             }
             let bend = self.ch[v.ch].bend;
-            let base = v.len / 2f32.powf(bend / 12.0);
-            let off_loss = if v.off { 0.9 } else { 1.0 };
-            let o = v.ch * n;
-            let mut peak = 0.0f32;
-            for i in 0..n {
-                if v.wait > 0 {
-                    v.wait -= 1;
-                    continue;
-                }
-                // a gentle vibrato on long single notes
-                let d = if v.age > (sr * 0.45) as u32 {
-                    v.vib += 5.5 / sr;
-                    base * (1.0 - 0.004 * (v.vib * std::f32::consts::TAU).sin())
-                } else {
-                    base
-                };
-                let rp = v.w as f32 + MAXD as f32 - d;
-                let ri = rp as usize;
-                let fr = rp - ri as f32;
-                let a = v.buf[ri % MAXD];
-                let b = v.buf[(ri + 1) % MAXD];
-                let y = a + (b - a) * fr;
-                // loop filter: one-pole lowpass (brightness), loss (decay)
-                v.lp = v.lp + (y - v.lp) * (1.0 - v.damp * 0.9);
-                let mut s = v.lp * v.loss * off_loss;
-                if (v.age as usize) < v.exc.len() {
-                    s += v.exc[v.age as usize];
-                }
-                v.buf[v.w] = s;
-                v.w = (v.w + 1) % MAXD;
-                v.age = v.age.saturating_add(1);
-                self.bus[o + i] += y;
-                peak = peak.max(y.abs());
+            let mut base = v.len / 2f32.powf(bend / 12.0);
+            // a gentle vibrato on long notes (set per block: smooth enough at 64 samples)
+            if v.age > (sr * 0.45) as u32 {
+                v.vib += 5.5 * n as f32 / sr;
+                base *= 1.0 - 0.004 * (v.vib * std::f32::consts::TAU).sin();
             }
-            if v.age as usize > v.exc.len() + 64 && peak < 1e-4 {
+            let off_loss = if v.off { 0.9 } else { 1.0 };
+            // strum stagger: the string starts later in this block (or not at all)
+            let i0 = (v.wait as usize).min(n);
+            v.wait -= i0 as u32;
+            let mut peak = 0.0f32;
+            if i0 < n {
+                // the loop with its state in locals (one fractional read, one write per sample)
+                let bus = &mut self.bus[v.ch * n + i0..(v.ch + 1) * n];
+                let buf = &mut v.buf[..];
+                let exc = &v.exc[..];
+                let (mut w, mut lp, mut age) = (v.w, v.lp, v.age);
+                let g = 1.0 - v.damp * 0.9;
+                let k = v.loss * off_loss;
+                let rd = MAXD as f32 - base;
+                for out in bus.iter_mut() {
+                    let rp = w as f32 + rd;
+                    let ri = rp as i32 as usize;
+                    let fr = rp - ri as f32;
+                    let a = buf[ri & (MAXD - 1)];
+                    let b = buf[(ri + 1) & (MAXD - 1)];
+                    let y = a + (b - a) * fr;
+                    // loop filter: one-pole lowpass (brightness), loss (decay)
+                    lp += (y - lp) * g;
+                    let mut s = lp * k;
+                    if (age as usize) < exc.len() {
+                        s += exc[age as usize];
+                    }
+                    buf[w] = s;
+                    w = (w + 1) & (MAXD - 1);
+                    age = age.saturating_add(1);
+                    *out += y;
+                    peak = peak.max(y.abs());
+                }
+                v.w = w;
+                v.lp = lp;
+                v.age = age;
+            }
+            // done at -60 dB below the pluck
+            if v.age as usize > v.exc.len() + 64 && peak < 2e-4f32.max(v.a0 * 1e-3) {
                 v.on = false;
             }
             v.amp = peak;
@@ -567,8 +637,11 @@ impl Rig {
             }
             let g = level[ch];
             let (gl, gr) = ((1.0 - pan[ch]).sqrt() * g, pan[ch].sqrt() * g);
-            for i in 0..n {
-                let y = a.run(self.bus[ch * n + i], sr);
+            let blk = &mut self.bus[ch * n..(ch + 1) * n];
+            for c in blk.chunks_mut(64) {
+                a.run_block(c, sr);
+            }
+            for (i, y) in blk.iter().enumerate() {
                 self.l[i] += y * gl;
                 self.r[i] += y * gr;
             }
@@ -606,3 +679,4 @@ mod tests {
         }
     }
 }
+

@@ -251,6 +251,8 @@ pub struct Engine {
     lfo_ph: f32,
     drift: [f32; 3],
     sub_ph: [f32; 2],
+    sub_key: (f32, f32),
+    sub_inc: [f32; 2],
     sub_semi: f32,
     sub_target: f32,
     bass_ph: f32,
@@ -674,6 +676,8 @@ impl Engine {
             pad_norm: 0.2,
             lfo_ph: 0.0,
             drift: [rng.f(), rng.f(), rng.f()],
+            sub_key: (f32::NAN, f32::NAN),
+            sub_inc: [0.0; 2],
             sub_ph: [0.0, 0.5],
             sub_semi: -12.0,
             sub_target: -12.0,
@@ -7291,7 +7295,7 @@ impl Engine {
         let bri = if self.ctl.screen_valid { self.ctl.brightness } else { 0.5 };
         // drone player's own slow drift
         for (i, d) in self.drift.iter_mut().enumerate() {
-            *d = (*d + CR as f32 / (sr * [73.0, 117.0, 41.0][i])) % 1.0;
+            *d = crate::dsp::fract1(*d + CR as f32 / (sr * [73.0, 117.0, 41.0][i]));
         }
         let d1 = sine(&self.tbl, self.drift[0]);
         let d2 = sine(&self.tbl, self.drift[1]);
@@ -7306,7 +7310,7 @@ impl Engine {
         self.detune += ((5.0 + 4.0 * e) - self.detune) * k;
         self.saw_mix += ((0.42 + 0.15 * warm + 0.15 * e).clamp(0.2, 0.7) - self.saw_mix) * k;
         self.voices_f += ((3.0 + (e > 0.5) as i32 as f32) - self.voices_f) * k;
-        self.lfo_ph = (self.lfo_ph + (0.04 + 0.08 * e) * CR as f32 / sr) % 1.0;
+        self.lfo_ph = crate::dsp::fract1(self.lfo_ph + (0.04 + 0.08 * e) * CR as f32 / sr);
         let lfo = sine(&self.tbl, self.lfo_ph);
         let depth = if self.leader.state == State::Chill { 0.22 } else { 0.1 };
         let fc = self.cutoff * (1.0 + depth * lfo) * (1.0 + 0.25 * d1 + 0.1 * d2);
@@ -7317,7 +7321,7 @@ impl Engine {
         let drift_inc = 0.06 * CR as f32 / sr;
         let vf = self.voices_f.round();
         for (ti, t) in self.tones.iter_mut().enumerate() {
-            let swell = if ti < 2 { 1.0 } else { 0.6 + 0.4 * sine(&self.tbl, (self.drift[0] * (1.0 + ti as f32 * 0.37) + ti as f32 * 0.23) % 1.0) };
+            let swell = if ti < 2 { 1.0 } else { 0.6 + 0.4 * sine(&self.tbl, crate::dsp::fract1(self.drift[0] * (1.0 + ti as f32 * 0.37) + ti as f32 * 0.23)) };
             let tg = if t.on { swell * if ti == 0 { 1.0 } else { 0.85 } } else { 0.0 };
             t.gain += (tg - t.gain) * k * 2.0;
             t.semi += (t.target - t.semi) * glide;
@@ -7325,7 +7329,7 @@ impl Engine {
             for (vi, v) in t.voices.iter_mut().enumerate() {
                 let vt = if (vi as f32) < vf { 1.0 } else { 0.0 };
                 v.gain += (vt - v.gain) * k;
-                v.drift = (v.drift + drift_inc * (0.7 + 0.15 * vi as f32)) % 1.0;
+                v.drift = crate::dsp::fract1(v.drift + drift_inc * (0.7 + 0.15 * vi as f32));
                 let dr = sine(&self.tbl, v.drift) * 0.35;
                 let cents = (SPREAD[vi] + dr * if vi == 0 { 0.4 } else { 1.0 }) * self.detune;
                 v.inc = base * (cents / 1200.0).exp2() / sr;
@@ -7383,7 +7387,7 @@ impl Engine {
         self.guest_gain += (gt - self.guest_gain) * gk;
         let gl = 1.0 - (-(CR as f32) / (sr * 0.07)).exp();
         self.guest_semi += (self.guest_semi_t - self.guest_semi) * gl;
-        self.guest_vib = (self.guest_vib + 5.5 * CR as f32 / sr) % 1.0;
+        self.guest_vib = crate::dsp::fract1(self.guest_vib + 5.5 * CR as f32 / sr);
         // click scheduling
         self.click_gap -= CR as f32 / sr;
         if self.click_level > 0.0 && self.ctl.click_rate > 0.0 && self.click_gap <= 0.0 && self.rng.f() < self.ctl.click_rate * CR as f32 / sr {
@@ -7397,27 +7401,63 @@ impl Engine {
         let tbl = &self.tbl[..];
         let mut l = [0f32; CR];
         let mut r = [0f32; CR];
-        for t in self.tones.iter_mut() {
-            for v in t.voices.iter_mut() {
+        // the sounding voices: (saw gain, sine gain, left, right, phase, inc, 2cos w, sin, sin before)
+        let mut on: [(f32, f32, f32, f32, f32, f32, f32, f32, f32); MAX_T * PAD_V] = [(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0); MAX_T * PAD_V];
+        let mut idx = [(0usize, 0usize); MAX_T * PAD_V];
+        let mut n_on = 0;
+        for (ti, t) in self.tones.iter_mut().enumerate() {
+            for (vi, v) in t.voices.iter_mut().enumerate() {
                 let g = t.gain * v.gain;
-                let (inc, mut ph) = (v.inc, v.ph);
+                let (inc, ph) = (v.inc, v.ph);
                 if g < 1e-4 {
-                    ph += inc * CR as f32;
+                    let ph = ph + inc * CR as f32;
                     v.ph = ph - ph.floor();
                     continue;
                 }
-                let (gs, gn) = (g * m, g * (1.0 - m));
-                for k in 0..CR {
-                    let s = saw(ph, inc) * gs + sine(tbl, ph) * gn;
-                    ph += inc;
-                    if ph >= 1.0 {
-                        ph -= 1.0;
-                    }
-                    l[k] += s * v.gl;
-                    r[k] += s * v.gr;
-                }
-                v.ph = ph;
+                // the sine part by recurrence (sin(n+1) = 2cos(w)·sin(n) − sin(n−1)), seeded
+                // from the table each block: the same wave to ~1e-5, no table read per sample
+                let pm = ph - inc;
+                let s0 = sine(tbl, if pm < 0.0 { pm + 1.0 } else { pm });
+                on[n_on] = (g * m, g * (1.0 - m), v.gl, v.gr, ph, inc, 2.0 * (std::f32::consts::TAU * inc).cos(), sine(tbl, ph), s0);
+                idx[n_on] = (ti, vi);
+                n_on += 1;
             }
+        }
+        // two voices per pass: their recurrences interleave (each alone is latency-bound)
+        let mut k0 = 0;
+        while k0 < n_on {
+            let pair = k0 + 1 < n_on;
+            let a = on[k0];
+            let b = if pair { on[k0 + 1] } else { (0.0, 0.0, 0.0, 0.0, 0.0, a.5, 0.0, 0.0, 0.0) };
+            let (mut pa, mut sa1, mut sa0) = (a.4, a.7, a.8);
+            let (mut pb, mut sb1, mut sb0) = (b.4, b.7, b.8);
+            for k in 0..CR {
+                let x = saw(pa, a.5) * a.0 + sa1 * a.1;
+                let y = saw(pb, b.5) * b.0 + sb1 * b.1;
+                let na = a.6 * sa1 - sa0;
+                sa0 = sa1;
+                sa1 = na;
+                let nb = b.6 * sb1 - sb0;
+                sb0 = sb1;
+                sb1 = nb;
+                pa += a.5;
+                if pa >= 1.0 {
+                    pa -= 1.0;
+                }
+                pb += b.5;
+                if pb >= 1.0 {
+                    pb -= 1.0;
+                }
+                l[k] += x * a.2 + y * b.2;
+                r[k] += x * a.3 + y * b.3;
+            }
+            let (ti, vi) = idx[k0];
+            self.tones[ti].voices[vi].ph = pa;
+            if pair {
+                let (ti, vi) = idx[k0 + 1];
+                self.tones[ti].voices[vi].ph = pb;
+            }
+            k0 += 2;
         }
         self.padl = l;
         self.padr = r;
@@ -7425,6 +7465,11 @@ impl Engine {
 
     /// Render interleaved stereo frames.
     pub fn render(&mut self, out: &mut [f32]) {
+        let t_all = crate::gm::pt();
+        self.render_(out);
+        crate::gm::eprof(0, t_all);
+    }
+    fn render_(&mut self, out: &mut [f32]) {
         let frames = out.len() / 2;
         // style keys act per audio block, not per step
         if crate::shared::KEY_STYLE.load(Relaxed) != 0 || crate::shared::KEY_NEXT.load(Relaxed) != 0 {
@@ -7444,7 +7489,9 @@ impl Engine {
             self.step_pos += n as f32;
             while self.step_pos >= self.step_len {
                 self.step_pos -= self.step_len;
+                let ts = crate::gm::pt();
                 self.on_step();
+                crate::gm::eprof(1, ts);
             }
             // GM events due in this chunk
             let end = self.now + n as u64;
@@ -7471,10 +7518,14 @@ impl Engine {
             // GM sits forward of the oscillator bed, a little more as the band heats up
             let gmg = 5.2 + 1.6 * self.leader.energy;
             let now0 = self.now;
+            let tp = crate::gm::pt();
             self.pool.render(now0, n, &self.tbl);
+            crate::gm::eprof(4, tp);
             let rage_on = self.rage.active();
             if rage_on {
+                let tr = crate::gm::pt();
                 self.rage.render(n, &self.tbl);
+                crate::gm::eprof(5, tr);
             }
             // the machine styles: the drone's pad and sub step back (Blues: a faint warm bed)
             let duck_t = if self.rage_live { 0.25 } else if self.blues_live { 0.5 } else { 1.0 };
@@ -7485,6 +7536,7 @@ impl Engine {
             // the deep sub stays strong everywhere (the listener loves deep bass): only the
             // machine styles with their own distorted bass trim it a little
             let sub_duck = (0.8 + 0.2 * ((self.rage_duck - 0.25) / 0.25).clamp(0.0, 1.0)) * (0.85 + 0.15 * (self.bed_trim - 0.25) / 0.75);
+            let tmix = crate::gm::pt();
             for j in 0..n {
                 if self.cr_count == 0 {
                     self.control_rate();
@@ -7498,15 +7550,19 @@ impl Engine {
                 let pl = self.pad_f[0].run(self.padl[ci] * self.pad_norm).0 * self.bed_g * duck;
                 let pr = self.pad_f[1].run(self.padr[ci] * self.pad_norm).0 * self.bed_g * duck;
                 // sub drone 30-60 Hz: detuned sine pair + a little 2nd/3rd harmonic
-                let f = semi_to_freq(self.root, self.sub_semi);
-                let i1 = f / sr;
-                let i2 = (f + 0.45) / sr;
+                // root / sub_semi only move at the control rate or on a step
+                if self.sub_key != (self.root, self.sub_semi) {
+                    self.sub_key = (self.root, self.sub_semi);
+                    let f = semi_to_freq(self.root, self.sub_semi);
+                    self.sub_inc = [f / sr, (f + 0.45) / sr];
+                }
+                let [i1, i2] = self.sub_inc;
                 adv(&mut self.sub_ph[0], i1);
                 adv(&mut self.sub_ph[1], i2);
                 let p1 = self.sub_ph[0];
                 let sub = (sine(tbl, p1) + sine(tbl, self.sub_ph[1])) * 0.5
-                    + sine(tbl, (p1 * 2.0).fract()) * 0.22
-                    + sine(tbl, (p1 * 3.0).fract()) * 0.06;
+                    + sine(tbl, crate::dsp::fract1(p1 * 2.0)) * 0.22
+                    + sine(tbl, crate::dsp::fract1(p1 * 3.0)) * 0.06;
                 let sub = sub * self.sub_level * 0.16 * sub_duck;
                 // bass voice 40-120 Hz
                 let mut bass = 0.0;
@@ -7532,9 +7588,9 @@ impl Engine {
                 let mut kick = 0.0;
                 if self.kick_on {
                     let t = self.kick_t;
-                    let kf = self.kick_b + 90.0 * (-t / 0.035).exp();
-                    kick = sine(tbl, self.kick_ph) * self.kick_amp * (-t / self.kick_d).exp();
-                    self.kick_ph = (self.kick_ph + kf / sr) % 1.0;
+                    let kf = self.kick_b + 90.0 * crate::dsp::fexp(-t / 0.035);
+                    kick = sine(tbl, self.kick_ph) * self.kick_amp * crate::dsp::fexp(-t / self.kick_d);
+                    self.kick_ph = crate::dsp::fract1(self.kick_ph + kf / sr);
                     self.kick_t += 1.0 / sr;
                     if t > 1.2 {
                         self.kick_on = false;
@@ -7636,7 +7692,8 @@ impl Engine {
                     if self.dlen < self.dlen_target { self.dlen += 1 } else { self.dlen -= 1 }
                 }
                 let dn = self.dl.len();
-                let rd = (self.di + dn - self.dlen) % dn;
+                // (di + dn - dlen) % dn without a division (dlen < dn)
+                let rd = if self.di >= self.dlen { self.di - self.dlen } else { self.di + dn - self.dlen };
                 let dl = self.dl[rd];
                 let drr = self.dr[rd];
                 self.dl[self.di] = dly_in + drr * 0.4;
@@ -7741,6 +7798,7 @@ impl Engine {
                     self.lv_n += 1;
                 }
             }
+            crate::gm::eprof(6, tmix);
             self.now = end;
             fi += n;
         }

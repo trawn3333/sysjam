@@ -23,11 +23,31 @@ impl Rng {
 #[inline]
 pub fn sine(t: &[f32], ph: f32) -> f32 {
     let p = ph * TBL as f32;
-    let i = p as usize;
+    // via i32: a float -> usize cast costs several instructions (no unsigned convert)
+    let i = (p as i32).max(0) as usize;
     let fr = p - i as f32;
     let a = t[i & (TBL - 1)];
     let b = t[(i + 1) & (TBL - 1)];
     a + (b - a) * fr
+}
+
+/// e^x for the per-sample envelopes, without the libm call: 2^(x·log2 e) split into an
+/// exponent (bits) and a degree-5 polynomial; relative error ~1e-6 (1e-5 at e^-80) (inaudible: the same
+/// curves), flushed to ~0 below e^-87
+#[inline]
+pub fn fexp(x: f32) -> f32 {
+    let y = (x * std::f32::consts::LOG2_E).clamp(-126.0, 126.0);
+    let n = y as i32;
+    let n = if (n as f32) > y { n - 1 } else { n };
+    let f = y - n as f32;
+    let p = 1.0 + f * (0.693_151_36 + f * (0.240_164_14 + f * (0.055_800_49 + f * (0.009_016_63 + f * 0.001_867_21))));
+    p * f32::from_bits(((n + 127) as u32) << 23)
+}
+
+/// `x % 1.0` (and `x.fract()`) without the libm call: the same result for |x| < 2^31
+#[inline]
+pub fn fract1(x: f32) -> f32 {
+    x - (x as i32) as f32
 }
 
 #[inline]
@@ -233,5 +253,20 @@ impl Rng {
             x -= v;
         }
         w.len() - 1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn fexp_matches_exp() {
+        let mut worst = 0.0f32;
+        let mut x = -80.0f32;
+        while x < 8.0 {
+            let (a, b) = (super::fexp(x), x.exp());
+            worst = worst.max(((a - b) / b).abs());
+            x += 0.0137;
+        }
+        assert!(worst < 1.5e-5, "worst {worst}");
     }
 }
