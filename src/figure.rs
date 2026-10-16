@@ -779,16 +779,18 @@ mod show {
         use Mood::*;
         let moods = [Content, Delighted, Proud, Amused, Inspired, Nostalgic, Focused, Impatient, Frustrated, Annoyed, Bored, Sleepy, Anxious, Surprised, Tender, Melancholy];
         let mut out = String::new();
-        for (st, col) in [("country", "38;2;234;152;72"), ("blues", "38;2;112;152;255"), ("techno", "38;2;0;230;230"), ("baroque", "38;2;230;200;120"), ("tribal", "38;2;220;170;90")] {
+        // the big conductor (the right-hand panel on roomy terminals)
+        use crate::maestro::{BH, BW};
+        for (st, col) in [("country", "38;2;234;152;72"), ("blues", "38;2;112;152;255"), ("metal", "38;2;220;40;40"), ("baroque", "38;2;230;200;120"), ("tribal", "38;2;220;170;90")] {
             for half in moods.chunks(8) {
-                let mut rows = vec![String::new(); 6];
+                let mut rows = vec![String::new(); BH + 1];
                 for (k, m) in half.iter().enumerate() {
                     let pos = Pos { steps: 2.0 + k as f64 * 1.7, len: 5000.0, meta: Meta { feel: Feel::Normal, meter: 4, shuffle: st == "blues" } };
-                    let c = conductor(st, Pose::Calm, *m, 0.9, Some(pos), 0.0);
+                    let c = crate::maestro::conductor(&crate::maestro::In { style: st, pose: Pose::Calm, mood: *m, energy: 0.9, pos: Some(pos), t: 0.0, talking: false, mood2: None, h: BH });
                     for (r, l) in c.iter().enumerate() {
                         rows[r].push_str(&format!("\x1b[1;{col}m{l}\x1b[0m  "));
                     }
-                    rows[5].push_str(&format!("\x1b[2;37m{:<14}\x1b[0m", format!("{}", m.name())));
+                    rows[BH].push_str(&format!("\x1b[2;37m{:<w$}\x1b[0m", format!("     {}", m.name()), w = BW + 2));
                 }
                 for r in rows {
                     out.push_str(&r);

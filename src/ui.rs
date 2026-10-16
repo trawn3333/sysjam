@@ -107,6 +107,10 @@ pub struct BandSnap {
     pub mood_w: f32,
     pub mood_e: f32,
     pub brain: String,
+    /// the whole blend of his 16 feelings, and valence / arousal (-1..1)
+    pub moods: [f32; 16],
+    pub val: f32,
+    pub aro: f32,
     /// seconds since the last ♥, and how many likes are stored
     pub liked: f32,
     pub likes_n: usize,
@@ -569,11 +573,19 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
         anim.aud = None;
         draw_band(f, mid[0], b, anim, ctx);
     }
+    // the right column: every panel sized to its content (the machine panel: 7 meters, the
+    // header and its threads), the conductor gets what's left, up to what his big figure
+    // and his feelings can use; anything beyond that goes to the quoted-themes history
+    let mh = 2 + 8 + m.top.len().clamp(1, 4) as u16;
+    let fixed = mh + 6;
+    let colh = mid[1].height;
+    let cites_h = (b.cites.len() as u16 * 2 + 2).clamp(3, 7);
+    let ch = colh.saturating_sub(fixed + cites_h).max(8);
     let right = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(8), Constraint::Length(5), Constraint::Min(8), Constraint::Length(6)])
+        .constraints([Constraint::Length(ch), Constraint::Length(cites_h), Constraint::Length(mh), Constraint::Length(6)])
         .split(mid[1]);
-    draw_conductor(f, right[0], b, anim, ctx);
+    draw_conductor(f, right[0], b, anim, ctx, log);
     draw_cites(f, right[1], b);
     draw_machine(f, right[2], m);
     draw_levels(f, right[3], b);
@@ -803,7 +815,10 @@ pub struct Anim {
     walk: [Option<(Instant, bool)>; 7],
     hush: [Option<Instant>; 7],
     col: [Color; 7],
-    cond: Option<(Rect, Color)>,
+    /// where the conductor figure is drawn, its colour and its height (5 = the small one)
+    cond: Option<(Rect, Color, usize)>,
+    /// the last thing he said and when it changed (the big one's mouth moves)
+    said: (String, Instant),
     band: Option<(Rect, usize, bool)>,
     dots: Option<(u16, u16, Style)>,
     /// the crowd: who is on the floor (from the monitor), their UI-side walks, the floor rect
@@ -826,11 +841,40 @@ pub struct Anim {
 
 impl Anim {
     pub fn new() -> Anim {
-        Anim { t0: Instant::now(), fam: [None; 7], swap: [None; 7], present: [false; 7], walk: [None; 7], hush: [None; 7], col: [Color::Gray; 7], cond: None, band: None, dots: None, crowd: Default::default(), floor: crate::audience::Floor::new(), aud: None, crowd_rows: Vec::new(), crowd_t: Instant::now(), crowd_beat: 0, stage_rows: Vec::new(), stage_t: Instant::now(), stage_beat: 0, prop: [None; 7], pswap: [None; 7], stage: None, solo: None }
+        Anim { t0: Instant::now(), fam: [None; 7], swap: [None; 7], present: [false; 7], walk: [None; 7], hush: [None; 7], col: [Color::Gray; 7], cond: None, said: (String::new(), Instant::now()), band: None, dots: None, crowd: Default::default(), floor: crate::audience::Floor::new(), aud: None, crowd_rows: Vec::new(), crowd_t: Instant::now(), crowd_beat: 0, stage_rows: Vec::new(), stage_t: Instant::now(), stage_beat: 0, prop: [None; 7], pswap: [None; 7], stage: None, solo: None }
     }
 }
 
-fn draw_conductor(f: &mut Frame, r: Rect, b: &BandSnap, anim: &mut Anim, ctx: &Ctx) {
+/// the conductor figure for this instant, `h` rows (5 = the small one)
+fn cond_art(b: &BandSnap, anim: &Anim, ctx: &Ctx, h: usize) -> Vec<String> {
+    let c = &b.cond;
+    let mood = crate::mood::ALL[b.mood.min(crate::mood::N - 1)];
+    if h < crate::maestro::BH {
+        return crate::figure::conductor(b.style_id, c.pose, mood, b.mood_e.max(0.4), ctx.pos, ctx.t);
+    }
+    // extra large: the big figure at 2 × 2 cells per cell
+    let (xl, h) = if h >= 2 * crate::maestro::BH { (true, h / 2) } else { (false, h) };
+    // the runner-up feeling, when it is a real contender
+    let mut m2 = None;
+    let mut best = 0.0f32;
+    for (k, &w) in b.moods.iter().enumerate() {
+        if k != b.mood && w > best {
+            best = w;
+            m2 = Some(crate::mood::ALL[k]);
+        }
+    }
+    let mood2 = if best > 0.18 && best > b.mood_w * 0.45 { m2 } else { None };
+    let talking = !c.speech.is_empty() && anim.said.1.elapsed().as_secs_f32() < 2.0;
+    let art = crate::maestro::conductor(&crate::maestro::In { style: b.style_id, pose: c.pose, mood, energy: b.mood_e.max(0.4), pos: ctx.pos, t: ctx.t, talking, mood2, h });
+    if xl { crate::maestro::xl(&art) } else { art }
+}
+
+/// the conductor figure's width for a figure height (5 small, 9..12 big, 18..24 extra large)
+fn cond_w(fh: usize) -> usize {
+    if fh >= 2 * crate::maestro::BH { 2 * crate::maestro::BW } else if fh >= crate::maestro::BH { crate::maestro::BW } else { crate::figure::CW }
+}
+
+fn draw_conductor(f: &mut Frame, r: Rect, b: &BandSnap, anim: &mut Anim, ctx: &Ctx, log: &[String]) {
     use crate::conductor::Pose;
     let c = &b.cond;
     let mood = crate::mood::ALL[b.mood.min(crate::mood::N - 1)];
@@ -847,10 +891,27 @@ fn draw_conductor(f: &mut Frame, r: Rect, b: &BandSnap, anim: &mut Anim, ctx: &C
         Pose::Surge => th(Color::LightRed),
         Pose::Rest => th(Color::DarkGray),
     };
-    let art = crate::figure::conductor(b.style_id, c.pose, mood, b.mood_e.max(0.4), ctx.pos, ctx.t);
-    anim.cond = Some((inner, col));
+    if c.speech != anim.said.0 {
+        anim.said = (c.speech.clone(), Instant::now());
+    }
     let w = inner.width as usize;
-    let tw = w.saturating_sub(crate::figure::CW + 1).max(8);
+    // the big one when the panel has the room: rows for the figure, the brain line and his
+    // feelings; the legs grow into whatever is left (up to BH_MAX)
+    let ih = inner.height as usize;
+    let xl = w >= 2 * crate::maestro::BW + 22 && ih >= 2 * crate::maestro::BH + 2;
+    let big = xl || (w >= crate::maestro::BW + 18 && ih >= crate::maestro::BH + 1);
+    let fh = if xl {
+        // (no longer legs at this size: they'd be stilts)
+        2 * crate::maestro::BH
+    } else if big {
+        (ih - 1).clamp(crate::maestro::BH, crate::maestro::BH_MAX)
+    } else {
+        5
+    };
+    let fw = cond_w(fh);
+    let art = cond_art(b, anim, ctx, fh);
+    anim.cond = Some((inner, col, fh));
+    let tw = w.saturating_sub(fw + 1).max(8);
     // speech, word-wrapped beside the figure
     let mut said: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -868,22 +929,74 @@ fn draw_conductor(f: &mut Frame, r: Rect, b: &BandSnap, anim: &mut Anim, ctx: &C
     if !cur.is_empty() {
         said.push(cur);
     }
+    let dim = Style::default().fg(th(Color::DarkGray));
+    // beside the big figure, under his words: who he's cueing, the clutter, his feelings
+    let mut side: Vec<Line> = Vec::new();
+    for t in &said {
+        side.push(Line::from(Span::styled(t.clone(), Style::default().fg(th(Color::White)))));
+    }
+    let tgt = c.target.map(|t| format!("→ {t}  ")).unwrap_or_default();
+    let clut = Line::from(Span::styled(format!("{tgt}clutter {}", meter(c.clutter.min(1.5) / 1.5, 8)), dim));
     let mut lines = Vec::new();
-    for (k, a) in art.iter().enumerate() {
-        let mut sp = vec![Span::styled(format!("{} ", crate::theme::asciify(a)), Style::default().fg(col).add_modifier(Modifier::BOLD))];
-        let row = k.checked_sub(1).and_then(|j| said.get(j));
-        if let Some(t) = row {
-            sp.push(Span::styled(t.clone(), Style::default().fg(th(Color::White))));
-        } else if k == 4 && said.len() < 4 {
-            let tgt = c.target.map(|t| format!("→ {t}  ")).unwrap_or_default();
-            sp.push(Span::styled(format!("{tgt}clutter {}", meter(c.clutter.min(1.5) / 1.5, 8)), Style::default().fg(th(Color::DarkGray))));
+    if big {
+        side.push(Line::from(""));
+        side.push(clut);
+        // the brain's blend: his strongest feelings, as bars
+        let mut order: Vec<usize> = (0..crate::mood::N).collect();
+        order.sort_by(|&a, &z| b.moods[z].partial_cmp(&b.moods[a]).unwrap_or(std::cmp::Ordering::Equal));
+        let room = fh.saturating_sub(side.len() + 2).min(5);
+        if room >= 2 {
+            side.push(Line::from(Span::styled("feels", dim)));
+            for &k in order.iter().take(room - 1) {
+                if b.moods[k] < 0.03 {
+                    break;
+                }
+                let m = crate::mood::ALL[k];
+                let nm = if b.style_id == "industrial" { crate::mood::rage_name(m) } else { m.name() };
+                let bw = tw.saturating_sub(17).clamp(4, 14);
+                side.push(Line::from(vec![
+                    Span::styled(format!("{nm:<11}"), Style::default().fg(if k == b.mood { col } else { th(Color::Gray) })),
+                    Span::styled(meter(b.moods[k].min(1.0), bw), Style::default().fg(if k == b.mood { col } else { th(Color::DarkGray) })),
+                    Span::styled(format!(" {:.2}", b.moods[k]), dim),
+                ]));
+            }
         }
-        lines.push(Line::from(sp));
+        for (k, a) in art.iter().enumerate() {
+            let mut sp = vec![Span::styled(format!("{} ", crate::theme::asciify(a)), Style::default().fg(col).add_modifier(Modifier::BOLD))];
+            if let Some(l) = k.checked_sub(1).and_then(|j| side.get(j)) {
+                sp.extend(l.spans.iter().cloned());
+            }
+            lines.push(Line::from(sp));
+        }
+    } else {
+        for (k, a) in art.iter().enumerate() {
+            let mut sp = vec![Span::styled(format!("{} ", crate::theme::asciify(a)), Style::default().fg(col).add_modifier(Modifier::BOLD))];
+            if let Some(l) = k.checked_sub(1).and_then(|j| side.get(j)) {
+                sp.extend(l.spans.iter().cloned());
+            } else if k == 4 && said.len() < 4 {
+                sp.extend(clut.spans.iter().cloned());
+            }
+            lines.push(Line::from(sp));
+        }
     }
     // what the little brain thinks
     if !b.brain.is_empty() {
         let br = if crate::theme::ascii() { format!("brain: {}", b.brain) } else { format!("🧠 {}", b.brain) };
-        lines.push(Line::from(Span::styled(br, Style::default().fg(th(Color::LightMagenta)))));
+        let mut l = vec![Span::styled(br, Style::default().fg(th(Color::LightMagenta)))];
+        if big {
+            l.push(Span::styled(format!("   valence {:+.2} · arousal {:+.2}", b.val, b.aro), dim));
+        }
+        lines.push(Line::from(l));
+    }
+    // a tall panel: his recent calls and the players' replies underneath, newest first
+    let left = (inner.height as usize).saturating_sub(lines.len() + 1);
+    if big && left >= 2 {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("recent cues", dim)));
+        for m in log.iter().filter(|m| m.contains("conductor")).take(left - 1) {
+            let t: String = m.trim_start_matches("♩ ").chars().take(w).collect();
+            lines.push(Line::from(Span::styled(t, Style::default().fg(th(Color::Gray)))));
+        }
     }
     f.render_widget(Paragraph::new(lines), inner);
 }
@@ -1034,14 +1147,13 @@ fn anim_cells(b: &BandSnap, anim: &mut Anim, ctx: &Ctx) -> (Vec<(u16, u16, Strin
     if let (Some((x, y, st)), Some(p)) = (anim.dots, ctx.pos) {
         out.push((x, y, crate::theme::asciify(&beat_dots(p.in_bar() as u32)), 4, st));
     }
-    if let Some((r, col)) = anim.cond {
-        let c = &b.cond;
-        let mood = crate::mood::ALL[b.mood.min(crate::mood::N - 1)];
-        let art = crate::figure::conductor(b.style_id, c.pose, mood, b.mood_e.max(0.4), ctx.pos, ctx.t);
+    if let Some((r, col, fh)) = anim.cond {
+        let art = cond_art(b, anim, ctx, fh);
+        let fw = cond_w(fh);
         let st = Style::default().fg(col).add_modifier(Modifier::BOLD);
         for (k, a) in art.iter().enumerate() {
             if (k as u16) < r.height {
-                out.push((r.x, r.y + k as u16, crate::theme::asciify(a), crate::figure::CW.min(r.width as usize), st));
+                out.push((r.x, r.y + k as u16, crate::theme::asciify(a), fw.min(r.width as usize), st));
             }
         }
     }
@@ -1156,7 +1268,8 @@ fn stage_grid(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> O
 fn stage_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> Option<Vec<Vec<Cell>>> {
     use crate::stage::{self, Prop};
     use crate::figure::PW;
-    const APRON: usize = 5;
+    // the apron: a row for the frontman's yell and the wedges (the conductor has his own panel)
+    const APRON: usize = 2;
     if h < 4 + stage::ROWS + 1 + APRON + 3 || w < 64 {
         return None;
     }
@@ -1318,6 +1431,8 @@ fn stage_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> 
                 let face = if !mi.playing {
                     '-'
                 } else if mi.hushed < 0.99 {
+                    '-'
+                } else if mi.hushed < 0.99 {
                     '.'
                 } else {
                     match (st, hitting) {
@@ -1411,25 +1526,14 @@ fn stage_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> 
     for &(_, sx, sw) in &capx {
         put(&mut g, (sx + sw / 2) as i32 - 2, LIP + APRON, stage::WEDGE, wedge_c);
     }
-    // the conductor at the front, facing the band; up on the beat when cueing
-    let pose = b.cond.pose;
-    let up = matches!(pose, crate::conductor::Pose::Surge | crate::conductor::Pose::Point) && in_bar % 2 == 0;
-    let ccol = match pose {
-        crate::conductor::Pose::Surge => th(Color::LightRed),
-        crate::conductor::Pose::Rest => th(Color::DarkGray),
-        _ => th(Color::LightYellow),
-    };
     let cx = (w / 2) as i32 - 4;
-    for (k, r) in stage::conductor_back(st, up).iter().enumerate() {
-        put(&mut g, cx, LIP + 1 + k, r, ccol);
-    }
     // the biker frontman's yell / the conductor's call, in a bubble on the apron
     let yell = match b.front {
         Some((t, age)) if age < 2.5 => Some((t.to_string(), th(Color::LightRed))),
         _ => None,
     };
     if let Some((t, c)) = yell {
-        put(&mut g, cx + 12, LIP + 1, &format!("< {t}"), c);
+        put(&mut g, cx, LIP + 1, &format!("< {t} >"), c);
     }
     // condensed thinking: one line per player
     let tl = h.saturating_sub(LIP + APRON + 1);
@@ -1453,7 +1557,7 @@ fn stage_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> 
 }
 
 /// rows the band panel (the stage) keeps before the crowd gets the rest
-const BAND_NEED: u16 = 30;
+const BAND_NEED: u16 = 27;
 /// most stacked rows of people on the floor
 const CROWD_MAX_LAYERS: usize = 6;
 /// crowd rows inside the panel for `n` stacked rows of people: headroom, each row 3 rows

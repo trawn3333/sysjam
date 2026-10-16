@@ -57,7 +57,7 @@ Telecaster** break, the next verse; −15.3 LUFS, peaks −1.0 dBFS) and
 Scott*, then the set moves on to the reel *Belles of Tipperary*, 6 bpm faster, and its A and B
 parts; −13.4 LUFS, peaks −1.5 dBFS). Above 12 kHz they sit at −40 / −40 / −53 dB of the total.
 
-![sysjam's live terminal UI about 12 s after five → presses switched Country to the Celtic Session: the band plays a reel in A major (driving 8ths, the A part again) at 104 bpm on a lit stage with guitar, bouzouki, drum kit, fiddle and flute, the conductor says "steady now", the lead plays in unison with the tune with cuts and rolls, and the crowd of processes dances below](docs/tui.png)
+![sysjam's live terminal UI at 200 × 60 in Country (A major, 96 → 106 bpm, a call-and-response chorus): the band on a lit stage with keys, drone, bassist, drummer, lead guitar and fiddle, the extra-large conductor delighted in the right-hand panel beside his feelings chart, and the crowd of processes dancing below](docs/tui.png)
 
 One static-ish binary (`sysjam`, ~2.2 MB, x86_64, needs glibc ≥ 2.29). It
 links only libc, libm, libpthread and libdl. ALSA, D-Bus and PipeWire are
@@ -151,7 +151,17 @@ crossterm) that shows how the band is thinking. Piped or redirected output, or
     e.g. `inspired by the modulation to D minor → picking up a fifths lead`;
   - the notes it played in the last few seconds, plus the machine signal it is tied
     to (`⇢ net 98%`) and its personality (`curious 0.4 eager 0.5 busy 0.6`).
-- **Conductor** (top right): a figure that **conducts in time**. Its baton traces real
+- **Conductor** (top right; he lives only in this panel): a figure that **conducts in time**.
+  The panel takes all the spare height of the right-hand column (the other panels are sized
+  to their content), and he grows with it: the 5-row figure on small terminals, a **9-row
+  expressive conductor** (12 rows with longer legs) when there is room, and an **extra-large
+  18-row** one (every cell drawn 2 × 2) on tall, wide terminals. The big one has brows, eyes
+  and a mouth that moves while he talks, a free hand that points, shushes, pumps a fist,
+  face-palms, waves, rests on his heart or his hip, checks his watch, bites his nails or
+  slaps his knee laughing, and footwork (weight shifts, toe taps, kicks, stomps, tiptoes,
+  crossed legs, jittery knees, a stool when he rests), all picked from his mood. His
+  runner-up feeling shows on alternate bars, and beside him a bar chart of the brain's
+  strongest feelings, valence / arousal and his recent cues fill the panel. Its baton traces real
   conducting patterns, phase-locked to the beat you are hearing (see
   [In time with the audio](#in-time-with-the-audio)):
   - 4/4: down, left, right, up, with the downbeat (the lowest point) exactly on beat 1;
@@ -176,7 +186,7 @@ crossterm) that shows how the band is thinking. Piped or redirected output, or
   exchange: `conductor: keys, bring it down → “ok, quieter”`. The panel title counts the
   interventions so far.
 
-  ![The conductor's 16 expressions in five costumes (Country, Blues, Techno, Baroque, Tribal)](docs/expressions.png)
+  ![The big conductor's 16 expressions in five costumes (Country, Blues, Metal, Baroque, Tribal)](docs/expressions.png)
 - **Quoted themes** (right, under the conductor): a scrolling history of the recent
   citations with their time, newest highlighted.
 - **Machine**: CPU, busy cores, network, disk writes, file churn and input
@@ -244,8 +254,8 @@ band plays **on a stage** instead of the list:
   cymbals shake, the bow moves, harp strings shimmer, the tuba puffs a `♪`. A new instrument is
   carried off to the right and the new one wheeled on (1 s). A soloist steps forward a row.
 - **One-line captions** (`keys·grand·E`, the addressed player highlighted), the **stage lip**,
-  and on the apron the **conductor from behind**, facing the band (baton; sledgehammer in
-  Industrial, bandana in Biker), the frontman's yells in a bubble, and wedge monitors.
+  and a slim apron with the frontman's yells in a bubble and wedge monitors (the conductor
+  has his own panel, so the stage gives those rows back to the band and the crowd).
 - Under the stage, **one condensed "thinking" line per player** (`bassist ↳ locked to the kick`).
 - Small terminals keep the old list view with the little figures. `SYSJAM_STAGE=0` forces it.
 

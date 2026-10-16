@@ -26,6 +26,7 @@ mod gm;
 mod harmony;
 mod input;
 mod monitor;
+mod maestro;
 mod likes;
 mod mood;
 mod music;

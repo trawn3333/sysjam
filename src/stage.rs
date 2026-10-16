@@ -327,20 +327,6 @@ fn raw(p: Prop) -> (&'static [&'static str], &'static [&'static str]) {
     }
 }
 
-/// the conductor seen from behind, at the front of the stage facing the band (5 rows, 9 wide)
-pub fn conductor_back(style: &str, up: bool) -> [&'static str; 5] {
-    match (style, up) {
-        ("industrial", false) => ["  [#]    ", "   │ ( )  ", "   └─┼─@  ", "     │    ", "    ╱ ╲   "],
-        ("industrial", true) => ["         ", " @ ( ) [#]", "  ╲─┼─┘  ", "    │     ", "   ╱ ╲    "],
-        ("metal", false) => ["  ╭~~~╮  ", "  │( )│  ", " ─┤[+]├─ ", "   │ │   ", "  ╱   ╲  "],
-        ("metal", true) => [" \\m/ \\m/ ", "  │( )│  ", "  ╲[+]╱  ", "   │ │   ", "  ╱   ╲  "],
-        ("biker", false) => ["   ~~~   ", "   ( )╲  ", "  ─[|]   ", "   │ │   ", "  ╱   ╲  "],
-        ("biker", true) => ["  \\~~~/  ", "  \\( )/  ", "   [|]   ", "   │ │   ", "  ╱   ╲  "],
-        (_, false) => ["      ╱  ", "   ( )╱  ", "  ─┼─    ", "   │     ", "  ╱ ╲    "],
-        (_, true) => ["  ╲   ╱  ", "   ( )   ", "  ╱┼╲    ", "   │     ", "  ╱ ╲    "],
-    }
-}
-
 /// a wedge monitor and an amp stack
 pub const WEDGE: &str = "╱──╲";
 pub fn amp(industrial: bool) -> [&'static str; 6] {
@@ -373,14 +359,6 @@ mod tests {
                 assert_eq!(a.iter().map(|r| r.matches('@').count()).sum::<usize>(), 1, "{p:?} needs exactly one face");
             }
         }
-        for st in ["industrial", "biker", "jazz"] {
-            for up in [false, true] {
-                for r in conductor_back(st, up) {
-                    assert!(r.chars().all(safe_glyph));
-                    assert!(r.width() <= 10);
-                }
-            }
-        }
         for r in amp(true).iter().chain(amp(false).iter()) {
             assert_eq!(r.width(), 4);
         }
@@ -392,3 +370,4 @@ mod tests {
         assert_eq!(prop_of_gm(30), Prop::Guitar);
     }
 }
+
