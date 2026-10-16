@@ -592,7 +592,7 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
     };
     crate::theme::set_glitch(g);
     f.render_widget(Block::default().style(Style::default().bg(crate::theme::bg()).fg(th(Color::Gray))), area);
-    // the crowd strip under the band needs 5 more rows (it shares the band's bottom border);
+    // the crowd strip above the band needs 5 more rows (it shares the band's top border);
     // on a short terminal the event log gives up to 2 lines for it, below that it hides
     let force = crate::audience::FORCE.load(Ordering::Relaxed);
     let roomy = area.width >= CROWD_MIN_W && area.height >= CROWD_MIN_H;
@@ -638,14 +638,18 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(rows[1]);
     anim.crowd = m.crowd.clone();
+    // the left column, top to bottom: the crowd, the band on stage facing it, then the
+    // players' thinking; without the crowd the band goes to the top
     if show_crowd {
         let l = mid[0];
-        let band = Rect { height: l.height - (crowd_h - 1), ..l };
-        let cr = Rect { y: l.y + band.height - 1, height: crowd_h, ..l };
-        draw_band(f, band, b, anim, ctx);
+        let cr = Rect { height: crowd_h, ..l };
+        let band = Rect { y: l.y + crowd_h - 1, height: l.height - (crowd_h - 1), ..l };
+        anim.crowd_above = true;
         draw_crowd(f, cr, b, anim, ctx);
+        draw_band(f, band, b, anim, ctx);
     } else {
         anim.aud = None;
+        anim.crowd_above = false;
         draw_band(f, mid[0], b, anim, ctx);
     }
     // the right column: every panel sized to its content (the machine panel: 7 meters, the
@@ -1176,6 +1180,8 @@ pub struct Anim {
     stage_rows: Vec<Vec<Cell>>,
     stage_t: Instant,
     stage_hit: (f64, bool),
+    /// the crowd panel sits above the band: the stage's apron goes on top, facing it
+    crowd_above: bool,
     fog: f32,
     fx_t: Instant,
     dive: Option<(f32, i32, u32)>,
@@ -1193,7 +1199,7 @@ pub struct Anim {
 
 impl Anim {
     pub fn new() -> Anim {
-        Anim { t0: Instant::now(), fam: [None; 7], swap: [None; 7], present: [false; 7], walk: [None; 7], hush: [None; 7], col: [Color::Gray; 7], cond: None, said: (String::new(), Instant::now()), band: None, dots: None, crowd: Default::default(), floor: crate::audience::Floor::new(), aud: None, crowd_rows: Vec::new(), crowd_t: Instant::now(), crowd_beat: 0, stage_rows: Vec::new(), stage_t: Instant::now(), stage_hit: (0.0, true), fog: 0.0, fx_t: Instant::now(), dive: None, dive_t: -100.0, hit_only: false, out_cache: Vec::new(), stage_beat: 0, prop: [None; 7], pswap: [None; 7], stage: None, solo: None }
+        Anim { t0: Instant::now(), fam: [None; 7], swap: [None; 7], present: [false; 7], walk: [None; 7], hush: [None; 7], col: [Color::Gray; 7], cond: None, said: (String::new(), Instant::now()), band: None, dots: None, crowd: Default::default(), floor: crate::audience::Floor::new(), aud: None, crowd_rows: Vec::new(), crowd_t: Instant::now(), crowd_beat: 0, stage_rows: Vec::new(), stage_t: Instant::now(), stage_hit: (0.0, true), fog: 0.0, fx_t: Instant::now(), dive: None, dive_t: -100.0, hit_only: false, out_cache: Vec::new(), stage_beat: 0, prop: [None; 7], pswap: [None; 7], stage: None, solo: None, crowd_above: false }
     }
 }
 
@@ -1358,6 +1364,19 @@ fn draw_band(f: &mut Frame, r: Rect, b: &BandSnap, anim: &mut Anim, ctx: &Ctx) {
     let block = Block::default().borders(Borders::ALL).border_set(crate::theme::border_set()).border_style(Style::default().fg(crate::theme::border_color())).title(crate::theme::title(" the band "));
     let inner = block.inner(r);
     f.render_widget(block, r);
+    if anim.crowd_above {
+        // join the crowd panel above: ├ ┤ instead of corners
+        let bs = crate::theme::border_set();
+        let (l, rr) = match bs.vertical_left {
+            "│" => ("├", "┤"),
+            "║" => ("╠", "╣"),
+            "┃" => ("┣", "┫"),
+            _ => (bs.top_left, bs.top_right),
+        };
+        let buf = f.buffer_mut();
+        buf[(r.x, r.y)].set_symbol(l);
+        buf[(r.x + r.width - 1, r.y)].set_symbol(rr);
+    }
     // roomy: the band on a stage, with their instruments; small terminals keep the list
     if std::env::var("SYSJAM_STAGE").map_or(true, |v| v != "0") {
         if let Some(g) = stage_grid(b, anim, ctx, inner.width as usize, inner.height as usize) {
@@ -1836,7 +1855,8 @@ fn stage_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> 
         let hit = ctx.heard.and_then(|hd| crate::clock::last_hit(pi, hd)).map(|(age, ..)| (age / rate) as f32);
         let _ = hit;
         let fwd = matches!(anim.solo, Some((p, _)) if p == pi);
-        let y0 = TOP + fwd as usize;
+        // forward is toward the crowd: down to the lip, or up when the crowd is above
+        let y0 = if anim.crowd_above { TOP - fwd as usize } else { TOP + fwd as usize };
         match (s.prop, s.big) {
             (Some(p), true) => {
                 // drawn from the notes as heard: each hit lands on the frame it sounds
@@ -2019,7 +2039,7 @@ fn stage_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> 
     }
     let wedge_c = crate::theme::dim(Color::Gray, 2);
     for &(_, sx, sw) in &capx {
-        put(&mut g, (sx + sw / 2) as i32 - 2, LIP + APRON, stage::WEDGE, wedge_c);
+        put(&mut g, (sx + sw / 2) as i32 - 2, LIP + APRON, if anim.crowd_above { stage::WEDGE_UP } else { stage::WEDGE }, wedge_c);
     }
     let cx = (w / 2) as i32 - 4;
     // the biker frontman's yell / the conductor's call, in a bubble on the apron
@@ -2047,6 +2067,16 @@ fn stage_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> 
         put(&mut g, 0, y, &line, fg);
         y += 1;
         shown += 1;
+    }
+    if anim.crowd_above {
+        // the crowd is above: the apron (the yell, then the wedges) goes on top, against the
+        // crowd; the truss line under it is the stage's front edge; the lip row becomes the
+        // gap between the captions and the thinking lines
+        let apron: Vec<Vec<Cell>> = g.drain(LIP + 1..=LIP + APRON).collect();
+        for c in g[LIP].iter_mut() {
+            *c = (' ', Color::Reset, bgc);
+        }
+        g.splice(0..0, apron);
     }
     Some(g)
 }
@@ -2329,19 +2359,21 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
         tags.push((matches!(p.act, Act::Here | Act::Bar | Act::Out), lx, label, tcol));
     }
     let _ = FH;
-    // the stage diver: a leap off the stage lip, then crowd-surfed over the front row
+    // the stage diver: a leap off the stage (below the crowd), then crowd-surfed over the
+    // heads, passed back a row every ~1.6 s
     if let Some((t0, dir, seed)) = anim.dive {
         let k = t - t0;
         let front = 1 + 3 * (layers as i32 - 1);
         let cx = pit_cx as i32 - 3;
         let dc = Color::White;
         let (rows, y, x): ([&str; 2], i32, i32) = if k < 0.7 {
-            ([" \\(O)/ ", "   / \\ "], 0, cx)
+            ([" \\(O)/ ", "   / \\ "], tag_row as i32 - 2, cx)
         } else {
             let bob = (beats.floor() as i64 % 2) as i32;
             let hands = if bob == 0 { " ^ ^ ^ ^ " } else { "^ ^ ^ ^ ^" };
             let face = if seed % 2 == 0 { "_\\(^O^)/_" } else { "_\\(>O<)/_" };
-            ([face, hands], front - 1 - bob, cx + (dir as f32 * (k - 0.7) * 6.0) as i32)
+            let back = (((k - 0.7) / 1.6) as i32).min(layers as i32 - 1);
+            ([face, hands], front - 1 - bob - 3 * back, cx + (dir as f32 * (k - 0.7) * 6.0) as i32)
         };
         for (r, row) in rows.iter().enumerate() {
             let yy = y + r as i32;
@@ -2421,16 +2453,7 @@ fn draw_crowd(f: &mut Frame, r: Rect, b: &BandSnap, anim: &mut Anim, ctx: &Ctx) 
     let block = Block::default().borders(Borders::ALL).border_set(bs).border_style(Style::default().fg(crate::theme::border_color())).title(crate::theme::title(&title));
     let inner = block.inner(r);
     f.render_widget(block, r);
-    // join the band panel above: ├ ┤ instead of corners
-    let (l, rr) = match bs.vertical_left {
-        "│" => ("├", "┤"),
-        "║" => ("╠", "╣"),
-        "┃" => ("┣", "┫"),
-        _ => (bs.top_left, bs.top_right),
-    };
-    let buf = f.buffer_mut();
-    buf[(r.x, r.y)].set_symbol(l);
-    buf[(r.x + r.width - 1, r.y)].set_symbol(rr);
+    // (its bottom border is the band panel's top one, drawn over it)
     if (inner.width as usize) < BARW + 12 || inner.height < 4 {
         anim.aud = None;
         return;

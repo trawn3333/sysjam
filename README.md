@@ -57,7 +57,7 @@ Telecaster** break, the next verse; −15.3 LUFS, peaks −1.0 dBFS) and
 Scott*, then the set moves on to the reel *Belles of Tipperary*, 6 bpm faster, and its A and B
 parts; −13.4 LUFS, peaks −1.5 dBFS). Above 12 kHz they sit at −40 / −40 / −53 dB of the total.
 
-![sysjam's live terminal UI at 200 × 60 in Country (A major, 96 → 106 bpm, a call-and-response chorus): the band on a lit stage with keys, drone, bassist, drummer, lead guitar and fiddle, the extra-large conductor delighted in the right-hand panel beside his feelings chart, and the crowd of processes dancing below](docs/tui.png)
+![sysjam's live terminal UI at 200 × 60 in Country (A major, 96 → 106 bpm, a call-and-response chorus): the band on a lit stage with keys, drone, bassist, drummer, lead guitar and fiddle, the extra-large conductor delighted in the right-hand panel beside his feelings chart, and the crowd of processes dancing above the stage](docs/tui.png)
 
 One static-ish binary (`sysjam`, ~2.2 MB, x86_64, needs glibc ≥ 2.29). It
 links only libc, libm, libpthread and libdl. ALSA, D-Bus and PipeWire are
@@ -90,7 +90,7 @@ loaded at run time with `dlopen`, so it starts even when one of them is missing.
 | `--clicks L` | file open/close click texture 0–1 (default 0.25) |
 | `--no-leads` | no guest musician (neither a busy program nor the band's own featured guest) |
 | `--no-input` | don't watch keyboard/mouse activity (see below) |
-| `--no-audience` | no process crowd under the band, and no audience scan at all (see [the audience](#the-audience-your-processes-on-the-dance-floor)) |
+| `--no-audience` | no process crowd above the band, and no audience scan at all (see [the audience](#the-audience-your-processes-on-the-dance-floor)) |
 | `--no-screen`, `--screen-method auto\|portal\|grim\|x11\|cmd`, `--screen-cmd CMD`, `--screen-interval S` | screen colour (see below) |
 | `--device NAME` | ALSA device (`default`, `pipewire`, `pulse`, `hw:0`) |
 | `--no-tui` | plain log lines instead of the live terminal UI (the UI is the default when stdout is a terminal) |
@@ -275,10 +275,15 @@ band plays **on a stage** instead of the list:
   glows brighter on a drag and a wisp drifting up (green in the same styles). Only a few dozen
   cells, drawn into the same grids, so only the changed ones are written. `SYSJAM_FOG=1`
   keeps the fog on for demos.
-- **One-line captions** (`keys·grand·E`, the addressed player highlighted), the **stage lip**,
-  and a slim apron with the frontman's yells in a bubble and wedge monitors (the conductor
-  has his own panel, so the stage gives those rows back to the band and the crowd).
-- Under the stage, **one condensed "thinking" line per player** (`bassist ↳ locked to the kick`).
+- **The left column, top to bottom: the crowd, the band, the text.** The crowd stands above the
+  stage, facing it: its front row (the brightest) is the bottom one, nearest the stage, and the
+  rows further up are further back (the bar is at the back). Between them, a slim apron with the
+  frontman's yells in a bubble and wedge monitors, then the lighting truss along the stage's front
+  edge. Without the crowd (small terminals, or `a`) the band goes to the top and the apron sits
+  under the players again, past the **stage lip**.
+- **One-line captions** (`keys·grand·E`, the addressed player highlighted); the conductor has
+  his own panel, so the stage gives those rows back to the band and the crowd.
+- Under the players, **one condensed "thinking" line per player** (`bassist ↳ locked to the kick`).
 - Small terminals keep the old list view with the little figures. `SYSJAM_STAGE=0` forces it.
 
 All prop art is static text built once (two frames per prop, patched per limb from the notes), only from the same width-safe glyph
@@ -501,7 +506,8 @@ how many kernel threads stay backstage.
   - **Metal and Biker:** a **circle pit** in the middle of the front rows when it's really
     going (energy above 0.62 in a RAGE, blast, breakdown or chorus): the people in it run round
     a lap a bar, jumping, flailing and headbanging. Now and then someone **stage-dives**, leaping
-    off the lip (`\(O)/`) and **crowd-surfing** over the front row on a sea of hands. Around the
+    off the stage into the front row (`\(O)/`) and **crowd-surfing** back over the heads, a row
+    further back every second or two, on a sea of hands. Around the
     pit they headbang and throw the horns `\m/`, and Biker's chorus gets fists up for the
     sing-along.
   - **Industrial:** stomping, pogo jumps and fist pumps, with a small pit in the wall of sound.

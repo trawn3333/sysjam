@@ -329,6 +329,8 @@ fn raw(p: Prop) -> (&'static [&'static str], &'static [&'static str]) {
 
 /// a wedge monitor and an amp stack
 pub const WEDGE: &str = "╱──╲";
+/// a wedge seen with the crowd above the stage
+pub const WEDGE_UP: &str = "╲──╱";
 pub fn amp(industrial: bool) -> [&'static str; 6] {
     if industrial {
         ["┌──┐", "│##│", "│##│", "├──┤", "│##│", "└──┘"]
