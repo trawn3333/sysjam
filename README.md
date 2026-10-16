@@ -507,9 +507,12 @@ how many kernel threads stay backstage.
 - **Depth:** each row stands 3 rows behind the one in front of it, so the legs of the back rows
   are hidden behind the heads in front (painted back to front: whoever is in front hides who is
   behind), and alternate rows are staggered by half a slot so faces peek through the gaps.
-  **Everyone is full size**; depth comes only from colour: each row further back is dimmer, greyer
-  and blended further toward the floor (precomputed per theme; 256-colour terminals get the
-  nearest dimmer step), the front row is bright. If fewer full-size people fit, fewer come in.
+  **Everyone is full size and wears their own colours**, fixed by their name like their looks:
+  a skin tone, hair (natural or dyed pink, blue, green or purple), a shirt, pants, shoes and a
+  hat or accessory colour, each kept readable on the theme (lifted on dark themes, deepened on
+  light ones). They are individuals, so nothing is tinted by the genre; only the stage and the
+  chrome follow the theme. Depth is drawn on top of that: each row further back is blended
+  further toward the floor haze, and the front row is bright. If fewer full-size people fit, fewer come in.
   Name tags only for the two front rows; held-up items for everyone, dimmed with their row.
   Newcomers take the frontmost free spot. **People move between rows:** one at a time, someone
   steps forward while the band is hot and back toward the bar when it's chilling, and anyone
@@ -518,9 +521,12 @@ how many kernel threads stay backstage.
   by the overlap alone. To keep the UI cheap the front row moves on the eighths, the next row on
   the beat and the rows behind in half time, still on the beat.
 - **Held up overhead, now and then:** a beer 🍺, wine 🍷, an eggplant 🍆 or a phone 📱 (filming, its
-  screen glowing cyan in the big moments), swaying on the beat; lighters in Blues, glowsticks in
-  Techno (alternating green and magenta). Only a few at a time, mostly while the crowd is hyped,
-  in surges and choruses. Emoji are only used where a terminal draws them 2 cells wide (the
+  screen glowing cyan in the big moments), swaying on the beat; lighters in Blues (and Metal and Biker in the
+  big moments, flickering). **Neon glow sticks** in Techno, House, Space and Industrial: each in
+  its own neon colour (green, pink, cyan, yellow, purple or orange) at full brightness in every
+  row, waved on the beat or twirled on the sixteenths (`│ ╱ ─ ╲`, ASCII `| / - \`), with a
+  faint glow tinting the cells beside it; half the floor has one at a drop. Other items come a
+  few at a time, mostly while the crowd is hyped, in surges and choruses. Emoji are only used where a terminal draws them 2 cells wide (the
   in-between frames skip the covered cell); ASCII (or `SYSJAM_EMOJI=0`) gets `U`, `Y`, `@` and `[]`.
 - **And back (lightly):** the crowd's excitement (how many there are × how busy × how alive the
   band is, smoothed over 6 s) adds at most 0.06 to the band's energy input. Above 0.55 the

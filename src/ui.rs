@@ -1822,29 +1822,14 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
             (beats, t)
         };
         let look = Look { style: b.style_id, act: p.act, vibe: v, beats: lb, t: lt + (p.seed % 1000) as f32 * 0.013, cpu: m.cpu, disk: m.disk > 2e5, chat: m.chat > 2e4, idle: m.idle, step: p.step, beer: p.beer, id: p.seed, surge, chorus, phase: p.t_act, dizzy: p.dizzy > 0.0, pit: in_pit, line };
-        let base = if star {
-            Color::White
-        } else if matches!(p.act, Act::Wave | Act::Leave | Act::Out | Act::Carried) {
-            Color::Gray
-        } else if p.act == Act::Bar || p.act == Act::ToBar {
-            Color::LightYellow
-        } else if m.cpu > 0.5 {
-            Color::LightRed
-        } else if m.disk > 2e5 {
-            Color::LightBlue
-        } else if m.chat > 2e4 {
-            Color::LightCyan
-        } else if m.cpu > 0.08 {
-            Color::LightMagenta
-        } else if v == Vibe::Hype || v == Vibe::Applause {
-            Color::White
-        } else {
-            Color::Gray
-        };
-        // everyone is full size; depth is colour only: each row further back is dimmer,
-        // greyer and blended further toward the floor (the standout dancer shines a row brighter)
+        // everyone wears their own colours (skin, hair, shirt, pants, shoes, hat/accessory),
+        // kept readable on the theme; depth only hazes them: each row further back is blended
+        // further toward the floor (the standout dancer shines a row brighter)
         let lvl = if star { depth.saturating_sub(1) } else { depth };
-        let col = crate::theme::dim(base, lvl.min(3) as u8);
+        let pal = crate::audience::colors(p.seed);
+        let pcs: [Color; 6] = std::array::from_fn(|k| crate::theme::person(pal[k], lvl.min(3) as u8));
+        let pers = crate::audience::persona(p.seed);
+        let col = pcs[2];
         let (rows, lift, dx) = fig(&look);
         let y0: i32 = 1 + 3 * z as i32 - lift as i32;
         let mut x0 = p.x.round() as i32 + if matches!(p.act, Act::Here | Act::Star) { dx - 1 } else { 0 };
@@ -1863,11 +1848,23 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
             // only the edges of the one behind show around them
             let lo = row.chars().position(|c| c != ' ').unwrap_or(usize::MAX);
             let hi = row.chars().count() - row.chars().rev().position(|c| c != ' ').unwrap_or(0);
+            // which part of them this row is: 0 hair/hat, 1 head, 2 body, 3 knees, 4 feet
+            let part = if matches!(p.act, Act::Out | Act::Carried) { 2 } else if pers.tall { r } else { [0, 0, 1, 2, 4][r.min(4)] };
+            let horns = part == 0 && (row.contains("m/") || row.contains("o/"));
             for (k, ch) in row.chars().enumerate() {
                 let x = x0 + k as i32;
                 if (ch != ' ' || (k > lo && k < hi)) && x >= 0 && (x as usize) < fw {
                     let bg = bgs[y as usize];
-                    g[y as usize][x as usize] = (ch, col, bg);
+                    let c = match part {
+                        0 if horns || ch == '*' => if horns { pcs[0] } else { pcs[5] },
+                        0 => if pers.themed { pcs[5] } else { pcs[1] },
+                        1 => if matches!(ch, 'd' | 'b' | '\'') { pcs[5] } else { pcs[0] },
+                        // arms (the outer cells) are skin, the top in between is the shirt, then a bag
+                        2 => if k == lo || k + 2 == hi && hi - lo >= 6 || k + 1 == hi && hi - lo == 5 { pcs[0] } else if k + 1 == hi && hi - lo >= 6 { pcs[5] } else { pcs[2] },
+                        3 => pcs[3],
+                        _ => if ch == '|' { pcs[3] } else { pcs[4] },
+                    };
+                    g[y as usize][x as usize] = (ch, c, bg);
                 }
             }
         }
@@ -1881,13 +1878,33 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
                 if y >= 0 && x >= 0 && (x as usize + w) < fw {
                     let ic = match it {
                         crate::audience::Item::Phone => crate::theme::dim(Color::LightCyan, lvl.min(3) as u8),
-                        crate::audience::Item::Lighter => crate::theme::dim(Color::LightYellow, lvl.min(3) as u8),
-                        crate::audience::Item::Glow => if (beats.floor() as i64 + p.seed as i64) % 2 == 0 { crate::theme::dim(Color::LightGreen, lvl.min(3) as u8) } else { crate::theme::dim(Color::LightMagenta, lvl.min(3) as u8) },
+                        crate::audience::Item::Lighter => crate::theme::rgb(if (t * 7.0 + p.seed as f32) as i64 % 3 == 0 { (255, 150, 40) } else { (255, 220, 90) }, 0.0),
+                        // neon: full brightness at any depth
+                        crate::audience::Item::Glow => crate::theme::rgb(crate::audience::neon(p.seed), 0.0),
                         _ => col,
                     };
                     let yy = y as usize;
                     let mut cs = gl.chars();
-                    let first = cs.next().unwrap_or(' ');
+                    let mut first = cs.next().unwrap_or(' ');
+                    let mut hbg = None;
+                    if it == crate::audience::Item::Glow {
+                        // waved on the beat or twirled on the sixteenths, with a faint glow
+                        // either side (background only)
+                        let k = if p.seed % 2 == 0 { (beats * 4.0).floor() as i64 } else { beats.floor() as i64 * 2 + 1 };
+                        let sticks = if ascii { ['|', '/', '-', '\\'] } else { ['│', '╱', '─', '╲'] };
+                        first = sticks[k.rem_euclid(4) as usize];
+                        if !ascii {
+                            let halo = crate::theme::light_bg(crate::audience::neon(p.seed), 0.14);
+                            for xx in [x - 1, x + 1] {
+                                if xx >= 0 && (xx as usize) < fw && halo != Color::Reset {
+                                    g[yy][xx as usize].2 = halo;
+                                }
+                            }
+                            if halo != Color::Reset {
+                                hbg = Some(halo);
+                            }
+                        }
+                    }
                     if w == 2 && gl.chars().count() == 1 {
                         g[yy][x as usize] = (first, ic, bgs[yy]);
                         g[yy][x as usize + 1] = ('\0', ic, bgs[yy]);
@@ -1896,6 +1913,9 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
                         if let Some(c2) = cs.next() {
                             g[yy][x as usize + 1] = (c2, ic, bgs[yy]);
                         }
+                    }
+                    if let Some(h) = hbg {
+                        g[yy][x as usize].2 = h;
                     }
                 }
             }

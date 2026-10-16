@@ -463,6 +463,28 @@ pub fn persona(id: u32) -> Persona {
     Persona { hair: b(0, HAIR.len() as u32), top: b(5, TOPS.len() as u32), acc: b(9, 6), tall: (id >> 13) & 3 != 0, dance: b(16, DANCES.len() as u32), themed: (id >> 20) & 1 == 1, follower: (id >> 21) % 3 == 0 }
 }
 
+/// a person's own colours, fixed by their name: (skin, hair, shirt, pants, shoes, accessory/hat)
+pub type Rgb = (u8, u8, u8);
+const SKIN: [Rgb; 7] = [(255, 224, 196), (241, 198, 150), (224, 172, 120), (198, 140, 90), (160, 104, 62), (120, 76, 44), (92, 58, 36)];
+const HAIRC: [Rgb; 14] = [(40, 30, 26), (40, 30, 26), (84, 56, 36), (84, 56, 36), (130, 86, 50), (166, 64, 34), (226, 196, 120), (238, 218, 168), (170, 170, 176), (232, 232, 236),
+    // dyed
+    (255, 92, 184), (70, 150, 255), (90, 220, 120), (170, 90, 255)];
+const SHIRT: [Rgb; 16] = [(220, 50, 50), (240, 140, 40), (240, 210, 60), (90, 190, 80), (40, 160, 160), (60, 120, 230), (130, 80, 200), (230, 100, 170), (240, 240, 240), (60, 60, 66), (150, 30, 50), (20, 90, 60), (200, 170, 120), (100, 200, 230), (255, 120, 100), (120, 120, 200)];
+const PANTS: [Rgb; 9] = [(60, 90, 150), (60, 90, 150), (40, 60, 110), (36, 36, 40), (180, 160, 110), (120, 120, 126), (100, 110, 60), (110, 76, 50), (200, 200, 200)];
+const SHOES: [Rgb; 7] = [(240, 240, 240), (36, 36, 40), (200, 40, 40), (120, 80, 50), (60, 220, 200), (240, 200, 40), (90, 90, 230)];
+const ACC: [Rgb; 7] = [(230, 190, 60), (200, 200, 210), (230, 60, 90), (60, 200, 230), (150, 100, 60), (40, 40, 44), (250, 120, 200)];
+
+pub fn colors(id: u32) -> [Rgb; 6] {
+    let h = id.wrapping_mul(0x9e37_79b9) ^ (id >> 11);
+    let b = |s: u32, n: usize| ((h >> s) as usize) % n;
+    [SKIN[b(1, SKIN.len())], HAIRC[b(4, HAIRC.len())], SHIRT[b(8, SHIRT.len())], PANTS[b(13, PANTS.len())], SHOES[b(17, SHOES.len())], ACC[b(21, ACC.len())]]
+}
+
+/// a neon glow-stick colour of its own
+pub fn neon(id: u32) -> Rgb {
+    [(57, 255, 20), (255, 40, 160), (0, 240, 255), (255, 240, 0), (190, 60, 255), (255, 120, 0)][(id.wrapping_mul(2654435761) >> 28) as usize % 6]
+}
+
 const HAIR: [&str; 11] = ["  ___  ", "  ,,,  ", " ~~~~~ ", "  ^^^  ", "  (@)  ", "  ===  ", "  ///  ", "  .-.  ", "  ~~~  ", "  ___> ", "  \\\\\\  "];
 const TOPS: [&str; 10] = ["[#]", "{=}", "(:)", "|v|", "<+>", "[=]", "(~)", "[*]", "{o}", "|:|"];
 const BLANK: &str = "       ";
@@ -955,15 +977,18 @@ pub fn item(l: &Look) -> Option<(Item, i32)> {
     let big = l.vibe == Vibe::Hype || l.surge || l.chorus;
     let id = l.id;
     // a few at a time: each person has a window of ~6 s every ~30 s, more often in big moments
+    let glow = matches!(l.style, "techno" | "house" | "space" | "industrial");
     let period = if big { 14.0 } else { 40.0 };
     let ph = ((l.t + (id % 997) as f32 * 0.71) / period).fract();
-    let win = if big { 0.45 } else { 0.18 };
-    if ph > win || (id >> 7) % 3 == 0 {
+    // glow sticks: plenty of them, and most of the floor at a drop
+    let win = if glow { if big { 0.8 } else { 0.35 } } else if big { 0.45 } else { 0.18 };
+    if ph > win || (id >> 7) % 3 == 0 && !(glow && big) {
         return None;
     }
     let it = match l.style {
         "blues" => Item::Lighter,
-        "techno" => Item::Glow,
+        "metal" | "biker" if big && (id >> 9) % 2 == 0 => Item::Lighter,
+        _ if glow => Item::Glow,
         _ if big && (id >> 11) % 3 == 0 => Item::Phone,
         _ => [Item::Beer, Item::Beer, Item::Wine, Item::Eggplant, Item::Phone][((id >> 14) % 5) as usize],
     };

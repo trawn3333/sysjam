@@ -604,3 +604,26 @@ pub fn icon() -> &'static str {
 pub fn rgb(c: (u8, u8, u8), toward_white: f32) -> Color {
     out(mix(c, (255, 255, 255), toward_white))
 }
+
+/// one crowd member's own colour (skin, hair, clothes...) kept readable on this theme's
+/// background (lifted on dark themes, deepened on light ones), then hazed `level` rows back
+pub fn person(c: (u8, u8, u8), level: u8) -> Color {
+    let to = ST.with(|s| s.borrow().to);
+    let p = pal_of(to);
+    let lum = |c: (u8, u8, u8)| (0.299 * c.0 as f32 + 0.587 * c.1 as f32 + 0.114 * c.2 as f32) / 255.0;
+    let dark = THEMES[to].pal.is_none() || lum(p.bg) < 0.5;
+    let l = lum(c);
+    let c = if dark && l < 0.42 {
+        mix(c, (255, 255, 255), ((0.42 - l) / (1.0 - l)).min(0.8))
+    } else if !dark && l > 0.5 {
+        mix(c, (0, 0, 0), ((l - 0.5) / l).min(0.8))
+    } else {
+        c
+    };
+    if level == 0 {
+        return out(c);
+    }
+    let k = [0.0, 0.32, 0.55, 0.72][level.min(3) as usize];
+    let hz = if THEMES[to].pal.is_none() { (24, 24, 30) } else { mix(p.bg, p.dim, 0.35) };
+    out(mix(c, hz, k))
+}
