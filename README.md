@@ -264,6 +264,17 @@ band plays **on a stage** instead of the list:
   screen a median 1.5 ms and at worst 35 ms after it is heard, inside one 66 ms frame (measured
   with `SYSJAM_HITLOG=path`, which logs each note's sound-to-screen offset). A new instrument is
   carried off to the right and the new one wheeled on (1 s). A soloist steps forward a row.
+- **Stage effects:** fog rolls in across the musicians' feet at builds, choruses, drops, blasts
+  and surges (in over about 1.5 s, dissipating over about 5 s), drawn as drifting `~` and `·`
+  (ASCII `~ .`) in the empty cells, with a faint background tint over the rest so it looks
+  translucent. It is **green** in Monk, Space, House, Blues and Techno, dirty brown-grey in
+  Industrial and grey-white elsewhere. Metal and Biker get spark fountains at both sides of
+  the stage in loud moments and pyro bursts on the downbeat of a blast or RAGE bar. Techno
+  strobes at the drop and Industrial in its wall of sound, and Blues and Country keep warm
+  amber lamps. In the crowd, a few people light up now and then: an ember at the hand that
+  glows brighter on a drag and a wisp drifting up (green in the same styles). Only a few dozen
+  cells, drawn into the same grids, so only the changed ones are written. `SYSJAM_FOG=1`
+  keeps the fog on for demos.
 - **One-line captions** (`keys·grand·E`, the addressed player highlighted), the **stage lip**,
   and a slim apron with the frontman's yells in a bubble and wedge monitors (the conductor
   has his own panel, so the stage gives those rows back to the band and the crowd).

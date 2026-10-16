@@ -887,6 +887,8 @@ pub struct Anim {
     stage_rows: Vec<Vec<Cell>>,
     stage_t: Instant,
     stage_hit: (f64, bool),
+    fog: f32,
+    fx_t: Instant,
     dive: Option<(f32, i32, u32)>,
     dive_t: f32,
     hit_only: bool,
@@ -902,7 +904,7 @@ pub struct Anim {
 
 impl Anim {
     pub fn new() -> Anim {
-        Anim { t0: Instant::now(), fam: [None; 7], swap: [None; 7], present: [false; 7], walk: [None; 7], hush: [None; 7], col: [Color::Gray; 7], cond: None, said: (String::new(), Instant::now()), band: None, dots: None, crowd: Default::default(), floor: crate::audience::Floor::new(), aud: None, crowd_rows: Vec::new(), crowd_t: Instant::now(), crowd_beat: 0, stage_rows: Vec::new(), stage_t: Instant::now(), stage_hit: (0.0, true), dive: None, dive_t: -100.0, hit_only: false, out_cache: Vec::new(), stage_beat: 0, prop: [None; 7], pswap: [None; 7], stage: None, solo: None }
+        Anim { t0: Instant::now(), fam: [None; 7], swap: [None; 7], present: [false; 7], walk: [None; 7], hush: [None; 7], col: [Color::Gray; 7], cond: None, said: (String::new(), Instant::now()), band: None, dots: None, crowd: Default::default(), floor: crate::audience::Floor::new(), aud: None, crowd_rows: Vec::new(), crowd_t: Instant::now(), crowd_beat: 0, stage_rows: Vec::new(), stage_t: Instant::now(), stage_hit: (0.0, true), fog: 0.0, fx_t: Instant::now(), dive: None, dive_t: -100.0, hit_only: false, out_cache: Vec::new(), stage_beat: 0, prop: [None; 7], pswap: [None; 7], stage: None, solo: None }
     }
 }
 
@@ -1468,7 +1470,7 @@ fn stage_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> 
     // lights: section colour, the beat, the mood
     let sec = b.section.bytes().fold(0u8, |a, c| a.wrapping_mul(31).wrapping_add(c)) % 6;
     let loud = b.feel.starts_with("RAGE") || b.feel.starts_with("build");
-    let strobe = st == "industrial" && loud;
+    let strobe = (st == "industrial" && loud) || (st == "techno" && (b.feel.contains("drop") || b.section.contains("drop")));
     let warm = matches!(st, "jazz" | "blues" | "country" | "baroque" | "monk");
     let beat = beats.floor() as i64;
     let lamp_n = (w / 16).max(2);
@@ -1633,6 +1635,82 @@ fn stage_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> 
         }
         let _ = i;
     }
+    // stage effects: fog rolling in at builds, choruses, drops and blasts (green in the
+    // mellow/trippy styles, dirty in Industrial), sparks and pyro in Metal/Biker; few cells,
+    // drawn into the same grid so only the changed ones go out
+    {
+        let dt = anim.fx_t.elapsed().as_secs_f32().min(0.5);
+        anim.fx_t = now;
+        let big = b.feel.starts_with("RAGE") || b.feel.starts_with("CHORUS") || b.feel.starts_with("BLAST") || b.feel.starts_with("build") || b.feel.contains("drop") || b.section.contains("drop") || b.section.contains("CHORUS") || b.feel.starts_with("surge");
+        let want = if FX_FORCE.get_or_init(|| std::env::var("SYSJAM_FOG").is_ok_and(|v| v != "0")).to_owned() { 1.0 } else if big { 0.6 + 0.4 * b.energy.clamp(0.0, 1.0) } else { 0.0 };
+        // rolls in over ~1.5 s, dissipates over ~5 s
+        let rate_k = if want > anim.fog { 0.7 } else { 0.2 };
+        anim.fog += (want - anim.fog) * (rate_k * dt).min(1.0);
+        let fogc: (u8, u8, u8) = match st {
+            "monk" | "space" | "house" | "blues" | "techno" => (110, 210, 120),
+            "industrial" => (110, 100, 86),
+            _ => (200, 200, 210),
+        };
+        if anim.fog > 0.04 {
+            let d = anim.fog;
+            let tt = ctx.t;
+            let fg = crate::theme::rgb(fogc, 0.0);
+            let fgd = crate::theme::light_bg(fogc, 0.55);
+            let tint = crate::theme::light_bg(fogc, 0.10 * d);
+            let ascii_fx = crate::theme::ascii();
+            for (ri, row) in (CAP.saturating_sub(3)..CAP).enumerate() {
+                for x in 0..w {
+                    let xf = x as f32;
+                    // two drifting waves: the fog rolls across from the left
+                    let v = (xf * 0.21 - tt * 1.3 + ri as f32 * 1.7).sin() + (xf * 0.057 - tt * 0.45 + ri as f32).sin() * 0.8;
+                    let thr = 1.75 - d * 1.6 + (2 - ri) as f32 * 0.25;
+                    if v > thr {
+                        let cell = &mut g[row][x];
+                        if cell.0 == ' ' {
+                            let thick = v > thr + 0.5;
+                            cell.0 = if thick { '~' } else if ascii_fx { '.' } else { '·' };
+                            cell.1 = if thick { fg } else { fgd };
+                        }
+                        if tint != Color::Reset {
+                            cell.2 = tint;
+                        }
+                    }
+                }
+            }
+        }
+        // sparks: Metal / Biker loud moments, a fountain each side of the stage
+        if matches!(st, "metal" | "biker") && (big || b.energy > 0.75) {
+            let q = (beats * 4.0).floor() as i64;
+            let hot = crate::theme::rgb((255, 170, 40), 0.0);
+            let white = crate::theme::rgb((255, 240, 200), 0.0);
+            for side in 0..2 {
+                let bx = if side == 0 { 2 } else { w as i32 - 3 };
+                for i in 0..5i64 {
+                    let life = (q + i * 3).rem_euclid(8);
+                    let y = CAP as i32 - 1 - life as i32;
+                    let sx = bx + ((i * 7 + q / 8) % 5 - 2) as i32 * (life as i32 / 3).max(1) / 2;
+                    if y >= 1 && sx >= 0 && (sx as usize) < w && g[y as usize][sx as usize].0 == ' ' {
+                        g[y as usize][sx as usize].0 = if life < 3 { '*' } else if life < 6 { '\'' } else { '.' };
+                        g[y as usize][sx as usize].1 = if life < 2 { white } else { hot };
+                    }
+                }
+                // pyro on the downbeat of a blast / RAGE bar
+                if b.feel.starts_with("RAGE") || b.feel.starts_with("BLAST") {
+                    let ph = beats.rem_euclid(4.0);
+                    if ph < 0.5 {
+                        let flame = crate::theme::rgb((255, 110, 20), 0.0);
+                        for k in 0..3usize {
+                            let y = CAP.saturating_sub(1 + k);
+                            let x = (bx + if side == 0 { 1 } else { -1 }) as usize;
+                            if x < w && g[y][x].0 == ' ' {
+                                g[y][x] = (['^', '^', '*'][k], if k == 2 { white } else { flame }, g[y][x].2);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     // the lip, the apron and its wedges
     for x in 0..w {
         g[LIP][x].0 = '─';
@@ -1716,6 +1794,7 @@ type Cell = (char, Color, Color);
 /// the floor as rows of cells, `fw` cells wide (the bar is drawn separately). Stacked rows of
 /// full-size people drawn back to front (painter's algorithm); depth is colour only (back rows
 /// dimmer, greyer, blended toward the floor); a floor gradient and a little haze behind.
+static FX_FORCE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 static DANCE_FORCE: std::sync::OnceLock<(bool, bool, bool)> = std::sync::OnceLock::new();
 static PROF_CROWD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static PROF_CROWD_CELLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1917,6 +1996,27 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
                     if let Some(h) = hbg {
                         g[yy][x as usize].2 = h;
                     }
+                }
+            }
+        }
+        // a few of them smoke now and then: an ember at the hand, a wisp drifting up
+        if depth <= 1 && (p.seed >> 25) % 7 == 0 && matches!(p.act, Act::Here | Act::Bar) && pers.acc != 4 && ((t + (p.seed % 500) as f32 * 0.37) / 30.0).fract() < 0.4 {
+            let yb = y0 + if pers.tall { 2 } else { 3 };
+            let drag = ((t * 0.5 + (p.seed % 97) as f32 * 0.1) % 4.0) < 0.6;
+            let ember = crate::theme::rgb(if drag { (255, 150, 40) } else { (200, 70, 30) }, 0.0);
+            let smoke: (u8, u8, u8) = match b.style_id {
+                "monk" | "space" | "house" | "blues" | "techno" => (120, 220, 130),
+                "industrial" => (100, 95, 85),
+                _ => (175, 175, 185),
+            };
+            let s1 = crate::theme::person(smoke, lvl.min(3) as u8);
+            let s2 = crate::theme::person(smoke, (lvl + 2).min(3) as u8);
+            let drift = ((t * 0.8 + p.seed as f32 * 0.01) as i32) % 2;
+            let cells = [(yb, x0 + 6, '•', ember), (yb - 1, x0 + 7, '~', s1), (yb - 2, x0 + 7 + drift, if ascii { '.' } else { '·' }, s2)];
+            for (k, &(yy, xx, ch, c)) in cells.iter().enumerate() {
+                if yy >= 0 && (yy as usize) < tag_row && xx >= 0 && (xx as usize) < fw && (k == 0 || g[yy as usize][xx as usize].0 == ' ') {
+                    g[yy as usize][xx as usize].0 = ch;
+                    g[yy as usize][xx as usize].1 = c;
                 }
             }
         }
