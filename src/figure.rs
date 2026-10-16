@@ -33,6 +33,7 @@ pub fn gear(style: &str) -> Gear {
         "blues" => g("_┌#┐_", ('(', ')'), true, '#', &['♪', ' ', '♪', '♪'], None),
         "country" => g("~╭^╮~", ('(', ')'), false, 'x', &['o', 'O', 'o', '*'], None),
         "biker" => g("~~~~~", ('(', ')'), false, '#', &['•', '*', '•', '*'], None),
+        "metal" => g("╭~~~╮", ('|', '|'), false, '+', &['x', '*', 'x', '+'], None),
         "baroque" => g("@@@@@", ('{', '}'), false, '+', &['♪', '•', '♪', '•'], None),
         "celtic" => g("_╭──┐", ('(', ')'), false, '%', &['*', '•', '*', '•'], None),
         "industrial" => g("┌┬─┬┐", ('[', ']'), false, '#', &['*', 'x', '*', 'x'], None),
@@ -171,6 +172,21 @@ pub fn conductor(style: &str, pose: Pose, mood: Mood, energy: f32, pos: Option<P
         let b = sp[((frac * 4.0) as usize + 2) % 4];
         gr.put(3, 0, &format!(" [{a}]──[{b}] "));
         gr.put(4, 0, " └──────┘  ");
+        marks(&mut gr, extra, beat_i, frac);
+        return gr.rows();
+    }
+    if style == "metal" && pose != Pose::Rest {
+        // the metalhead: headbanging on the beat (the hair falls over the face), horns up
+        if frac < 0.45 {
+            gr.put(1, 2, "╲~~~╱");
+            gr.put(2, 0, "\\m/┤+├\\m/");
+        } else {
+            gr.put(0, 2, g.hat);
+            gr.put(1, 2, &fs);
+            gr.put(2, 0, " ─m┤+├m─");
+        }
+        gr.put(3, 3, "│+│");
+        gr.put(4, 3, "╯ ╰");
         marks(&mut gr, extra, beat_i, frac);
         return gr.rows();
     }
@@ -641,7 +657,7 @@ fn feet(style: &str, beats: f64, surge: bool, kick: bool) -> &'static str {
         // heel-toe
         "country" if on => if beat % 2 == 0 { " ╯ └" } else { " ╯ ─" },
         "baroque" if on && beat.rem_euclid(4) == 0 => " ╯ ─",
-        "biker" | "industrial" if on => " ╯ ┴",
+        "biker" | "industrial" | "metal" if on => " ╯ ┴",
         // jig: both feet on the eighths
         "celtic" => match ((beats * 2.0).floor() as i64).rem_euclid(4) {
             0 => " ╯ ─",

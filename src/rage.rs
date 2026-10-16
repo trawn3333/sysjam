@@ -18,11 +18,16 @@
 
 use crate::dsp::{adv, saw, sine, softclip, Rng, Svf};
 
+#[path = "metal.rs"]
+mod metal;
+
 /// which band the machine is: Industrial (wall of sound) or Biker (hard rock, gallops, a song form)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
     Industrial,
     Biker,
+    /// metal: double kick, blasts, breakdowns, growls, shred (src/metal.rs)
+    Metal,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -39,6 +44,10 @@ pub enum Sec {
     Solo,
     /// biker: a V-twin lope surge
     Lope,
+    /// metal: a blast beat (the tempo surges)
+    Blast,
+    /// metal: the half-time breakdown (the pit opens)
+    Mosh,
 }
 
 impl Sec {
@@ -53,6 +62,8 @@ impl Sec {
             Sec::Pre => "pre-chorus",
             Sec::Solo => "twin-guitar solo",
             Sec::Lope => "V-twin lope",
+            Sec::Blast => "blast beat",
+            Sec::Mosh => "breakdown",
         }
     }
     /// the header's feel line (the UI treats "RAGE" like a surge: moshing, stomping)
@@ -67,6 +78,16 @@ impl Sec {
             Sec::Pre => "pre-chorus — building",
             Sec::Solo => "twin-guitar solo",
             Sec::Lope => "surge — V-twin lope",
+            Sec::Blast => "RAGE — blast beat",
+            Sec::Mosh => "RAGE — half-time breakdown",
+        }
+    }
+    /// the Metal band's feel lines ("RAGE" opens the pit in the crowd)
+    pub fn feel_metal(self) -> &'static str {
+        match self {
+            Sec::Verse => "thrash — double kick, chugs",
+            Sec::Solo => "shred solo — twin leads",
+            _ => self.feel(),
         }
     }
     /// the Biker band's feel lines (the UI treats "CHORUS" as a sing-along)
@@ -81,7 +102,7 @@ impl Sec {
         }
     }
     pub fn loud(self) -> bool {
-        matches!(self, Sec::Chorus | Sec::Half | Sec::Stop | Sec::Solo | Sec::Lope)
+        matches!(self, Sec::Chorus | Sec::Half | Sec::Stop | Sec::Solo | Sec::Lope | Sec::Blast | Sec::Mosh)
     }
 }
 
@@ -114,6 +135,8 @@ pub enum Ev {
     Plan(&'static [&'static str], String),
     /// a melodic note for a player's animation (player, semitone, velocity 0..1)
     Heard(usize, i32, f32),
+    /// metal: tempo surge by +bpm (Some), or back to the song's own tempo (None)
+    Tempo(Option<f32>),
 }
 
 /// what the engine tells the machine every step
@@ -156,10 +179,10 @@ struct Vox {
     growl: f32,
 }
 
-const V_A: [f32; 3] = [780.0, 1180.0, 2450.0];
-const V_O: [f32; 3] = [460.0, 820.0, 2500.0];
-const V_E: [f32; 3] = [520.0, 1800.0, 2480.0];
-const V_U: [f32; 3] = [330.0, 700.0, 2400.0];
+pub(crate) const V_A: [f32; 3] = [780.0, 1180.0, 2450.0];
+pub(crate) const V_O: [f32; 3] = [460.0, 820.0, 2500.0];
+pub(crate) const V_E: [f32; 3] = [520.0, 1800.0, 2480.0];
+pub(crate) const V_U: [f32; 3] = [330.0, 700.0, 2400.0];
 const V_I: [f32; 3] = [300.0, 2200.0, 2900.0];
 
 /// biker chord plans (minor / Mixolydian), one chord per bar
@@ -277,7 +300,7 @@ pub struct Riff {
 
 impl Riff {
     pub fn mode_name(&self) -> &'static str {
-        ["Phrygian", "Locrian", "chromatic minor"][self.mode as usize % 3]
+        ["Phrygian", "Locrian", "chromatic minor", "Phrygian", "harmonic minor", "diminished"][self.mode as usize % 6]
     }
 }
 
@@ -501,6 +524,9 @@ impl Rage {
             self.songs += 1;
             self.verse_prog = self.rng.below(3);
             self.go(Sec::Verse, 8);
+        } else if kind == Kind::Metal {
+            self.verse_prog = self.rng.below(4);
+            self.metal_start();
         } else {
             self.go(Sec::Verse, 4);
         }
@@ -513,16 +539,30 @@ impl Rage {
                 Sec::Chorus => "CHORUS",
                 s => s.name(),
             }
+        } else if self.kind == Kind::Metal {
+            match self.sec {
+                Sec::Verse => "thrash riff",
+                Sec::Solo => "shred solo",
+                s => s.name(),
+            }
         } else {
             self.sec.name()
         }
     }
     /// biker: the first verse's chords
     pub fn plan_first(&mut self, minor: bool) {
-        self.biker_plan(Sec::Verse, minor);
+        if self.kind == Kind::Metal {
+            self.metal_plan(Sec::Verse);
+        } else {
+            self.biker_plan(Sec::Verse, minor);
+        }
     }
     pub fn feel(&self) -> &'static str {
-        if self.kind == Kind::Biker { self.sec.feel_biker() } else { self.sec.feel() }
+        match self.kind {
+            Kind::Biker => self.sec.feel_biker(),
+            Kind::Metal => self.sec.feel_metal(),
+            Kind::Industrial => self.sec.feel(),
+        }
     }
 
     /// the style is leaving Industrial: fade the machine out
@@ -542,6 +582,12 @@ impl Rage {
             self.songs += 1;
             self.verse_prog = self.rng.below(3);
             self.go(Sec::Pre, 4);
+        } else if self.kind == Kind::Metal {
+            self.metal_riff();
+            self.verse_prog = self.rng.below(4);
+            self.go(Sec::Blast, 4);
+            self.metal_plan(Sec::Blast);
+            self.ev.push(Ev::Tempo(Some(16.0)));
         } else {
             self.go(Sec::Build, 2);
         }
@@ -589,7 +635,20 @@ impl Rage {
                 self.sweep_t = 0.0;
                 self.tone = 0.4;
             }
-            Sec::Pre | Sec::Solo | Sec::Lope => {}
+            Sec::Pre | Sec::Solo | Sec::Lope | Sec::Blast | Sec::Mosh => {}
+        }
+        if self.kind == Kind::Metal {
+            // metal: high-gain, dark tone (deep low end, nothing fizzy), no ring mod, no whisper
+            self.ring_t = 0.0;
+            self.grit_t = 0.0;
+            self.whisper_t = 0.0;
+            self.sweep_t = 0.0;
+            self.drive_t = match s {
+                Sec::Blast | Sec::Mosh => 3.4,
+                Sec::Solo => 3.0,
+                _ => 3.1,
+            };
+            self.tone = 0.46;
         }
         if self.kind == Kind::Biker {
             // hard rock: warm drive, no ring mod, no crushed grit, no whisper
@@ -808,6 +867,10 @@ impl Rage {
     pub fn step(&mut self, c: &In, step_len: f32, hz: impl Fn(f32) -> f32) {
         if self.kind == Kind::Biker {
             self.step_biker(c, step_len, hz);
+            return;
+        }
+        if self.kind == Kind::Metal {
+            self.step_metal(c, step_len, hz);
             return;
         }
         let s = c.s;
@@ -1045,7 +1108,7 @@ impl Rage {
                     self.choke();
                 }
             }
-            Sec::Pre | Sec::Solo | Sec::Lope => {}
+            Sec::Pre | Sec::Solo | Sec::Lope | Sec::Blast | Sec::Mosh => {}
             Sec::Break => {
                 if s % 4 == 0 {
                     self.kick(1.0, 50.0, 0.45, 3.6);
@@ -1331,7 +1394,7 @@ impl Rage {
             self.make_lick();
         }
         let t = ((self.sec_bar % 2) * 16) as u8 + s as u8;
-        let scale: [i32; 7] = if c.minor { [0, 2, 3, 5, 7, 8, 10] } else { [0, 2, 4, 5, 7, 9, 10] };
+        let scale: [i32; 7] = if self.kind == Kind::Metal { [0, 2, 3, 5, 7, 8, 11] } else if c.minor { [0, 2, 3, 5, 7, 8, 10] } else { [0, 2, 4, 5, 7, 9, 10] };
         let deg_semi = |d: i32| -> i32 { scale[d.rem_euclid(7) as usize] + 12 * d.div_euclid(7) };
         let fold = |x: i32, lo: i32| lo + (x - lo).rem_euclid(12);
         let base = fold(c.tonic, 12);

@@ -65,7 +65,8 @@ USAGE: sysjam [OPTIONS]
   --root NOTE         home key root, note or Hz, e.g. A2, C3, 98 (default: random of all 12)
   --bpm N             lock the tempo (default: random start 60-100, then it follows the band)
   --style NAME        conductor style: auto (default: wanders, starts as House Band), house, monk,
-                      jazz, biker, baroque, celtic, industrial, space, tribal (←/→ in the TUI)
+                      jazz, blues, country, biker, metal, industrial, baroque, celtic, techno,
+                      space, tribal (←/→ in the TUI)
   --reset-likes       forget everything you liked (deletes ~/.config/sysjam/likes.yaml) and start fresh
   --ascii             plain ASCII glyphs in the TUI (no emoji / box drawing); automatic on TERM=linux
   --tempo-bias N      sticky bpm offset on the living tempo, e.g. 14 or -21 (↑/↓ nudge ±7 in the TUI)

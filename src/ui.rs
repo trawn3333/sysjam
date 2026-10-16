@@ -504,7 +504,7 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
     let area = f.area();
     crate::theme::frame(b.style_id, b.beat);
     // Industrial wall of sound: the borders glitch now and then (flicker to amber / red)
-    let g = if b.style_id == "industrial" && b.feel.starts_with("RAGE") {
+    let g = if (b.style_id == "industrial" || b.style_id == "metal") && b.feel.starts_with("RAGE") {
         let k = (ctx.t * 9.0) as u32;
         let h = k.wrapping_mul(2654435761) >> 28;
         if h < 3 { 1 + (h % 2) as u8 } else { 0 }
@@ -1322,7 +1322,8 @@ fn stage_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> 
                 } else {
                     match (st, hitting) {
                         ("industrial", _) => '>',
-                        ("biker", true) => 'O',
+                        ("biker" | "metal", true) => 'O',
+                        ("metal", false) => 'x',
                         (_, true) => '^',
                         _ => 'o',
                     }
@@ -1800,7 +1801,7 @@ fn draw_log(f: &mut Frame, r: Rect, log: &[String]) {
                 th(Color::LightYellow)
             } else if m.contains("key change") || m.contains("modulation") {
                 th(Color::LightMagenta)
-            } else if m.contains("industrial") {
+            } else if m.contains("industrial") || m.contains("~ metal") {
                 th(Color::LightRed)
             } else if m.starts_with('+') || m.starts_with('\u{2212}') {
                 th(Color::LightBlue)

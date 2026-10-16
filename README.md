@@ -13,8 +13,8 @@ design a new synth patch whenever something inspires them. Under everything sits
 a continuous deep sub drone and bass. No two runs are the same unless you pass `--seed`.
 
 You can steer it from the terminal UI. **↑/↓** nudge the tempo; **←/→** change the conductor's
-**style**: House Band, Ambient Monk, Jazz Cat, Blues, Country, Biker, Baroque, Celtic Session,
-Industrial, Techno, Space Cadet, Tribal/Gamelan, or *auto* (the default: it wanders between them).
+**style**: House Band, Ambient Monk, Jazz Cat, Blues, Country, Biker, Metal, Industrial, Baroque,
+Celtic Session, Techno, Space Cadet, Tribal/Gamelan, or *auto* (the default: it wanders between them).
 Each style changes the band's instruments, tempo, drum feel, harmony, bass line and theme quotes,
 and it restyles the whole UI (palette, borders, icons, meters, and the conductor's outfit and voice).
 See [Steering](#steering-tempo-and-conductor-styles). A switch you ask for happens at once: the
@@ -45,6 +45,17 @@ chorus hook with the gang vocals and choir, a twin-guitar solo, the chorus again
 [`docs/sample-blues.mp3`](docs/sample-blues.mp3) (30 s: the end of a 12-bar shuffle chorus with the
 harp's calls and the guitar's answers, the turnaround, then a harmonica solo chorus, conductor:
 "take it, harp!", from 8.2 s; −15.2 LUFS, peaks −2.0 dBFS).
+
+The three newest styles, each 60 s of an **idle machine** (seed 1, offline idle profile, no load
+and no input): [`docs/sample-metal.mp3`](docs/sample-metal.mp3) (from 10 s of the run: the end of a
+thrash verse, a **blast beat** that pushes the tempo up, thrash again, a half-time **breakdown**
+with gang chants, then a **shred solo** with twin leads; −12.8 LUFS, peaks −1.2 dBFS),
+[`docs/sample-country.mp3`](docs/sample-country.mp3) (from 38 s: the end of a train-beat verse, a
+call-and-response **chorus** (fiddle/harmonica call, Telecaster answer), a **chicken-pickin'
+Telecaster** break, the next verse; −15.3 LUFS, peaks −1.0 dBFS) and
+[`docs/sample-celtic.mp3`](docs/sample-celtic.mp3) (from 20 s: the B part of the jig *Planxty
+Scott*, then the set moves on to the reel *Belles of Tipperary*, 6 bpm faster, and its A and B
+parts; −13.4 LUFS, peaks −1.5 dBFS). Above 12 kHz they sit at −40 / −40 / −53 dB of the total.
 
 ![sysjam's live terminal UI just after a style switch: two ↑ presses gave tempo bias +14, then ← switched Country to Blues; the band is on a lit stage with its instruments (grand piano, upright bass, drum kit, guitar, harp), the conductor says "Lord have mercy… let's play the blues", the header shows the I7–IV7–V7 12-bar shuffle, and the crowd of processes dances below](docs/tui.png)
 
@@ -287,10 +298,11 @@ drums play (Space Cadet and Techno loosen this). Restraint and CPU stay as befor
 | **Ambient Monk** | 50–84 bpm drones, sparse, strict hush, Lydian/major drone harmony, pads and choirs, almost no drums |
 | **Jazz Cat** | swing, ii–V–I and turnarounds with sevenths everywhere, walking upright bass, brushes and ride, EP/vibes/sax, more quotes, a loose conductor |
 | **Blues** | its own band (`src/blues.rs`): a swinging 12-bar shuffle in a major/dominant key (I7–IV7–V7, quick change now and then, a turnaround with a tom-triplet fill) at 80–120 bpm. **Every player swings the same triplet grid** (the "and" lands 2/3 through the beat, 2:1): ride/hat shuffle with the backbeat snare accented on 2 and 4 and the kick pushing into 3 and into the next bar, a boogie-woogie walking bass 1-3-5-6-b7-6-5-3 in swung 8ths, piano stabs (3-b7-9 shells) on the "and"s with anticipations of the next chord and a boogie left hand, the guitar's 5-6 shuffle chug, a warm GM organ bed, harmonica calls with bends and wails answered by guitar licks. Melody comes **only from blues scales** (minor blues 1 b3 4 b5 5 b7, major blues 1 2 b3 3 5 6, Mixolydian over the V7); no per-player keys, no modal drift, no minor dirges. The "synth seat" plays **featured solos** instead: 1–3 choruses of harmonica first, then guitar, tenor sax, a piano break or slide guitar, with AAB phrasing (a riff, the riff again over the IV, an answer), climbing register and heat each chorus while the band backs off; the conductor cues it ("take it, harp!", "Lord have mercy!") and the soloist steps forward on the stage. Synth: only a faint pad bed and a quiet sine under the bass |
-| **Country** | I–IV–V, I–vi–IV–V and mixolydian I–bVII–IV, 80–120 bpm, train beat (brushed sixteenths, cowbell on the beats) or two-step, boom-chick bass with walk-ups, chick strums on 2 and 4; acoustic instruments only: steel and nylon guitars, fiddle, banjo, accordion, honky-tonk piano (rolls into the turnaround, comping), harmonica fills between phrases (with a blues-harp bend); woodblock/cowbell accents instead of synth bells. The synth almost disappears (a barely audible pad bed, a quiet warm sub) |
+| **Country** | its own band (a mode of the session machine, `src/country.rs`): I–IV–V in major with a Mixolydian bVII now and then, 80–120 bpm, in **verses**, a **call-and-response chorus** and **instrumental breaks**. Three feels chosen verse by verse: the **train beat** (snare sixteenths accented on the "and"s and 2 & 4, kick on 1 and 3, cowbell when it's rolling), the **two-step** (cross-stick on 2 and 4, 8th hats) and a **shuffle** (swung 8ths, 2:1). **Boom-chick bass**: the root on 1, the fifth on 3 (alternating), quarter-note root–fifth in the two-step, walk-ups into the changes, a deep sine under it. **Chicken-pickin' Telecaster**: staccato lines with muted clucks, double stops on the beat and B-bender pre-bends, plus a cluck on 2 and 4; **pedal steel** sliding up a semitone into a 3rd + 5th (or 6th + root) on each chord, with a slow slide down at the end of a phrase; **fiddle** or **harmonica** fills between the lines (bar 4 of each half; the Tele takes the other); honky-tonk piano on the backbeat with b3→3 grace slides and runs. The chorus: the fiddle or harp calls for two bars, the Tele answers, the call again, the answer resolves. Breaks rotate Tele, fiddle, steel, harmonica. **No synth at all** (harmonica, piano and cowbell instead) |
 | **Biker** | hard rock at 110–160 bpm with a song form: verse → pre-chorus → CHORUS with a recurring hook (the same motif and progression come back, e.g. i–bVI–bVII–i or I–bVII–IV), and twin-guitar solos. Maiden gallops (8th + two 16ths) on two GM distortion/overdrive guitars, synth chugs and the bass, double-kick gallops; big kick, snare on 2 and 4, crashes, tom fills; open ringing chords in the chorus; twin leads in thirds, pinch squeals and bends; formant-synthesized vocals (shouts, growls, "yeah!", gang "whoa-oh") plus GM Choir Aahs/Voice Oohs in the chorus. The V-twin lope surges still come (from a verse). E or A, minor or Mixolydian |
+| **Metal** | the rage machine's third band (`src/metal.rs`), between Biker and Industrial on the ←/→ ring: **down-tuned** (E, D or C♯ minor; the bass at 35–65 Hz, the chugs an octave up) **palm-muted chugs** with open power-chord accents on two GM distortion guitars plus a synthesized chug and a distorted bass + sub locked to the kick; riffs in **Phrygian**, **harmonic minor** (Phrygian dominant) or **diminished** colours (i–bII, i–bv, #vii°–V) that change from song to song. A song form with tempo surges: **thrash** verses (double kick locked to the riff, snare on 2 and 4), **blast beats** (kick on every 16th, snare on the off-8ths, tremolo-picked riff) that **push the tempo up 14–24 bpm**, **half-time breakdowns** (snare on 3, syncopated open-string chugs with the kick doubling every one, china on the quarters, gang chants "HEY!") that bring it back down, and **shred solos**: four-note sequences up and down harmonic minor in 16ths with a bent top note, then **harmonized twin leads** in thirds. Formant-synthesized **growls** and **screams**, gang chants on the choir. Synth nearly absent: only a dark pad from the colour seat under the breakdowns |
 | **Baroque** | chorale cadences and Pachelbel-ish progressions, harpsichord, strings, church organ, contrabass, Bach/Handel/Mozart/Haydn quotes favoured, a steady tempo |
-| **Celtic Session** | fiddle, whistle, pipes and harp, hand-drum figures, Dorian/Mixolydian modal changes, O'Neill's/Ryan's/Aird's tunes favoured |
+| **Celtic Session** | its own session (`src/celtic.rs`): **sets of real tunes**: incipits of jigs, reels and slip jigs from O'Neill's (1903), Ryan's Mammoth Collection (1883) and Aird's (music21 corpus, embedded), in **AABB** form: the A part from the incipit (repeated to fill 8 tune bars, with a cadence home), the B part lifted a fourth up the scale and coming home on A's ending. **Jigs in 6/8** (two jig bars per bar of the band, the eighths on the triplet grid, about 104–118 dotted-quarter bpm), **reels in driving straight eighths**, **slip jigs in 9/8** (the band's bar is cut to three beats). A set is three tunes (all jigs, all reels, jigs into a reel, slip jigs into a jig …); **every change of tune speeds up** (+4 bpm, +6 into a reel), a new set comes back down and may change key. Tin whistle or flute on the tune with the **fiddle in unison, ornamented**: cuts (a grace note above), rolls on long notes (note, cut, note, tap below, note), more the second time through; **bodhrán** (bass tone on the beat, tipper between: down-up-down in jigs, 8ths in reels); a **DADGAD** guitar strumming open, third-less voicings (root, 5th, octave, a ringing 4th or 9th) on chords taken from the melody; a low bouzouki on the roots with a deep sine; a quiet **uilleann-style drone** on the tonic and fifth. Modal: major, **dorian** and **mixolydian** in session keys (D, G, A, E). **No synth** |
 | **Industrial** | a NIN/Pig-style wall of sound (`src/rage.rs`) at 100–140 bpm: distorted synth kick with a click, gated metallic (ring-modulated) snare, mechanical 16th hats, FM anvils/sheet metal/pipes, tom fills; a distorted saw/square bass with a sub, locked to the kick, on Phrygian/Locrian/chromatic riffs that mutate; double-tracked GM distortion/overdrive guitar chugs; grit pads, whispers, noise sweeps and static. i–bII and i–bv harmony with sudden semitone key drops; menacing verse → build → wall-of-sound chorus, half-time crushes, stop-start hits with a tape stop, one-kick breakdowns and odd 7/8 bars, driven by load and typing. DSP: waveshaping with tone control, bitcrush, ring mod, an 8 kHz ceiling, a bus compressor and limiter (peaks ≈ −1 dBFS, loudness like the other styles). An angry conductor with a sledgehammer ("LOUDER.", "break it.", "again!") |
 | **Techno** | 120–135 bpm even while chilling (minimal/dub techno), four-on-the-floor deep synthesized sub kick (~50 Hz), off-beat open hats, claps on 2 and 4, an acid 303-style line (resonant filter, accents, slides, a slow sweep over 32 bars), dub chord stabs on the off-beat into the echo, and 16/32-bar grooves → breakdowns → builds (snare roll, filter opening) → drops driven by the machine's intensity. The drums stay in and the synth isn't pushed back, but there is a hard cap of 4–5 layers and no hiss |
 | **Space Cadet** | synth-forward (wavetable/FM, +4 dB allowance), slow, evolving, Lydian and major-third colours |
@@ -326,6 +338,7 @@ speech marks. A few examples:
 - Biker: black and chrome orange; a bandana (on the stage too, cueing "ALL TOGETHER NOW"); flame meters; the crowd throws the horns `\m/` and puts its fists up for the chorus.
 - Baroque: cream and gold; powdered wigs `@@@@@` with curls `{ }`; ornate double borders.
 - Celtic: greens; knotwork-ish borders (`✠∞∞✠`, `§`); a flat cap.
+- Metal: black, blood crimson and cold steel; `\m/` decorations; a long-haired conductor who headbangs on the beat (the hair falls over his face) and throws the horns with both hands; half the crowd throws the horns, the other half moshes.
 - Industrial: rust, red and black; a hard hat and a sledgehammer smashed down on the beat; hazard-stripe borders (`╱╱`) that glitch-flicker to amber and red in the wall of sound; the crowd moshes, headbangs and stomps.
 - Ambient Monk: soft lavender; a hood and robe; minimal borders.
 - Space Cadet: deep-space palette; a helmet; 🚀.
@@ -337,6 +350,7 @@ speech marks. A few examples:
 | ![Jazz Cat](docs/styles/jazz.png) Jazz Cat | ![Biker](docs/styles/biker.png) Biker | ![Baroque](docs/styles/baroque.png) Baroque |
 | ![Celtic Session](docs/styles/celtic.png) Celtic Session | ![Industrial](docs/styles/industrial.png) Industrial | ![Ambient Monk](docs/styles/monk.png) Ambient Monk |
 | ![Space Cadet](docs/styles/space.png) Space Cadet | ![Tribal / Gamelan](docs/styles/tribal.png) Tribal / Gamelan | ![House Band](docs/styles/house.png) House Band |
+| ![Metal](docs/styles/metal.png) Metal | | |
 
 **Scripted key presses** (tests): `SYSJAM_KEYS="20:right,45:up,46:up,150:left"` presses arrows at
 the given seconds. In the offline bench (`SYSJAM_BENCH=1`) these are seconds of music time and the
@@ -1201,6 +1215,32 @@ Offline bench (`SYSJAM_BENCH=1`, TimGM6mb, same box), previous release → this 
   the off-beat 8th sat at 0.500 of the beat (straight) for bass, lead and colour before → 0.667
   for every player now (a 2:1 triplet shuffle); from onsets folded out of the rendered audio
   0.668–0.670 → 0.668–0.672.
+
+**Metal, and the Country and Celtic Session reworks**, offline 600 s runs (`SYSJAM_BENCH_PROFILE=idle`
+or `loaded`, seeds 1–2, TimGM6mb, mean of the two seeds where there is one figure, `seed1/seed2`
+otherwise). Country and Celtic now run on the session machine that plays the Blues (`src/country.rs`,
+`src/celtic.rs`), so the whole band plays from the first bar instead of building up from a drone:
+
+| style | profile | chill/awak/alive/subs % | melodic /min | drums /min | players | drums-on % | loud dB | sub dB | dyn dB | changes/10min | first alive s | first ≥5 players s | signature s |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Country before | idle | 15/10/62/13 | 310 | 181 | 4.1 | 38 | −16.1 | −20.1 | 3.5 | 16 | 31/32 | 12/12 | train beat 22/32 |
+| Country after | idle | 16/10/61/14 | 547 | 418 | 6.0 | 100 | −15.6 | −19.5 | 1.3 | 36 | 32/32 | 1/1 | train beat from the first bar |
+| Country before | loaded | 0/2/98/0 | 400 | 264 | 5.0 | 56 | −15.9 | −20.4 | 2.5 | 15 | 11/11 | 20/11 | train beat 67/48 |
+| Country after | loaded | 0/2/98/0 | 650 | 567 | 6.0 | 100 | −14.9 | −19.1 | 1.2 | 36 | 11/11 | 1/1 | train beat from the first bar |
+| Celtic before | idle | 15/11/62/12 | 416 | 84 | 4.3 | 30 | −15.3 | −19.3 | 2.1 | 15 | 35/34 | 13/23 | — |
+| Celtic after | idle | 12/9/68/11 | 1,444 | 389 | 6.0 | 100 | −15.9 | −20.8 | 1.9 | 15 | 27/29 | 1/1 | first tune change 35 |
+| Celtic before | loaded | 0/2/98/0 | 599 | 154 | 5.1 | 57 | −14.6 | −19.0 | 2.0 | 20 | 13/12 | 1/1 | — |
+| Celtic after | loaded | 0/2/98/0 | 1,465 | 395 | 6.0 | 100 | −15.8 | −20.8 | 2.0 | 6 | 10/11 | 1/1 | first tune change 35 |
+| Metal (new) | idle | 11/8/72/9 | 558 | 545 | 4.0 | 100 | −15.3 | −22.0 | 1.6 | 61 | 24/23 | —/— | first blast 15/15 |
+| Metal (new) | loaded | 0/1/99/0 | 645 | 769 | 4.0 | 100 | −14.8 | −21.6 | 1.6 | 57 | 9/9 | —/— | first blast 15/14 |
+| Blues before | idle | 12/10/67/10 | 1,034 | 379 | 6.0 | 100 | −14.8 | −20.3 | 1.6 | 21 | 32/32 | 1/1 | first solo 32/32 |
+| Blues after (shares the machine) | idle | 16/10/61/13 | 971 | 374 | 6.0 | 100 | −15.4 | −20.4 | 1.3 | 23 | 32/31 | 1/1 | first solo 32/31 |
+
+Blues moved slightly because the generic layers (which were still bringing in and swapping instruments behind the session band, and using the seed's random numbers) now stay out of the session styles. Celtic's melodic count includes the guitar and bouzouki strums and the ornaments (cuts and rolls).
+Metal's player count of 4 matches Biker's (4.1): the rage machine's guitars, bass and drums. In the
+Celtic run the set changes tune every ~33 s (jig → reel → reel, 113 → 119 → 125 bpm),. Live, at 170×56, idle machine, WAV sink, 40 s of
+a 75 s run, per thread: Metal engine **3.00%**, UI 0.47%, monitor 0.15%; Country engine 1.67%,
+UI 0.45%, monitor 0.15%; Celtic engine 2.25%, UI 0.47%, monitor 0.17%.
 
 ## Troubleshooting
 

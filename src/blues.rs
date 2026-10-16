@@ -16,6 +16,19 @@
 
 use crate::dsp::Rng;
 
+#[path = "country.rs"]
+mod country;
+#[path = "celtic.rs"]
+mod celtic;
+
+/// which band the session machine is: the 12-bar shuffle, the country band, or the Celtic session
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
+    Blues,
+    Country,
+    Celtic,
+}
+
 /// minor blues, major blues (semitones above the tonic)
 const MINB: [i32; 6] = [0, 3, 5, 6, 7, 10];
 const MAJB: [i32; 6] = [0, 2, 3, 4, 7, 9];
@@ -41,6 +54,10 @@ pub enum Lead {
     Slide,
     Sax,
     Piano,
+    /// country: fiddle, Telecaster (chicken pickin'), pedal steel, harmonica
+    Fiddle,
+    Tele,
+    Steel,
 }
 
 impl Lead {
@@ -51,13 +68,17 @@ impl Lead {
             Lead::Slide => "slide guitar",
             Lead::Sax => "tenor sax",
             Lead::Piano => "piano",
+            Lead::Fiddle => "fiddle",
+            Lead::Tele => "Telecaster",
+            Lead::Steel => "pedal steel",
         }
     }
     /// which player takes it (3 keys, 4 lead guitar, 5 the colour / "synth" seat)
     pub fn player(self) -> usize {
         match self {
             Lead::Piano => 3,
-            Lead::Guitar => 4,
+            Lead::Guitar | Lead::Tele => 4,
+            Lead::Steel => 0,
             _ => 5,
         }
     }
@@ -67,6 +88,9 @@ impl Lead {
             Lead::Sax => 66,
             Lead::Slide | Lead::Guitar => 27,
             Lead::Piano => 0,
+            Lead::Fiddle => 110,
+            Lead::Tele => 27,
+            Lead::Steel => 26,
         }
     }
     fn range(self) -> (i32, i32) {
@@ -75,6 +99,9 @@ impl Lead {
             Lead::Sax => (3, 24),
             Lead::Guitar | Lead::Slide => (7, 29),
             Lead::Piano => (12, 33),
+            Lead::Fiddle => (10, 31),
+            Lead::Tele => (5, 26),
+            Lead::Steel => (8, 28),
         }
     }
 }
@@ -85,6 +112,14 @@ pub enum Sec {
     Groove,
     /// a featured solo: (lead, chorus k of n)
     Solo(Lead, u8, u8),
+    /// country: a verse (0 train beat, 1 two-step, 2 shuffle)
+    Verse(u8),
+    /// country: the call-and-response chorus
+    Chorus,
+    /// country: an instrumental break (fiddle, Telecaster, steel, harmonica)
+    Break(Lead),
+    /// celtic: a tune (0 jig, 1 reel, 2 slip jig; part 0..4 = A A B B; tune n of the set)
+    Tune(u8, u8, u8),
 }
 
 pub enum Ev {
@@ -102,8 +137,14 @@ pub enum Ev {
     Think(usize, &'static str, String),
     Log(String),
     /// next chorus' chords (one per bar)
-    Plan(&'static [&'static str]),
+    Plan(Vec<&'static str>),
     Section(Sec),
+    /// a new home key (pitch class above C, minor?)
+    Key(i32, bool),
+    /// ramp the tempo to this bpm over a bar or two
+    Bpm(f32),
+    /// the deep sine under the bass (semitone rel A2, velocity)
+    Sub(i32, i32),
 }
 
 pub struct In {
@@ -113,6 +154,7 @@ pub struct In {
     pub root: i32,
     /// 0..1: energy, load and typing
     pub intensity: f32,
+    pub bpm: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -145,6 +187,11 @@ pub struct Blues {
     solos: u32,
     pub int: f32,
     started: bool,
+    pub mode: Mode,
+    /// the home key the machine wants (pitch class above C, minor)
+    pub home: (i32, bool),
+    cs: country::State,
+    ks: celtic::State,
 }
 
 fn fold(p: i32, lo: i32, hi: i32) -> i32 {
@@ -174,6 +221,10 @@ impl Blues {
             solos: 0,
             int: 0.5,
             started: false,
+            mode: Mode::Blues,
+            home: (4, false),
+            cs: country::State::default(),
+            ks: celtic::State::default(),
         }
     }
 
@@ -182,7 +233,13 @@ impl Blues {
     }
 
     /// start: the band's instruments, the first chorus' chords
-    pub fn start(&mut self) {
+    pub fn start(&mut self, mode: Mode) {
+        self.mode = mode;
+        match mode {
+            Mode::Country => return self.country_start(),
+            Mode::Celtic => return self.celtic_start(),
+            Mode::Blues => {}
+        }
         self.started = true;
         self.form = None;
         self.chorus = 0;
@@ -198,7 +255,7 @@ impl Blues {
             self.ev.push(Ev::Prog(ch as u8, *p));
         }
         self.next_quick = self.rng.chance(0.4);
-        self.ev.push(Ev::Plan(if self.next_quick { &ROMAN_QC } else { &ROMAN }));
+        self.ev.push(Ev::Plan(if self.next_quick { ROMAN_QC.to_vec() } else { ROMAN.to_vec() }));
         self.ev.push(Ev::Think(2, "following", "count-in on the sticks, then the shuffle: ride triplets, backbeat on 2 and 4".into()));
         self.ev.push(Ev::Think(1, "following", "boogie-woogie walk, swung 8ths: 1-3-5-6-b7-6-5-3".into()));
         self.ev.push(Ev::Think(3, "following", "stabs on the \"and\"s, a boogie left hand".into()));
@@ -212,6 +269,11 @@ impl Blues {
     }
 
     pub fn feel(&self) -> &'static str {
+        match self.mode {
+            Mode::Country => return self.country_feel(),
+            Mode::Celtic => return self.celtic_feel(),
+            Mode::Blues => {}
+        }
         match self.sec {
             Sec::Groove => "shuffle — 12-bar, swung triplets",
             Sec::Solo(l, k, _) => {
@@ -227,26 +289,34 @@ impl Blues {
                     Lead::Guitar => 1,
                     Lead::Slide => 2,
                     Lead::Sax => 3,
-                    Lead::Piano => 4,
+                    _ => 4,
                 };
                 T[li][(k as usize).clamp(1, 3) - 1]
             }
+            _ => "shuffle — 12-bar, swung triplets",
         }
     }
     pub fn sec_name(&self) -> &'static str {
         match self.sec {
             Sec::Groove => "shuffle",
             Sec::Solo(..) => "solo",
+            Sec::Verse(_) => "verse",
+            Sec::Chorus => "chorus",
+            Sec::Break(_) => "break",
+            Sec::Tune(_, p, _) => ["A part", "A part again", "B part", "B part again"][p as usize % 4],
         }
     }
     pub fn soloist(&self) -> Option<usize> {
         match self.sec {
-            Sec::Solo(l, ..) => Some(l.player()),
+            Sec::Solo(l, ..) | Sec::Break(l) => Some(l.player()),
             _ => None,
         }
     }
     /// the GM program behind each stage player (0 organ, 1 bass, 3 piano, 4 guitar, 5 solo seat)
     pub fn prog_of(&self, player: usize) -> Option<u8> {
+        if self.mode != Mode::Blues {
+            return self.mode_prog_of(player);
+        }
         match player {
             0 => Some(self.progs[ORGAN as usize]),
             1 => Some(self.progs[BASS as usize]),
@@ -254,6 +324,59 @@ impl Blues {
             4 => Some(self.progs[GUITAR as usize]),
             5 => Some(self.progs[SOLO as usize]),
             _ => None,
+        }
+    }
+
+    /// the machine's GM channel → stage player map and mixer (volume, pan) for its mode
+    fn mode_prog_of(&self, player: usize) -> Option<u8> {
+        let ch = match (self.mode, player) {
+            (Mode::Country, 0) => 1,
+            (Mode::Country, 3) => 0,
+            (Mode::Country, 4) => 2,
+            (Mode::Country, 5) => 3,
+            (Mode::Celtic, 0) => 0,
+            (Mode::Celtic, 3) => 1,
+            (Mode::Celtic, 4) => 2,
+            (Mode::Celtic, 5) => 3,
+            (_, 1) => 4,
+            _ => return None,
+        };
+        Some(self.progs[ch])
+    }
+    pub fn mix(&self, ch: u8) -> (f32, i32) {
+        let c = ch as usize % 5;
+        match self.mode {
+            Mode::Blues => ([0.55, 0.36, 0.42, 0.58, 0.72][c], [40, 76, 30, 92, 64][c]),
+            // piano, steel, Tele, fiddle / harmonica, bass
+            Mode::Country => ([0.46, 0.4, 0.5, 0.56, 0.74][c], [44, 84, 30, 96, 64][c]),
+            // pipes drone, DADGAD guitar, fiddle, whistle / flute, bouzouki
+            Mode::Celtic => ([0.2, 0.5, 0.5, 0.5, 0.5][c], [64, 40, 84, 50, 70][c]),
+        }
+    }
+    /// the clock's grid: triplets (jigs, the shuffle) and beats per bar (slip jig 3)
+    pub fn triplet(&self) -> bool {
+        match self.mode {
+            Mode::Blues => true,
+            Mode::Country => matches!(self.sec, Sec::Verse(2)),
+            Mode::Celtic => matches!(self.sec, Sec::Tune(0 | 2, ..)),
+        }
+    }
+    pub fn meter(&self) -> u8 {
+        if self.mode == Mode::Celtic && matches!(self.sec, Sec::Tune(2, ..)) { 3 } else { 4 }
+    }
+    /// does the machine set the tempo itself (Celtic sets speed up tune by tune)
+    pub fn owns_tempo(&self) -> bool {
+        self.mode == Mode::Celtic
+    }
+    pub fn plan_why(&self) -> &'static str {
+        match self.mode {
+            Mode::Blues => "12-bar shuffle",
+            Mode::Country => match self.sec {
+                Sec::Chorus => "call-and-response chorus",
+                Sec::Break(_) => "the break",
+                _ => "country changes",
+            },
+            Mode::Celtic => "the tune's changes",
         }
     }
 
@@ -268,7 +391,7 @@ impl Blues {
     fn next_section(&mut self) {
         let next = match self.sec {
             Sec::Solo(l, k, n) if k < n => Sec::Solo(l, k + 1, n),
-            Sec::Solo(..) => Sec::Groove,
+            Sec::Solo(..) | Sec::Verse(_) | Sec::Chorus | Sec::Break(_) | Sec::Tune(..) => Sec::Groove,
             Sec::Groove => {
                 // a solo after every chorus or two of groove (the first one soon)
                 if self.chorus >= 1 && (self.solos == 0 || self.rng.chance(0.65)) {
@@ -295,7 +418,7 @@ impl Blues {
                     Lead::Guitar => "take it, guitar!",
                     Lead::Slide => "slide it, brother!",
                     Lead::Sax => "blow, sax, blow!",
-                    Lead::Piano => "piano, take it!",
+                    _ => "piano, take it!",
                 };
                 self.ev.push(Ev::Say(cue, 1));
                 self.ev.push(Ev::Log(format!("{} solo: {n} chorus{} of 12-bar, the band backs off", l.name(), if n == 1 { "" } else { "es" })));
@@ -305,6 +428,7 @@ impl Blues {
                 self.ev.push(Ev::Say(if k == 3 { "Lord have mercy!" } else { "one more time!" }, 2));
                 self.ev.push(Ev::Think(l.player(), "soloing", format!("chorus {k}: higher, harder, more bends")));
             }
+            Sec::Verse(_) | Sec::Chorus | Sec::Break(_) | Sec::Tune(..) => {}
             Sec::Groove => {
                 if let Sec::Solo(l, ..) = prev {
                     self.ev.push(Ev::Say("Lord have mercy!", 2));
@@ -324,6 +448,11 @@ impl Blues {
     /// one sixteenth
     pub fn step(&mut self, i: &In) {
         self.int += (i.intensity - self.int) * 0.02;
+        match self.mode {
+            Mode::Country => return self.country_step(i),
+            Mode::Celtic => return self.celtic_step(i),
+            Mode::Blues => {}
+        }
         let s = i.s;
         if s == 0 {
             // the bar line
@@ -353,7 +482,7 @@ impl Blues {
         // look ahead: the next chorus' chords go to the harmony a beat before the bar line
         if bar == 11 && s == 12 {
             self.next_quick = self.rng.chance(0.4);
-            self.ev.push(Ev::Plan(if self.next_quick { &ROMAN_QC } else { &ROMAN }));
+            self.ev.push(Ev::Plan(if self.next_quick { ROMAN_QC.to_vec() } else { ROMAN.to_vec() }));
         }
         let solo = matches!(self.sec, Sec::Solo(..));
         let back = if solo { 0.78 } else { 1.0 };
@@ -621,6 +750,7 @@ impl Blues {
                         self.ph_who = who;
                     }
                 }
+                Sec::Verse(_) | Sec::Chorus | Sec::Break(_) | Sec::Tune(..) => {}
                 Sec::Groove => {
                     // harp calls (A, A over the IV, B), the guitar answers
                     let heat = 0.2 + 0.3 * self.int;

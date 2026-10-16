@@ -139,6 +139,19 @@ pub const THEMES: &[Theme] = &[
         icon: ("🔥", "^"),
     },
     Theme {
+        id: "metal",
+        // black, blood crimson and cold steel
+        pal: Some(Pal { bg: (8, 6, 8), fg: (222, 220, 228), text: (170, 166, 178), dim: (88, 82, 94), acc: (204, 22, 36), acc2: (168, 176, 192), hot: (255, 40, 40), good: (190, 60, 70), mag: (150, 30, 60), cool: (120, 126, 142), border: (150, 18, 30), ink: (8, 6, 8) }),
+        brd: Brd::Thick,
+        deco: ("\\m/ ", " \\m/"),
+        deco_ascii: ("\\m/ ", " \\m/"),
+        meter: ('█', '·'),
+        pulse: false,
+        sides: ("", ""),
+        marks: ("“", "!”"),
+        icon: ("╳", "X"),
+    },
+    Theme {
         id: "baroque",
         pal: Some(Pal { bg: (250, 243, 224), fg: (62, 42, 20), text: (102, 76, 42), dim: (168, 142, 102), acc: (192, 142, 30), acc2: (152, 102, 42), hot: (162, 52, 42), good: (112, 122, 42), mag: (142, 72, 92), cool: (92, 92, 132), border: (192, 152, 62), ink: (250, 243, 224) }),
         brd: Brd::Double,

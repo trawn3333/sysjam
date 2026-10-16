@@ -529,7 +529,7 @@ fn footwork(l: &Look, p: &Persona, hype: bool) -> ([&'static str; 2], bool, i32)
                 _ => (STEP_L, false, 0),
             },
             // biker stomp: heavy alternate stomps on every beat
-            "biker" | "industrial" => (if on { if beat % 2 == 0 { STOMP_R } else { STOMP_L } } else { BOUNCE }, false, 0),
+            "biker" | "industrial" | "metal" => (if on { if beat % 2 == 0 { STOMP_R } else { STOMP_L } } else { BOUNCE }, false, 0),
             // jig: hop-kicks on the eighths, little hops off the ground
             "celtic" => match half.rem_euclid(4) {
                 0 => (KICK_R, false, 0),
@@ -586,7 +586,7 @@ pub fn fig(l: &Look) -> ([String; FH], bool, i32) {
         (Act::Wave | Act::Leave, _) => ('^', '-'),
         (Act::Bar, _) => ('-', 'o'),
         (_, Vibe::Applause) => ('^', 'v'),
-        (Act::Here, Vibe::Hype) if st == "industrial" => if odd { ('>', 'O') } else { ('x', 'O') },
+        (Act::Here, Vibe::Hype) if st == "industrial" || st == "metal" => if odd { ('>', 'O') } else { ('x', 'O') },
         (Act::Here, Vibe::Hype) => if odd { ('^', 'O') } else { ('*', 'o') },
         _ if l.disk => ('@', '_'),
         _ if l.cpu > 0.5 => ('>', 'o'),
@@ -662,6 +662,16 @@ pub fn fig(l: &Look) -> ([String; FH], bool, i32) {
                         if odd { arms('\\', '/') } else { arms('/', '\\') }
                     }
                     // fists up for the chorus, the horns \m/ the rest of the time
+                    // metal: half the pit throws the horns, the other half moshes
+                    "metal" if (l.id >> 3) % 2 == 0 => {
+                        hair = if odd { "\\m/ \\m/".into() } else { "  \\m/  ".into() };
+                        if odd { arms('|', '|') } else { arms('\\', '|') }
+                    }
+                    "metal" => {
+                        hair = if frac < 0.4 { "  \\\\\\  ".into() } else { "  ///  ".into() };
+                        dx += [0, 1, -1, 1, 0, -1][((beat + (l.id % 5) as i64) as usize) % 6];
+                        if odd { arms('\\', '/') } else { arms('/', '\\') }
+                    }
                     "biker" if l.chorus => {
                         hair = if frac < 0.5 { " \\o o/ ".into() } else { " \\o_o/ ".into() };
                         arms('|', '|')
@@ -780,13 +790,13 @@ pub fn fig_small(l: &Look) -> [String; 3] {
     let odd = beat.rem_euclid(2) == 1;
     let hype = l.act == Act::Here && l.vibe == Vibe::Hype;
     let head = match (l.act, hype, l.style) {
-        (Act::Here, true, "industrial") => if odd { "   x   " } else { "   o   " },
+        (Act::Here, true, "industrial" | "metal") => if odd { "   x   " } else { "   o   " },
         (Act::Here, true, _) => if odd { "  \\o/  " } else { "   o   " },
         _ => "   o   ",
     };
     let body = match l.act {
         Act::Bar => "  /|U  ",
-        Act::Here if hype && l.style == "biker" => if odd { "  m|m  " } else { "  /|\\  " },
+        Act::Here if hype && (l.style == "biker" || l.style == "metal") => if odd { "  m|m  " } else { "  /|\\  " },
         Act::Here if hype => if odd { "   |   " } else { "  /|\\  " },
         Act::Enter | Act::Back | Act::ToBar | Act::Leave => if l.step.rem_euclid(2) == 0 { "  /|\\  " } else { "  \\|/  " },
         _ => "  /|\\  ",
