@@ -164,11 +164,12 @@ pub const THEMES: &[Theme] = &[
     },
     Theme {
         id: "industrial",
-        pal: Some(Pal { bg: (32, 30, 28), fg: (216, 210, 200), text: (172, 162, 152), dim: (102, 96, 90), acc: (202, 112, 52), acc2: (232, 202, 42), hot: (212, 72, 42), good: (162, 162, 122), mag: (172, 122, 102), cool: (132, 142, 152), border: (232, 202, 42), ink: (32, 30, 28) }),
+        // rust, blood red and black; hazard yellow for the stripes
+        pal: Some(Pal { bg: (14, 7, 5), fg: (236, 214, 200), text: (190, 150, 130), dim: (104, 64, 52), acc: (206, 84, 30), acc2: (230, 190, 30), hot: (236, 32, 20), good: (196, 120, 60), mag: (184, 60, 50), cool: (140, 110, 100), border: (200, 80, 30), ink: (14, 7, 5) }),
         brd: Brd::Hazard,
-        deco: ("# ", " #"),
-        deco_ascii: ("# ", " #"),
-        meter: ('█', '▚'),
+        deco: ("╱╱ ", " ╱╱"),
+        deco_ascii: ("// ", " //"),
+        meter: ('█', '╱'),
         pulse: false,
         sides: ("[", "]"),
         marks: ("> ", ""),
@@ -364,6 +365,112 @@ pub fn bg() -> Color {
     out(mix(pal_of(from).bg, pal_of(to).bg, if from == to { 1.0 } else { t }))
 }
 
+/// Industrial: a cheap glitch on the hits of the loud sections (set once per frame)
+static GLITCH: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+pub fn set_glitch(level: u8) {
+    GLITCH.store(level, std::sync::atomic::Ordering::Relaxed);
+}
+pub fn glitch() -> u8 {
+    GLITCH.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+thread_local! {
+    /// dim / hazed colours, precomputed per theme: (theme, colour role, level) → colour
+    static DIMC: RefCell<(usize, bool, [[Option<Color>; 4]; 12])> = RefCell::new((usize::MAX, false, [[None; 4]; 12]));
+}
+
+/// a themed colour blended toward the background: level 0 = as is, 1 / 2 / 3 = further
+/// back (haze, a fake translucency). Precomputed per theme, so it costs nothing per cell.
+pub fn dim(c: Color, level: u8) -> Color {
+    if level == 0 {
+        return th(c);
+    }
+    let level = level.min(3) as usize;
+    let to = ST.with(|s| s.borrow().to);
+    let truecolor = ST.with(|s| s.borrow().truecolor);
+    let idx = match c {
+        Color::White => 0,
+        Color::Gray => 1,
+        Color::DarkGray => 2,
+        Color::LightYellow | Color::Yellow => 3,
+        Color::LightCyan | Color::Cyan => 4,
+        Color::LightRed | Color::Red => 5,
+        Color::LightGreen | Color::Green => 6,
+        Color::LightMagenta | Color::Magenta => 7,
+        Color::LightBlue | Color::Blue => 8,
+        _ => 9,
+    };
+    DIMC.with(|d| {
+        let mut d = d.borrow_mut();
+        if d.0 != to || d.1 != truecolor {
+            *d = (to, truecolor, [[None; 4]; 12]);
+        }
+        if let Some(x) = d.2[idx][level] {
+            return x;
+        }
+        let p = pal_of(to);
+        let x = match role(&p, c) {
+            Some(rgb) => {
+                let k = [0.0, 0.32, 0.55, 0.72][level];
+                // haze: toward the background, a touch toward grey
+                let hz = mix(p.bg, p.dim, 0.35);
+                out(mix(rgb, hz, k))
+            }
+            None => c,
+        };
+        // House Band (terminal colours): back rows just go grey
+        let x = if THEMES[to].pal.is_none() { if level >= 2 { Color::DarkGray } else { Color::Gray } } else { x };
+        d.2[idx][level] = Some(x);
+        x
+    })
+}
+
+/// the floor / haze background for crowd row `k` of `n` (front rows a little lighter)
+pub fn floor_bg(k: usize, n: usize) -> Color {
+    let to = ST.with(|s| s.borrow().to);
+    if THEMES[to].pal.is_none() {
+        return Color::Reset;
+    }
+    let p = pal_of(to);
+    let x = k as f32 / n.max(1) as f32;
+    // back rows: haze (a little grey in the dark), front rows: the floor catching stage light
+    let haze = mix(p.bg, p.dim, 0.18 * (1.0 - x));
+    out(mix(haze, p.acc, 0.07 * x * x))
+}
+
+/// stage-light colour for light `i` (theme accents), `on` = on the beat
+pub fn light(i: usize, on: bool, section: u8) -> Color {
+    let to = ST.with(|s| s.borrow().to);
+    let p = pal_of(to);
+    let cols = [p.acc, p.acc2, p.hot, p.mag, p.cool, p.good];
+    let c = cols[(i + section as usize) % cols.len()];
+    out(if on { mix(c, (255, 255, 255), 0.2) } else { mix(c, p.bg, 0.45) })
+}
+
+/// a light's colour washed into the background (a translucent beam): `amt` 0..1
+pub fn light_bg(c: (u8, u8, u8), amt: f32) -> Color {
+    let to = ST.with(|s| s.borrow().to);
+    if THEMES[to].pal.is_none() {
+        return Color::Reset;
+    }
+    let p = pal_of(to);
+    out(mix(p.bg, c, amt))
+}
+
+/// the raw rgb of light `i` (for beams)
+pub fn light_rgb(i: usize, section: u8, warm: bool, strobe: bool) -> (u8, u8, u8) {
+    let to = ST.with(|s| s.borrow().to);
+    let p = pal_of(to);
+    if strobe {
+        return p.hot;
+    }
+    if warm {
+        return [p.acc, p.acc2][(i + section as usize) % 2];
+    }
+    let cols = [p.acc, p.acc2, p.hot, p.mag, p.cool, p.good];
+    cols[(i + section as usize) % cols.len()]
+}
+
 pub fn border_color() -> Color {
     let (from, to, t, beat) = ST.with(|s| {
         let s = s.borrow();
@@ -374,6 +481,11 @@ pub fn border_color() -> Color {
     }
     let (a, b) = (pal_of(from), pal_of(to));
     let mut y = b.border;
+    match glitch() {
+        1 => y = b.acc2,
+        2 => y = b.hot,
+        _ => {}
+    }
     if THEMES[to].pulse {
         // neon borders swap cyan / magenta on the kick
         y = if beat % 2 == 0 { b.acc } else { b.acc2 };
@@ -392,7 +504,8 @@ pub fn border_set() -> border::Set {
         Brd::Thick => border::THICK,
         Brd::Rope => border::Set { top_left: "@", top_right: "@", bottom_left: "@", bottom_right: "@", vertical_left: "┊", vertical_right: "┊", horizontal_top: "~", horizontal_bottom: "~" },
         Brd::Knot => border::Set { top_left: "✠", top_right: "✠", bottom_left: "✠", bottom_right: "✠", vertical_left: "§", vertical_right: "§", horizontal_top: "∞", horizontal_bottom: "∞" },
-        Brd::Hazard => border::Set { top_left: "■", top_right: "■", bottom_left: "■", bottom_right: "■", vertical_left: "▐", vertical_right: "▌", horizontal_top: "▚", horizontal_bottom: "▚" },
+        // hazard stripes from light diagonals (width-safe everywhere)
+        Brd::Hazard => border::Set { top_left: "┌", top_right: "┐", bottom_left: "└", bottom_right: "┘", vertical_left: "│", vertical_right: "│", horizontal_top: "╱", horizontal_bottom: "╱" },
         Brd::Minimal => border::Set { top_left: " ", top_right: " ", bottom_left: " ", bottom_right: " ", vertical_left: " ", vertical_right: " ", horizontal_top: "─", horizontal_bottom: " " },
     }
 }
@@ -472,4 +585,9 @@ pub fn asciify(s: &str) -> String {
 pub fn icon() -> &'static str {
     let t = cur();
     if ascii() { t.icon.1 } else { t.icon.0 }
+}
+
+/// an rgb triple as a terminal colour (truecolor or the nearest 256-colour step)
+pub fn rgb(c: (u8, u8, u8), toward_white: f32) -> Color {
+    out(mix(c, (255, 255, 255), toward_white))
 }

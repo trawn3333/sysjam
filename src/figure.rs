@@ -32,7 +32,7 @@ pub fn gear(style: &str) -> Gear {
         "jazz" => g(" _=_ ", ('(', ')'), false, '=', &['♪', '♫', '♪', '♫'], None),
         "blues" => g("_┌#┐_", ('(', ')'), true, '#', &['♪', ' ', '♪', '♪'], None),
         "country" => g("~╭^╮~", ('(', ')'), false, 'x', &['o', 'O', 'o', '*'], None),
-        "biker" => g("╭───╮", ('(', ')'), false, '#', &['•', '*', '•', '*'], None),
+        "biker" => g("~~~~~", ('(', ')'), false, '#', &['•', '*', '•', '*'], None),
         "baroque" => g("@@@@@", ('{', '}'), false, '+', &['♪', '•', '♪', '•'], None),
         "celtic" => g("_╭──┐", ('(', ')'), false, '%', &['*', '•', '*', '•'], None),
         "industrial" => g("┌┬─┬┐", ('[', ']'), false, '#', &['*', 'x', '*', 'x'], None),
@@ -171,6 +171,25 @@ pub fn conductor(style: &str, pose: Pose, mood: Mood, energy: f32, pos: Option<P
         let b = sp[((frac * 4.0) as usize + 2) % 4];
         gr.put(3, 0, &format!(" [{a}]──[{b}] "));
         gr.put(4, 0, " └──────┘  ");
+        marks(&mut gr, extra, beat_i, frac);
+        return gr.rows();
+    }
+    if style == "industrial" && pose != Pose::Rest {
+        // the angry one: a sledgehammer smashed down on the beat, the other fist pumping
+        gr.put(0, 2, g.hat);
+        gr.put(1, 2, &fs);
+        gr.put(3, 3, "│#│");
+        gr.put(4, 3, "╯ ╰");
+        if frac < 0.3 {
+            gr.put(2, 0, " @┤#├──┐");
+            gr.put(3, 8, "[#]");
+        } else {
+            gr.set(0, 0, '@');
+            gr.set(1, 1, '╲');
+            gr.put(2, 3, "┤#├");
+            gr.set(1, 8, '╱');
+            gr.put(0, 9, "[#]");
+        }
         marks(&mut gr, extra, beat_i, frac);
         return gr.rows();
     }

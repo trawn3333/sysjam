@@ -153,6 +153,15 @@ struct Ev {
     vel: i32, // 0 = note off
 }
 
+/// GM channels for the Industrial guitar wall (11-15 are free of the slots)
+const RAGE_GTR: [usize; 2] = [11, 12];
+/// the machine's GM channels: rhythm L, rhythm R, choir, voice oohs, lead (+ harmony lead)
+/// Country's own GM channels: harmonica fills, honky-tonk piano rolls
+const COUNTRY_CH: [usize; 2] = [13, 14];
+/// Blues machine channels: piano, organ, rhythm guitar, the solo seat (harp / sax / slide), bass
+const BLUES_CH: [usize; 5] = [11, 12, 13, 14, 15];
+const RAGE_CH: [usize; 6] = [11, 12, 13, 14, 15, 15];
+
 pub struct Engine {
     pub orph: crate::orphans::Orphans,
     /// keys/lead/colour: committed to play through bar index < in_until[i] (a whole statement)
@@ -255,6 +264,23 @@ pub struct Engine {
     dr: Vec<f32>,
     di: usize,
     lim: Limiter,
+    /// Industrial: the rage machine (drums, bass, guitar wall, noise; src/rage.rs)
+    rage: crate::rage::Rage,
+    rage_live: bool,
+    /// a hotter limiter for the wall (peaks near −1 dBFS)
+    rage_lim: Limiter,
+    /// pad bed + sub drone duck under the wall
+    rage_duck: f32,
+    /// the frontman's last yell (text, when)
+    front: (&'static str, u64),
+    country_live: bool,
+    /// Blues: the shuffle band (src/blues.rs)
+    blues: crate::blues::Blues,
+    blues_live: bool,
+    /// Country: the synth pad bed and sub drone almost disappear
+    bed_trim: f32,
+    /// measurement: every note heard (SYSJAM_NOTES=path): step position, player, pitch, key, chord
+    notes_log: Option<std::io::BufWriter<std::fs::File>>,
     fade: f32,
     fade_target: f32,
     fade_step: f32,
@@ -646,6 +672,16 @@ impl Engine {
             dr: vec![0.0; dmax],
             di: 0,
             lim: Limiter::new(sr),
+            rage: crate::rage::Rage::new(sr, c.seed),
+            rage_live: false,
+            rage_lim: Limiter::with_thr(sr, 1.1),
+            rage_duck: 1.0,
+            front: ("", 0),
+            country_live: false,
+            blues: crate::blues::Blues::new(c.seed),
+            blues_live: false,
+            bed_trim: 1.0,
+            notes_log: std::env::var_os("SYSJAM_NOTES").and_then(|p| std::fs::File::create(p).ok()).map(std::io::BufWriter::new),
             fade: 0.0,
             fade_target: 1.0,
             fade_step: 1.0 / (sr * 3.0),
@@ -1015,7 +1051,7 @@ impl Engine {
     fn space_for(&self, pl: usize) -> Space {
         if self.front_of(pl).is_some() {
             // techno relaxes synth-in-back: never ducked below the back level
-            if self.sty().relax { Space::Back } else { Space::Duck }
+            if self.sty().relax || self.sty().rage.is_some() { Space::Back } else { Space::Duck }
         } else if self.drums_playing() {
             Space::Back
         } else {
@@ -1177,6 +1213,18 @@ impl Engine {
         self.minds[i].activity = (self.minds[i].activity + 0.15 + 0.35 * vel.clamp(0.0, 1.0)).min(1.0);
     }
     fn heard_semi(&mut self, i: usize, semi: i32, vel: f32) {
+        if self.notes_log.is_some() {
+            use std::io::Write;
+            let pos = self.step as f64 - 1.0 + self.hit_delay.max(0.0) as f64;
+            let k = self.key();
+            let c = self.chord();
+            let rel = |x: i32| (x - k.tonic).rem_euclid(12);
+            let pcs: Vec<String> = c.pcs().iter().map(|&p| rel(p).to_string()).collect();
+            let line = format!("{pos:.3} {i} {} {} {} {} {} {:.1} {}\n", rel(semi), rel(c.root), pcs.join(","), k.minor as u8, STYLES[self.style].id, self.bpm, (vel * 100.0) as i32);
+            if let Some(w) = self.notes_log.as_mut() {
+                let _ = w.write_all(line.as_bytes());
+            }
+        }
         self.track(i, semi);
         self.hit_key = self.midi_root + semi;
         if self.ui.is_some() {
@@ -1248,6 +1296,26 @@ impl Engine {
             match gm_name(Role::Colour, &self.slots) { Some(g) => format!("{g} + {}", BELL_PATCHES[self.bell_patch].0), None => format!("synth {}", BELL_PATCHES[self.bell_patch].0) },
             if self.guest_on { "saw/sine guest voice".into() } else { "—".into() },
         ];
+        let mut inst = inst;
+        if self.rage_live && self.rage.kind == crate::rage::Kind::Biker {
+            inst[1] = "overdriven bass + sub, galloping".into();
+            inst[2] = if has_gm { format!("big kick, cracking snare + GM {} kit", KITS[self.kit].1) } else { "big kick, cracking snare, toms".into() };
+            inst[3] = if has_gm { "GM distortion + overdrive guitars, power chords".into() } else { "power-chord gallops".into() };
+        } else if self.rage_live {
+            inst[1] = "distorted saw/square bass + sub".into();
+            inst[2] = if has_gm { format!("distorted synth kick, gated metal snare, anvils + GM {} kit", KITS[self.kit].1) } else { "distorted synth kick, gated metal snare, anvils".into() };
+            inst[3] = if has_gm { "waveshaped power chords + GM distortion/overdrive guitar".into() } else { "waveshaped power-chord chugs".into() };
+        }
+        if self.blues_live {
+            let gmn = |p: u8| crate::gm::GM_NAMES.get(p as usize).copied().unwrap_or("?").to_string();
+            let bp = self.blues.progs;
+            inst[0] = format!("GM {} (warm bed) + a faint pad", gmn(bp[1]));
+            inst[1] = format!("GM {}, boogie walk", gmn(bp[4]));
+            inst[2] = format!("shuffle: ride triplets, GM {} kit", KITS[self.kit].1);
+            inst[3] = format!("GM {}: stabs + boogie left hand", gmn(bp[0]));
+            inst[4] = format!("GM {}: 5-6 chug + licks", gmn(bp[2]));
+            inst[5] = format!("GM {}: the solo seat", gmn(bp[3]));
+        }
         let recent = (self.sr * 5.0) as u64;
         let sig = self.ctl.sig;
         let pct = |x: f32| format!("{:.0}%", x * 100.0);
@@ -1277,6 +1345,14 @@ impl Engine {
             let now = self.now;
             self.minds[i].addressed = self.cond.target == Some(i) && now.saturating_sub(self.cond.target_t) < (self.sr * 4.0) as u64;
             self.minds[i].fam = self.player_fam(i);
+            if self.blues_live && i < 6 {
+                self.minds[i].away = false;
+                self.minds[i].key = if i == 2 { "—".into() } else { band.name() };
+                self.minds[i].status = if self.blues.soloist() == Some(i) { "soloing" } else if i == 2 || i == 1 { "grooving" } else { "following" };
+            }
+            let (pg, sy) = self.player_prog(i);
+            self.minds[i].prog = pg;
+            self.minds[i].synth = sy;
             self.minds[i].playing = self.playing(i);
             self.minds[i].hushed = if i >= 3 && i < 6 { self.cond.hushv[i] } else { 1.0 };
             self.minds[i].quoting = self.quote.as_ref().map_or(false, |q| q.player == i && q.start <= self.step);
@@ -1290,12 +1366,12 @@ impl Engine {
             bpm: self.bpm,
             bpm_to: (self.ramp_pos < self.ramp_len && (self.bpm_to - self.bpm).abs() >= 0.5).then_some(self.bpm_to),
             bpm_locked: self.bpm_lock,
-            feel: match self.feel {
+            feel: if self.blues_live { self.blues.feel() } else if self.rage_live { self.rage.feel() } else { match self.feel {
                 Feel::Normal => "",
                 Feel::Half => "half-time",
                 Feel::Double => "double-time",
                 Feel::Surge => "surge — V-twin lope",
-            },
+            } },
             home: (self.harm.home() != key).then(|| self.harm.home().name()),
             bar: self.step / 16,
             beat: ((self.step % 16) / 4) as u32,
@@ -1334,7 +1410,15 @@ impl Engine {
             likes_n: self.likes.likes.len(),
             crowd_hype: self.crowd_hype,
             skipped: self.time() - self.next_t,
+            front: if self.rage_live && self.rage.kind == crate::rage::Kind::Biker { Some((self.front.0, self.now.saturating_sub(self.front.1) as f32 / self.sr)) } else { None },
+            section: if self.blues_live { self.blues.sec_name() } else if self.rage_live { self.rage.sec.name() } else { "" },
         };
+    }
+
+    /// a style whose band is a machine of its own (Industrial, Biker, Blues): the generic
+    /// arrangement (floor, restraint, drummer phrases, feel changes) stays out of its way
+    fn machine(&self) -> bool {
+        self.sty().rage.is_some() || self.blues_live
     }
 
     fn sty(&self) -> &'static Style {
@@ -1369,6 +1453,8 @@ impl Engine {
             Harm::Blues => Some(5),
             Harm::Country => Some(6),
             Harm::Loop => Some(7),
+            Harm::Riff => Some(8),
+            Harm::Song => Some(9),
         };
         self.harm.sevenths = st.harm == Harm::Jazz;
         self.harm.major_bias = st.major + 0.25 * (self.likes.b("mode", "major") - self.likes.b("mode", "minor")).clamp(-1.0, 1.0);
@@ -1396,6 +1482,14 @@ impl Engine {
     /// the instrument family a player is holding right now
     fn player_fam(&self, i: usize) -> crate::figure::Fam {
         use crate::figure::{fam_of_gm, Fam};
+        if self.blues_live {
+            if let Some(p) = self.blues.prog_of(i) {
+                return if i == 1 { Fam::Bass } else { fam_of_gm(p) };
+            }
+        }
+        if i == 3 && self.rage_live {
+            return Fam::Guitar;
+        }
         let roles: &[Role] = match i {
             0 => return Fam::Drone,
             1 => return Fam::Bass,
@@ -1416,6 +1510,36 @@ impl Engine {
             }
         }
         if i == 3 { Fam::Synth } else { Fam::Bells }
+    }
+
+    /// the GM program (or synth) behind this player's instrument, for the stage props
+    fn player_prog(&self, i: usize) -> (Option<u8>, bool) {
+        if self.blues_live {
+            if let Some(p) = self.blues.prog_of(i) {
+                return (Some(p), false);
+            }
+        }
+        if self.rage_live && (i == 3 || i == 4) {
+            return (Some(30), false);
+        }
+        let roles: &[Role] = match i {
+            0 | 2 | 6 => return (None, i == 0),
+            1 => &[Role::Bass],
+            3 => &[Role::Comp, Role::Pad],
+            4 => &[Role::Lead],
+            _ => &[Role::Colour],
+        };
+        for r in roles {
+            if let Some(sl) = self.slots.iter().find(|s| s.role == *r && s.on) {
+                if sl.synth.is_some() {
+                    return (None, true);
+                }
+                if let Some(p) = sl.program {
+                    return (Some(p), false);
+                }
+            }
+        }
+        (None, i != 1)
     }
 
     fn playing(&self, i: usize) -> bool {
@@ -1474,6 +1598,20 @@ impl Engine {
     /// history) and progression from the next beat, new motifs and patterns for
     /// everyone, new sounds for at least half the band, the resting players called in.
     fn next_idea(&mut self, user: bool) {
+        if self.blues_live {
+            // Blues: a new key (major, dominant) and a fresh chorus; the form stays
+            self.blues_off();
+            let k = self.key();
+            self.harm.jump_to(Key { tonic: (k.tonic + 5).rem_euclid(12), minor: false }, "blues: up a fourth, new chorus");
+            let line = ["take it up a fourth!", "new groove, same mercy!", "from the top, brothers!"][self.rng.below(3)];
+            self.cond_say(line.into(), Pose::Point, None);
+            if user {
+                self.ds.nexts += 1;
+                self.next_t = self.time();
+            }
+            self.pub_now = true;
+            return;
+        }
         let now = self.now;
         if user {
             self.ds.nexts += 1;
@@ -1518,6 +1656,9 @@ impl Engine {
         self.make_drum_pattern();
         if self.acid_on {
             self.make_acid();
+        }
+        if self.rage_live {
+            self.rage.next_idea();
         }
         // new sounds for at least half the band (players 1-5)
         let why = if user { "next idea".to_string() } else { "the conductor called a new section".to_string() };
@@ -1593,7 +1734,9 @@ impl Engine {
         if self.on[2] && self.rmode[2] == RMode::Play {
             self.fill = true;
         }
-        let line = if user {
+        let line = if self.rage_live {
+            ["break it. again!", "new riff. LOUDER.", "tear it down — again!"][self.rng.below(3)]
+        } else if user {
             if self.ds.nexts == 1 { "right, moving on!" } else { ["right, moving on!", "ok — next idea!", "fresh page, here we go", "let's try something else"][self.rng.below(4)] }
         } else {
             ["getting stale — new section, let's go somewhere", "same old loop… new section!"][self.rng.below(2)]
@@ -2268,6 +2411,10 @@ impl Engine {
                         self.drum(37, 24, 0.0);
                     }
                 } else if self.train {
+                    // train beat: a cowbell on the beat
+                    if s % 4 == 0 {
+                        self.drum(56, if s == 0 { 30 } else { 22 }, 0.0);
+                    }
                     // train beat: brushed sixteenths on the snare, accents on 2 and 4
                     let v = match s {
                         4 | 12 => 38,
@@ -2390,6 +2537,8 @@ impl Engine {
             Scale::Penta => &[0, 2, 4, 7, 9],
             Scale::Pelog if k.minor => &[0, 1, 3, 7, 8],
             Scale::Pelog => &[0, 2, 4, 7, 9],
+            Scale::Phrygian if k.minor => &[0, 1, 3, 5, 7, 8, 10],
+            Scale::Phrygian => &[0, 1, 4, 5, 7, 8, 10],
         };
         for d in [0, -1, 1, -2, 2] {
             if set.contains(&(semi + d - k.tonic).rem_euclid(12)) {
@@ -2582,6 +2731,10 @@ impl Engine {
         if self.step < 16 * 4 * 3 || self.now < self.surge_cool || self.leader.breakdown > 0 {
             return false;
         }
+        // biker: the lope only takes over from a verse (never mid-chorus)
+        if self.rage_live && self.rage.sec != crate::rage::Sec::Verse || self.blues_live {
+            return false;
+        }
         let kb = self.ctl.sig.input;
         let st = self.leader.state;
         // never out of a calm band, unless the typing is racing
@@ -2650,7 +2803,7 @@ impl Engine {
                 self.say("~ drummer goes back to the straight feel".into());
                 self.think(2, "following", "back to the straight feel");
             }
-        } else if self.on[2] && self.leader.breakdown == 0 {
+        } else if self.on[2] && self.leader.breakdown == 0 && !self.machine() {
             let st = self.leader.state;
             let p = if st == State::Alive { 0.12 } else { 0.07 };
             if self.rng.chance(p) {
@@ -3113,6 +3266,18 @@ impl Engine {
         }
     }
     fn drum(&mut self, key: i32, vel: i32, delay: f32) {
+        self.drum_ui(key, vel, delay);
+        if self.gm.is_some() {
+            self.note(9, key - self.midi_root, vel, 1.0, delay);
+        }
+    }
+    /// a drum hit the drummer is seen and heard playing (no GM note)
+    fn drum_ui(&mut self, key: i32, vel: i32, delay: f32) {
+        if let Some(w) = self.notes_log.as_mut() {
+            use std::io::Write;
+            let pos = self.step as f64 - 1.0 + delay.max(0.0) as f64;
+            let _ = writeln!(w, "{pos:.3} 2 {key} 0 0 0 {} {:.1} {vel}", STYLES[self.style].id, self.bpm);
+        }
         self.last_drum = self.now.max(1);
         self.hit_delay = delay;
         self.hit_key = key;
@@ -3149,9 +3314,6 @@ impl Engine {
             };
             self.heard(2, n.into(), vel as f32 / 90.0);
         }
-        if self.gm.is_some() {
-            self.note(9, key - self.midi_root, vel, 1.0, delay);
-        }
     }
 
     // ------------------------------------------------------------- the clock
@@ -3186,6 +3348,10 @@ impl Engine {
         self.bpm_secs[tb] += dt;
         self.step += 1;
         if s == 0 {
+            if let Some(w) = self.notes_log.as_mut() {
+                use std::io::Write;
+                let _ = w.flush();
+            }
             if self.sf_clear > 0 && self.now >= self.sf_clear {
                 self.sf_clear = 0;
                 self.style_from = None;
@@ -3209,14 +3375,578 @@ impl Engine {
             self.gm_manage();
             self.harmony_bar();
         }
+        if self.sty().id == "blues" {
+            // Blues: the shuffle band plays everything, all on one swung triplet grid
+            self.blues_step(s);
+            self.dead_step();
+            return;
+        } else if self.blues_live {
+            self.blues_off();
+        }
+        if self.sty().rage.is_some() {
+            // Industrial: the machine plays bass, drums and the guitar wall
+            self.rage_step(s, bar);
+            self.lead_step(s, bar);
+            self.colour_step(s, bar);
+            self.dead_step();
+            if self.rage.short && s == 13 {
+                // a 7/8 bar: skip its last two sixteenths
+                self.step += 2;
+            }
+            return;
+        } else if self.rage_live {
+            self.rage_off();
+        }
         self.quote_step(bar * 16 + s as u64);
         self.bass_step(s);
         self.drums_step(s, bar);
         self.keys_step(s, bar);
         self.lead_step(s, bar);
         self.colour_step(s, bar);
+        self.country_step(s, bar);
         self.industrial_step(s);
         self.dead_step();
+    }
+
+    /// Country: harmonica fills between phrases, honky-tonk piano rolls into the turn
+    fn country_step(&mut self, s: usize, bar: u64) {
+        let country = self.sty().id == "country" && self.gm.is_some();
+        if country != self.country_live {
+            self.country_live = country;
+            if let Some(g) = self.gm.as_mut() {
+                if country {
+                    g.program(COUNTRY_CH[0], 22, 0.5);
+                    g.program(COUNTRY_CH[1], 3, 0.5);
+                    g.pan(COUNTRY_CH[0], 84);
+                    g.pan(COUNTRY_CH[1], 44);
+                    g.snap(COUNTRY_CH[0], 1.0);
+                    g.snap(COUNTRY_CH[1], 1.0);
+                } else {
+                    for ch in COUNTRY_CH {
+                        g.all_off(ch);
+                        g.snap(ch, 0.0);
+                    }
+                }
+            }
+        }
+        if !country || self.entry_wait > 0 {
+            return;
+        }
+        let k = self.key();
+        let phrase_end = bar % 4 == 3;
+        // the harmonica answers between phrases (when the lead isn't mid-line)
+        if phrase_end && s == 6 && self.leader.state != State::Chill && self.rmode[4] != RMode::Play && self.rng.chance(0.55) {
+            let pent = if k.minor { [0, 3, 5, 7, 10] } else { [0, 2, 4, 7, 9] };
+            let base = Self::fold(k.tonic, 15, 26);
+            let rhythm: &[(f32, f32)] = [&[(0.0, 1.0), (1.0, 1.0), (2.0, 2.0), (4.0, 4.0)][..], &[(0.0, 2.0), (2.0, 1.0), (3.0, 1.0), (4.0, 2.0), (6.0, 3.0)][..], &[(0.0, 0.5), (0.5, 1.5), (2.0, 2.0), (4.0, 5.0)][..]][self.rng.below(3)];
+            let mut d = 2 + self.rng.below(3) as i32;
+            for (i, &(at, len)) in rhythm.iter().enumerate() {
+                d = (d + [-1, 1, -1, 0, -2][self.rng.below(5)]).clamp(0, 6);
+                let last = i + 1 == rhythm.len();
+                let deg = if last { 0 } else { d };
+                let semi = base + pent[(deg as usize) % 5] + 12 * (deg / 5);
+                self.note(COUNTRY_CH[0], semi, 62 + if i == 0 { 8 } else { 0 }, len, at);
+                if i == 0 {
+                    // a blues-harp bend into the first note
+                    let at0 = self.now + (at * self.step_len) as u64;
+                    self.evs.push(Ev { at: at0, ch: COUNTRY_CH[0], key: 0, vel: -(6144 + 1) });
+                    self.evs.push(Ev { at: at0 + (self.step_len * 0.6) as u64, ch: COUNTRY_CH[0], key: 0, vel: -(8192 + 1) });
+                }
+            }
+            self.hit_delay = 0.0;
+            self.heard_semi(5, base, 0.6);
+            self.set_think(5, "harmonica fill between the phrases");
+        }
+        // honky-tonk piano: a quick roll up the chord into the turnaround, now and then a comp
+        if phrase_end && s == 12 && self.rng.chance(0.5) {
+            let c = self.chord();
+            let base = Self::fold(c.root, 3, 14);
+            let mut tones: Vec<i32> = c.pcs().iter().map(|&pc| base + (pc - c.root).rem_euclid(12)).collect();
+            tones.sort();
+            tones.push(base + 12);
+            for (i, t) in tones.iter().enumerate() {
+                self.note(COUNTRY_CH[1], *t, 54 + i as i32 * 4, 3.0, i as f32 * 0.22);
+            }
+            self.heard_semi(3, base, 0.6);
+        } else if !phrase_end && (s == 4 || s == 12) && self.rmode[3] != RMode::Rest && self.rng.chance(0.25) {
+            let c = self.chord();
+            let base = Self::fold(c.root, 15, 26);
+            for (i, pc) in c.pcs().iter().enumerate() {
+                self.note(COUNTRY_CH[1], base + (pc - c.root).rem_euclid(12), 40, 0.9, i as f32 * 0.03);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ blues
+
+    /// the style has become Blues: a major (dominant) key, the band's instruments
+    fn blues_on(&mut self) {
+        self.blues_live = true;
+        self.feel = Feel::Normal;
+        self.feel_phrases = 0;
+        self.surge_left = 0;
+        for i in 0..6 {
+            self.on[i] = true;
+            self.rmode[i] = RMode::Play;
+            self.rel[i] = Rel::Same;
+        }
+        // blues keys: E, A, G, C, Bb, F; always the major (dominant) side
+        let rp = crate::harmony::ROOT_PC.load(std::sync::atomic::Ordering::Relaxed);
+        let pcs = [4, 9, 7, 0, 10, 5];
+        let k = self.key();
+        let near = pcs.iter().map(|p| (p - rp).rem_euclid(12)).min_by_key(|t| ((t - k.tonic).rem_euclid(12)).min((k.tonic - t).rem_euclid(12)) * 10 + self.rng.below(9) as i32).unwrap_or(0);
+        self.harm.jump_to(Key { tonic: near, minor: false }, "blues: a dominant 12-bar");
+        self.blues.start();
+        self.band_say("the blues band counts in: shuffle drums, boogie bass, piano, guitar, organ, harp".into());
+        self.pin_surge();
+    }
+
+    fn blues_off(&mut self) {
+        self.blues_live = false;
+        self.leader.quiet = false;
+        self.blues.stop();
+        if let Some(g) = self.gm.as_mut() {
+            for ch in BLUES_CH {
+                g.all_off(ch);
+                g.snap(ch, 0.0);
+            }
+        }
+        self.evs.retain(|e| !BLUES_CH.contains(&e.ch) || e.vel == 0);
+    }
+
+    /// one sixteenth of the shuffle band
+    fn blues_step(&mut self, s: usize) {
+        if self.harm.restarting() {
+            return;
+        }
+        if !self.blues_live {
+            self.blues_on();
+        }
+        self.leader.quiet = true;
+        self.leader.soloist = None;
+        let sig = self.ctl.sig;
+        let input = sig.input.clamp(0.0, 1.0);
+        let int = (0.4 * self.leader.energy + 0.15 * self.leader.agitation + 0.35 * input + 0.2 * sig.cpu).clamp(0.0, 1.0);
+        let k = self.key();
+        let c = self.chord();
+        let inp = crate::blues::In { s, tonic: k.tonic, root: c.root, intensity: int };
+        self.blues.step(&inp);
+        let mut evs = std::mem::take(&mut self.blues.ev);
+        for e in evs.drain(..) {
+            use crate::blues::Ev as B;
+            match e {
+                B::Note(ch, semi, vel, len, d, who) => {
+                    if self.gm.is_some() {
+                        self.note(BLUES_CH[ch as usize % 5], semi, vel, len, d);
+                    }
+                    if ch == crate::blues::BASS && d == 0.0 {
+                        // deep bass: a quiet sine under the GM upright on the beat (the walk's own pitch)
+                        self.bass_inc = semi_to_freq(self.root, semi as f32) / self.sr;
+                        self.bass_attack = true;
+                        self.bass_peak = 0.85 * vel as f32 / 100.0;
+                        self.bass_att = 1.0 - (-1.0 / (self.sr * 0.006)).exp();
+                        self.bass_dec = (-1.0 / (self.sr * 0.35)).exp();
+                    }
+                    self.hit_delay = d;
+                    self.heard_semi(who, semi, vel as f32 / 127.0);
+                }
+                B::Drum(key, vel, d) => self.drum(key, vel, d),
+                B::Bend(ch, v, d) => {
+                    if self.gm.is_some() {
+                        let at = self.now + (d.max(0.0) * self.step_len) as u64;
+                        self.evs.push(Ev { at, ch: BLUES_CH[ch as usize % 5], key: 0, vel: -(v.clamp(0, 16383) + 1) });
+                    }
+                }
+                B::Prog(ch, p) => {
+                    let vol = [0.55, 0.36, 0.42, 0.58, 0.72][ch as usize % 5];
+                    let pan = [40i32, 76, 30, 92, 64][ch as usize % 5];
+                    if let Some(g) = self.gm.as_mut() {
+                        let c = BLUES_CH[ch as usize % 5];
+                        g.program(c, p, vol);
+                        g.pan(c, pan);
+                        g.snap(c, 1.0);
+                    }
+                }
+                B::Say(t, p) => {
+                    let pose = [Pose::Calm, Pose::Point, Pose::Surge][p as usize % 3];
+                    self.cond_say(t.into(), pose, None);
+                }
+                B::Think(i, st, t) => {
+                    self.hold[i] = 0;
+                    self.think(i, st, t);
+                }
+                B::Log(t) => self.band_say(t),
+                B::Plan(chords) => self.harm.set_plan(chords, "12-bar shuffle"),
+                B::Section(sec) => self.blues_section(sec),
+            }
+        }
+        self.blues.ev = evs;
+    }
+
+    fn blues_section(&mut self, sec: crate::blues::Sec) {
+        use crate::mood::Mood;
+        self.mark("blues chorus");
+        let f = self.blues.feel();
+        self.say(format!("~ blues: {f}"));
+        match sec {
+            crate::blues::Sec::Solo(_, k, _) => {
+                self.mood.impulse(Mood::Delighted, 0.5 + 0.1 * k as f32);
+                self.crowd_hype = self.crowd_hype.max(0.8);
+            }
+            _ => self.mood.impulse(Mood::Content, 0.5),
+        }
+        self.blues_modes();
+        self.pub_now = true;
+    }
+
+    /// everybody plays in the blues (the machine does the backing off)
+    fn blues_modes(&mut self) {
+        for i in 0..6 {
+            self.on[i] = true;
+            self.rmode[i] = RMode::Play;
+            self.cond.lay[i] = 0;
+            self.cond.hushv[i] = 1.0;
+        }
+    }
+
+    /// the conductor in the blues: happy, preaching, cueing solos
+    fn blues_conduct(&mut self) {
+        use crate::mood::{Mood, N};
+        let mut t = [0f32; N];
+        let solo = matches!(self.blues.sec, crate::blues::Sec::Solo(..));
+        let (a, b, c) = if solo { (Mood::Delighted, Mood::Inspired, Mood::Content) } else { (Mood::Content, Mood::Delighted, Mood::Amused) };
+        t[a.idx()] = 0.55;
+        t[b.idx()] = 0.3;
+        t[c.idx()] = 0.15;
+        self.mood.toward(&t, 0.85);
+        let (dom, w) = self.mood.dom();
+        let what = match self.blues.sec {
+            crate::blues::Sec::Solo(l, k, n) => format!("{} solo {k}/{n} → let it wail", l.name()),
+            _ => "shuffle → keep it swingin'".into(),
+        };
+        self.brain_line = format!("{} {w:.2} → {what}", dom.name());
+        if self.now >= self.cond.pose_until && self.rng.chance(0.2) {
+            let line = if solo { ["Lord have mercy!", "yeah, let it cry!", "tell it!"][self.rng.below(3)] } else { ["Lord have mercy!", "shuffle it!", "swing it, now", "that's the groove"][self.rng.below(4)] };
+            self.cond.pose = if solo { Pose::Surge } else { Pose::Calm };
+            self.cond.speech = line.into();
+        }
+    }
+
+    // ------------------------------------------------------------ industrial
+
+    /// the style has become Industrial: start the machine
+    fn rage_on(&mut self, kind: crate::rage::Kind) {
+        use crate::rage::Kind;
+        if self.rage_live {
+            self.rage_off();
+        }
+        self.rage_live = true;
+        self.rage.start(kind);
+        self.feel = Feel::Normal;
+        self.feel_phrases = 0;
+        self.surge_left = 0;
+        self.on[1] = true;
+        self.on[2] = true;
+        self.on[3] = true;
+        let biker = kind == Kind::Biker;
+        let choir = if self.rng.chance(0.6) { 52 } else { 54 };
+        if let Some(g) = self.gm.as_mut() {
+            // the GM guitar wall, double-tracked hard left / right (+ biker: gang choir, oohs, lead)
+            g.program(RAGE_CH[0], 30, if biker { 0.55 } else { 0.62 });
+            g.program(RAGE_CH[1], 29, if biker { 0.52 } else { 0.58 });
+            g.pan(RAGE_CH[0], 18);
+            g.pan(RAGE_CH[1], 110);
+            g.program(RAGE_CH[2], choir, 0.5);
+            g.program(RAGE_CH[3], 53, 0.45);
+            g.program(RAGE_CH[4], 30, 0.5);
+            g.pan(RAGE_CH[2], 64);
+            g.pan(RAGE_CH[3], 64);
+            g.pan(RAGE_CH[4], 76);
+            for ch in RAGE_CH {
+                g.snap(ch, 1.0);
+            }
+        }
+        let k = self.key();
+        if biker {
+            // hard rock lives in E or A: minor, or Mixolydian
+            let rp = crate::harmony::ROOT_PC.load(std::sync::atomic::Ordering::Relaxed);
+            let e = (4 - rp).rem_euclid(12);
+            let a = (9 - rp).rem_euclid(12);
+            let tonic = if self.rng.chance(0.5) { e } else { a };
+            let minor = self.rng.chance(0.65);
+            self.harm.jump_to(Key { tonic, minor }, "biker: kickstands up");
+            self.rage.plan_first(minor);
+            self.band_say("the band rides in: galloping guitars, bass and double kick".into());
+            self.think(2, "soloing", "hard-rock kit: big kick, cracking snare on 2 and 4, crashes, tom fills");
+            self.think(1, "following", "locked to the gallop: 8th + two 16ths");
+            self.think(3, "following", "two guitars, palm-muted gallop, open chords in the chorus");
+        } else {
+            if !k.minor {
+                self.harm.jump_to(Key { tonic: k.tonic, minor: true }, "industrial: into the minor");
+            }
+            self.band_say("the machine starts: distorted kick, gated snare, metal, bass and guitar wall".into());
+            self.think(2, "soloing", "programmed precision: distorted kick, gated metal snare, 16th hats, anvils");
+            self.think(1, "following", "distorted saw/square bass + sub, locked to the kick");
+            self.think(3, "following", "power-chord chugs, palm-muted, double-tracked");
+        }
+        self.pin_surge();
+    }
+
+    /// leaving Industrial: the machine fades out
+    fn rage_off(&mut self) {
+        self.rage_live = false;
+        self.rage.stop();
+        self.feel = Feel::Normal;
+        if let Some(g) = self.gm.as_mut() {
+            for ch in RAGE_CH {
+                g.all_off(ch);
+                g.snap(ch, 0.0);
+            }
+        }
+        self.evs.retain(|e| !RAGE_CH.contains(&e.ch) || e.vel == 0);
+    }
+
+    /// one sixteenth of the machine
+    fn rage_step(&mut self, s: usize, bar: u64) {
+        let kind = self.sty().rage.unwrap_or(crate::rage::Kind::Industrial);
+        if !self.rage_live || self.rage.kind != kind {
+            self.rage_on(kind);
+        }
+        let sig = self.ctl.sig;
+        let input = sig.input.clamp(0.0, 1.0);
+        let int = (0.35 * self.leader.energy + 0.25 * self.leader.agitation + 0.45 * input + 0.2 * sig.cpu).clamp(0.0, 1.0);
+        let c = self.chord();
+        let root = self.root;
+        if s == 0 {
+            self.on[1] = true;
+            self.on[2] = true;
+            self.on[3] = true;
+            let mut hz: Vec<f32> = c.pcs().iter().take(3).map(|&pc| semi_to_freq(root, Self::fold(pc, 3, 14) as f32)).collect();
+            hz.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            self.rage.chord(&hz);
+        }
+        let k = self.key();
+        let inp = crate::rage::In { s, bar, root: c.root, intensity: int, input, tonic: k.tonic, minor: k.minor, surge: self.feel == Feel::Surge };
+        self.rage.step(&inp, self.step_len, |semi| semi_to_freq(root, semi));
+        let mut evs = std::mem::take(&mut self.rage.ev);
+        for e in evs.drain(..) {
+            use crate::rage::Ev as R;
+            match e {
+                R::Gm(key, vel, d) => self.drum(key, vel, d),
+                R::Hit(key, v) => self.drum_ui(key, (v * 110.0) as i32, 0.0),
+                R::Bass(semi, v) => self.heard_semi(1, semi, v),
+                R::Guitar(r, vel, len, d) => {
+                    self.heard_semi(3, r, vel as f32 / 127.0);
+                    if self.gm.is_some() {
+                        self.note(RAGE_GTR[0], r, vel, len, d);
+                        self.note(RAGE_GTR[0], r + 7, vel - 8, len, d);
+                        self.note(RAGE_GTR[1], r + 7, vel - 10, len, d + 0.04);
+                        self.note(RAGE_GTR[1], r + 12, vel - 14, len, d + 0.04);
+                    }
+                }
+                R::Say(t) => {
+                    let pose = match self.rage.sec {
+                        crate::rage::Sec::Verse | crate::rage::Sec::Break => Pose::Calm,
+                        crate::rage::Sec::Build | crate::rage::Sec::Stop | crate::rage::Sec::Pre | crate::rage::Sec::Solo => Pose::Point,
+                        _ => Pose::Surge,
+                    };
+                    self.cond_say(t.into(), pose, None);
+                }
+                R::Section(sec) => self.rage_section(sec),
+                R::Drop => {
+                    let k = self.key();
+                    let to = Key { tonic: (k.tonic - 1).rem_euclid(12), minor: true };
+                    self.harm.jump_to(to, "industrial: the riff drops a semitone");
+                    self.bars_since_change = self.cur_bpc;
+                    self.say(format!("~ industrial: key drop {} → {}", k.name(), to.name()));
+                    self.mood.impulse(crate::mood::Mood::Frustrated, 0.4);
+                }
+                R::Log(t) => self.band_say(t),
+                R::Note(ch, semi, vel, len, d) => {
+                    if self.gm.is_some() {
+                        self.note(RAGE_CH[ch as usize % 6], semi, vel, len, d);
+                    }
+                }
+                R::Bend(ch, v, d) => {
+                    if self.gm.is_some() {
+                        let at = self.now + (d.max(0.0) * self.step_len) as u64;
+                        self.evs.push(Ev { at, ch: RAGE_CH[ch as usize % 6], key: 0, vel: -(v.clamp(0, 16383) + 1) });
+                    }
+                }
+                R::Shout(t) => {
+                    self.front = (t, self.now);
+                    self.say(format!("♪ frontman: “{t}”"));
+                }
+                R::Plan(chords, why) => {
+                    self.harm.set_plan(chords, &why);
+                }
+                R::Heard(p, semi, v) => {
+                    if p < 6 {
+                        self.heard_semi(p, semi, v);
+                    }
+                }
+            }
+        }
+        self.rage.ev = evs;
+    }
+
+    fn rage_section(&mut self, sec: crate::rage::Sec) {
+        use crate::mood::Mood;
+        use crate::rage::Sec;
+        if sec != Sec::Lope {
+            self.feel = if sec == Sec::Half { Feel::Half } else { Feel::Normal };
+        }
+        let id = self.sty().id;
+        self.mark(if id == "biker" { "biker section" } else { "industrial section" });
+        let len = self.rage.sec_len;
+        if sec == Sec::Lope {
+            self.say(format!("~ {id}: the V-twin lope takes over"));
+        } else if id == "biker" {
+            self.say(format!("~ {id}: {} for {len} bars (intensity {:.2})", self.rage.sec_name(), self.rage.int));
+        } else {
+            self.say(format!("~ {id}: {} for {len} bar{} (intensity {:.2}, riff {})", sec.name(), if len == 1 { "" } else { "s" }, self.rage.int, self.rage.riff.mode_name()));
+        }
+        let biker = self.rage.kind == crate::rage::Kind::Biker;
+        let (d, b, k) = if biker { match sec {
+            Sec::Verse => ("verse → kick 1 & 3, snare cracking on 2 & 4, 8th hats", "galloping with the guitars", "palm-muted gallop: 8th + two 16ths"),
+            Sec::Pre => ("pre-chorus → double-kick gallop, snare roll into the chorus", "climbing with the changes", "gallop on the lift, fifths on top"),
+            Sec::Chorus => ("CHORUS → double-kick gallop, crashes, ride", "roots on the gallop", "big ringing open chords"),
+            Sec::Solo => ("solo → riding the groove under the twin guitars", "gallop", "twin leads in thirds, bends, a pinch squeal"),
+            _ => ("V-twin lope: long-short kicks + floor toms", "deep root thuds on the lope", "chugs on the lope"),
+        } } else { match sec {
+            Sec::Verse => ("menacing verse → ticking machine, a soft kick, side-stick", "sparse pulse on the root", "a muted chug now and then"),
+            Sec::Build => ("build → kick doubling, snare roll to 32nds, noise sweep rising", "8ths, filter opening", "palm-muted 8ths, getting louder"),
+            Sec::Chorus => ("WALL → distorted kick, gated snare on 2 and 4, 16th hats, metal", "driving 8ths/16ths locked to the kick", "the riff: power-chord chugs, double-tracked"),
+            Sec::Half => ("half-time crush → huge snare on 3, sheet metal", "long distorted roots", "open power chords ringing"),
+            Sec::Stop => ("stop-start hits, then a tape stop", "hits with the kick", "stabs and silence"),
+            Sec::Break => ("breakdown → one pounding kick", "out", "out"),
+            _ => ("", "", ""),
+        } };
+        for (i, t) in [(2usize, d), (1, b), (3, k)] {
+            self.hold[i] = 0;
+            let st = if sec.loud() { "soloing" } else { "following" };
+            self.think(i, st, t);
+        }
+        self.pin_surge();
+        self.rage_modes();
+        if biker {
+            match sec {
+                Sec::Chorus => self.mood.impulse(Mood::Delighted, 0.7),
+                Sec::Solo => self.mood.impulse(Mood::Inspired, 0.6),
+                _ => self.mood.impulse(Mood::Proud, 0.4),
+            }
+        } else {
+            match sec {
+                Sec::Chorus | Sec::Stop => self.mood.impulse(Mood::Frustrated, 0.7),
+                Sec::Half => self.mood.impulse(Mood::Annoyed, 0.6),
+                Sec::Build => self.mood.impulse(Mood::Impatient, 0.7),
+                _ => self.mood.impulse(Mood::Focused, 0.5),
+            }
+        }
+        self.pub_now = true;
+    }
+
+    /// melodic players per section: the lead screams in the wall, the colour
+    /// adds texture; both keep out of the menacing verses
+    fn rage_modes(&mut self) {
+        use crate::rage::Sec;
+        let (lead, colour) = if self.rage.kind == crate::rage::Kind::Biker { match self.rage.sec {
+            Sec::Verse => (RMode::Hold, RMode::Rest),
+            Sec::Pre => (RMode::Rest, RMode::Hold),
+            Sec::Lope => (RMode::Play, RMode::Rest),
+            _ => (RMode::Rest, RMode::Rest),
+        } } else { match self.rage.sec {
+            Sec::Verse => (RMode::Rest, RMode::Hold),
+            Sec::Break => (RMode::Rest, RMode::Rest),
+            Sec::Build => (RMode::Hold, RMode::Play),
+            Sec::Chorus => (RMode::Play, RMode::Hold),
+            Sec::Half | Sec::Stop => (RMode::Hold, RMode::Rest),
+            _ => (RMode::Rest, RMode::Rest),
+        } };
+        self.rmode[3] = RMode::Play;
+        for (i, m) in [(4usize, lead), (5, colour)] {
+            if m != RMode::Rest {
+                self.on[i] = true;
+            }
+            self.rmode[i] = m;
+            self.cond.lay[i] = 0;
+            self.cond.hushv[i] = 1.0;
+        }
+    }
+
+    /// the conductor in Industrial: angry, pounding; no hushing, no lay-outs
+    fn rage_conduct(&mut self) {
+        use crate::mood::{Mood, N};
+        use crate::rage::Sec;
+        let mut t = [0f32; N];
+        if self.rage.kind == crate::rage::Kind::Biker {
+            let (a, b, c) = match self.rage.sec {
+                Sec::Chorus => (Mood::Delighted, Mood::Inspired, Mood::Proud),
+                Sec::Solo | Sec::Lope => (Mood::Inspired, Mood::Delighted, Mood::Proud),
+                _ => (Mood::Proud, Mood::Focused, Mood::Inspired),
+            };
+            t[a.idx()] = 0.6;
+            t[b.idx()] = 0.28;
+            t[c.idx()] = 0.12;
+            self.mood.toward(&t, 0.45);
+            let (dom, w) = self.mood.dom();
+            let what = match self.rage.sec {
+                Sec::Verse => "keep the gallop tight",
+                Sec::Pre => "lift — chorus coming",
+                Sec::Chorus => "ALL TOGETHER NOW",
+                Sec::Solo => "twin guitars, go",
+                _ => "open the throttle",
+            };
+            self.brain_line = format!("{} {w:.2} → {what}", dom.name());
+            if self.now >= self.cond.pose_until {
+                let (pose, line) = match self.rage.sec {
+                    Sec::Verse => (Pose::Calm, ["ride!", "steady, riders", "gallop!"][self.rng.below(3)]),
+                    Sec::Pre => (Pose::Point, "here it comes…"),
+                    Sec::Chorus => (Pose::Surge, ["SING IT!", "ALL TOGETHER NOW!", "louder, riders!"][self.rng.below(3)]),
+                    Sec::Solo => (Pose::Point, "take it, boys!"),
+                    _ => (Pose::Surge, "open the throttle!"),
+                };
+                if pose != self.cond.pose || self.rng.chance(0.25) {
+                    self.cond.pose = pose;
+                    self.cond.speech = line.into();
+                }
+            }
+            return;
+        }
+        let (a, b, c) = match self.rage.sec {
+            Sec::Chorus | Sec::Stop => (Mood::Frustrated, Mood::Impatient, Mood::Annoyed),
+            Sec::Half => (Mood::Annoyed, Mood::Frustrated, Mood::Focused),
+            Sec::Build => (Mood::Impatient, Mood::Frustrated, Mood::Focused),
+            _ => (Mood::Focused, Mood::Annoyed, Mood::Impatient),
+        };
+        t[a.idx()] = 0.6;
+        t[b.idx()] = 0.28;
+        t[c.idx()] = 0.12;
+        self.mood.toward(&t, 0.45);
+        let (dom, w) = self.mood.dom();
+        let what = match self.rage.sec {
+            Sec::Verse => "keep it low. wait.",
+            Sec::Build => "build it. LOUDER.",
+            Sec::Chorus => "LOUDER.",
+            Sec::Half => "crush it.",
+            Sec::Stop => "break it.",
+            _ => "one kick. pound it.",
+        };
+        self.brain_line = format!("{} {w:.2} → {what}", crate::mood::rage_name(dom));
+        if self.now >= self.cond.pose_until {
+            let (pose, line) = match self.rage.sec {
+                Sec::Verse => (Pose::Calm, ["…", "quiet.", "let it seethe."][self.rng.below(3)]),
+                Sec::Break => (Pose::Calm, "pound it."),
+                Sec::Build => (Pose::Point, "more. MORE."),
+                Sec::Stop => (Pose::Point, "break it."),
+                Sec::Chorus => (Pose::Surge, ["LOUDER.", "again!", "HARDER."][self.rng.below(3)]),
+                _ => (Pose::Surge, "crush it."),
+            };
+            if pose != self.cond.pose || self.rng.chance(0.25) {
+                self.cond.pose = pose;
+                self.cond.speech = line.into();
+            }
+        }
     }
 
     /// Colour player's industrial texture: only when the band hears real chaos
@@ -3541,9 +4271,12 @@ impl Engine {
             }
         }
         // techno: kick and acid bass never leave (the arrangement does the dynamics)
-        if self.sty().relax {
+        if self.sty().relax || self.sty().rage.is_some() {
             self.on[1] = true;
             self.on[2] = true;
+        }
+        if self.sty().rage.is_some() {
+            self.on[3] = true;
         }
         // bassist mode (always present, never silent)
         let inv = self.leader.invite(P::Bass) + (self.persona[1].eager - 0.5) * 0.1;
@@ -3612,6 +4345,14 @@ impl Engine {
     /// Each melodic player asks itself: do I have something useful to add?
     /// Play, hold one long tone, or rest for this phrase.
     fn restraint_phrase(&mut self) {
+        if self.blues_live {
+            self.blues_modes();
+            return;
+        }
+        if self.sty().rage.is_some() {
+            self.rage_modes();
+            return;
+        }
         let st = self.leader.state;
         let surge = self.feel == Feel::Surge;
         let target = self.melodic_target();
@@ -3694,6 +4435,9 @@ impl Engine {
     /// voice playing and (unless someone was asked to play alone) two melodic players
     /// in, so the pad + bass never sit there on their own.
     fn floor_phrase(&mut self) {
+        if self.machine() {
+            return;
+        }
         let lone = self.leader.lone.is_some();
         let in_ = |e: &Engine, i: usize| e.on[i] && e.cond.lay[i] == 0 && e.rmode[i] != RMode::Rest;
         let n_play = (3..6).filter(|&i| in_(self, i) && self.rmode[i] == RMode::Play).count();
@@ -3900,6 +4644,14 @@ impl Engine {
             + 0.1 * (c.loud + 14.0).max(0.0);
         self.cond.clutter = clutter;
         self.mood_bar(bar, clutter, m / target, stepping);
+        if self.blues_live {
+            self.blues_conduct();
+            return;
+        }
+        if self.sty().rage.is_some() {
+            self.rage_conduct();
+            return;
+        }
         let strict = self.sty().strict * self.mood.strictness();
         let gen = self.mood.generosity();
         let act = self.brain_act;
@@ -4417,7 +5169,7 @@ impl Engine {
             State::Subside => cb,
         };
         // 12-bar blues: one bar per chord, always
-        if self.sty().harm == Harm::Blues {
+        if matches!(self.sty().harm, Harm::Blues | Harm::Song) {
             self.cur_bpc = 1;
         }
         self.history.push_back(c.name());
@@ -4487,7 +5239,7 @@ impl Engine {
             self.guest_semi = self.guest_pitch();
         }
         // bassist: sustain mode strikes on chord changes
-        if self.bass_mode == BassMode::Sustain {
+        if self.bass_mode == BassMode::Sustain && !self.blues_live {
             self.bass_note(0, 0.75, 0.25, 5.0);
         }
         self.pad_pcs = c.pcs();
@@ -4656,6 +5408,10 @@ impl Engine {
     /// The drummer's own per-phrase restraint: drums are for alive moments and surges.
     /// Rest (out), Hold (minimal: a soft downbeat and a couple of ticks) or Play.
     fn drums_phrase(&mut self) {
+        if self.machine() {
+            self.rmode[2] = RMode::Play;
+            return;
+        }
         let st = self.leader.state;
         let surge = self.feel == Feel::Surge;
         let was = self.rmode[2];
@@ -5497,6 +6253,10 @@ impl Engine {
     }
 
     fn want_synth(&mut self, pl: usize) -> bool {
+        // a style with no synth at all (Country): acoustic instruments only
+        if self.sty().synth <= 0.0 && self.gm.is_some() {
+            return false;
+        }
         self.gm.is_none() || self.rng.chance((self.persona[pl.min(5)].synth * self.sty().synth).clamp(0.02, 0.95))
     }
 
@@ -5827,6 +6587,14 @@ impl Engine {
     }
     fn bell_for(&mut self, who: usize, semi: f32, gain: f32, delay_s: f32) {
         let _ = delay_s;
+        if self.sty().synth <= 0.0 && self.gm.is_some() {
+            // no synth bells in Country: a woodblock or cowbell accent instead, on the beat
+            if (self.step % 4) == 1 && self.rng.chance(0.5) {
+                let key = if self.rng.chance(0.6) { 76 } else { 56 };
+                self.drum(key, (20.0 + 30.0 * gain) as i32, 0.0);
+            }
+            return;
+        }
         let Some((v, _)) = self.gate_x(who, (gain * 100.0) as i32, 2.0, true, true) else { return };
         let gain = v as f32 / 100.0;
         let semi = self.in_key(who, semi.round() as i32, 40) as f32;
@@ -6057,6 +6825,17 @@ impl Engine {
             let gmg = 5.2 + 1.6 * self.leader.energy;
             let now0 = self.now;
             self.pool.render(now0, n, &self.tbl);
+            let rage_on = self.rage.active();
+            if rage_on {
+                self.rage.render(n, &self.tbl);
+            }
+            // the machine styles: the drone's pad and sub step back (Blues: a faint warm bed)
+            let duck_t = if self.rage_live { 0.25 } else if self.blues_live { 0.5 } else { 1.0 };
+            self.rage_duck += (duck_t - self.rage_duck) * 0.01;
+            let trim_t = if self.sty().synth <= 0.0 && self.gm.is_some() { 0.25 } else { 1.0 };
+            self.bed_trim += (trim_t - self.bed_trim) * 0.01;
+            let duck = self.rage_duck * self.bed_trim;
+            let sub_duck = self.rage_duck * (0.45 + 0.55 * (self.bed_trim - 0.25) / 0.75);
             for j in 0..n {
                 if self.cr_count == 0 {
                     self.control_rate();
@@ -6067,8 +6846,8 @@ impl Engine {
                 self.cr_count -= 1;
                 let tbl = &self.tbl;
                 // pad (low-mids)
-                let pl = self.pad_f[0].run(self.padl[ci] * self.pad_norm).0 * self.bed_g;
-                let pr = self.pad_f[1].run(self.padr[ci] * self.pad_norm).0 * self.bed_g;
+                let pl = self.pad_f[0].run(self.padl[ci] * self.pad_norm).0 * self.bed_g * duck;
+                let pr = self.pad_f[1].run(self.padr[ci] * self.pad_norm).0 * self.bed_g * duck;
                 // sub drone 30-60 Hz: detuned sine pair + a little 2nd/3rd harmonic
                 let f = semi_to_freq(self.root, self.sub_semi);
                 let i1 = f / sr;
@@ -6079,7 +6858,7 @@ impl Engine {
                 let sub = (sine(tbl, p1) + sine(tbl, self.sub_ph[1])) * 0.5
                     + sine(tbl, (p1 * 2.0).fract()) * 0.22
                     + sine(tbl, (p1 * 3.0).fract()) * 0.06;
-                let sub = sub * self.sub_level * 0.16;
+                let sub = sub * self.sub_level * 0.16 * sub_duck;
                 // bass voice 40-120 Hz
                 let mut bass = 0.0;
                 if self.bass_env > 1e-4 || self.bass_attack {
@@ -6242,6 +7021,10 @@ impl Engine {
                 let low = sub + bass + kick + rev; // mono low end, never high-passed
                 let mut l = pl + low + bl + cl + ml + yl + gl + air + hat + ris + dl * 0.3 + rl;
                 let mut r = pr + low + br + cr + mr + yr + gr - air * 0.7 + hat + ris + drr * 0.3 + rr;
+                if rage_on {
+                    l += self.rage.l[j];
+                    r += self.rage.r[j];
+                }
                 if self.fade < self.fade_target {
                     self.fade = (self.fade + self.fade_step).min(self.fade_target);
                 } else if self.fade > self.fade_target {
@@ -6277,7 +7060,15 @@ impl Engine {
                         m.p[c][k] += 0.5 * (a * a + b * b);
                     }
                 }
-                let (ol, or) = self.lim.run(l, r);
+                let (ol, or) = if rage_on {
+                    // the wall: a hotter limiter + soft clip, scaled so peaks top out at −1 dBFS
+                    // biker's GM guitar/choir wall is denser: 2.5 dB less into the limiter
+                    let pre = if self.rage.kind == crate::rage::Kind::Biker { 0.75 } else { 1.0 };
+                    let (a, b) = self.rage_lim.run(l * pre, r * pre);
+                    (a * 0.891, b * 0.891)
+                } else {
+                    self.lim.run(l, r)
+                };
                 out[(fi + j) * 2] = ol;
                 out[(fi + j) * 2 + 1] = or;
                 // three one-pole splits: <60 Hz, <250 Hz, <3 kHz (UI meters + the conductor's ears)

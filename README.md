@@ -32,7 +32,16 @@ he learns what you like, but **only** when you press **`l`** (like). See
 
 (Formerly developed under the working name *sysmusic*.) Listen: [`docs/sample.mp3`](docs/sample.mp3) is a 75 s demo at 192 kbps. It starts calm with no hiss, then hits chaos (CPU + network + disk load plus simulated fast typing), where a short burst of industrial noise comes in, then settles again. Its verbose log is `docs/sample-render.log`. [`docs/sample-tempo.mp3`](docs/sample-tempo.mp3) is a 90 s demo (seed 5, made with `tools/demo_tempo.sh`). It starts in A major at 84 bpm, and the tempo eases down to 73 while the band is chilling. Under load (from 18 s) the band comes alive and ramps toward 97 bpm. At about 60 s a **surge** opens the throttle from 85 to 133 bpm with the V-twin lope, while the band modulates to D minor. The surge winds down to 109 bpm at about 75 s, and the band then subsides. Its log is `docs/sample-tempo-render.log`.
 
-![sysjam's live terminal UI mid-transition: two ↑ presses gave tempo bias +14, then ← switched Country to Blues; the players change over one by one ("conductor went Blues → picking up a fingered bass"), and the crowd of processes below holds up lighters](docs/tui.png)
+Per-style samples (offline renders, GM TimGM6mb):
+[`docs/sample-industrial.mp3`](docs/sample-industrial.mp3) (60 s: a menacing verse, a build, the
+wall-of-sound chorus, a one-kick breakdown, the next build and chorus; −12.6 LUFS, peaks −0.8 dBFS),
+[`docs/sample-biker.mp3`](docs/sample-biker.mp3) (60 s: a galloping verse, the pre-chorus, the
+chorus hook with the gang vocals and choir, a twin-guitar solo, the chorus again; −11.8 LUFS) and
+[`docs/sample-blues.mp3`](docs/sample-blues.mp3) (30 s: the end of a 12-bar shuffle chorus with the
+harp's calls and the guitar's answers, the turnaround, then a harmonica solo chorus, conductor:
+"take it, harp!", from 8.2 s; −15.2 LUFS, peaks −2.0 dBFS).
+
+![sysjam's live terminal UI just after a style switch: two ↑ presses gave tempo bias +14, then ← switched Country to Blues; the band is on a lit stage with its instruments (grand piano, upright bass, drum kit, guitar, harp), the conductor says "Lord have mercy… let's play the blues", the header shows the I7–IV7–V7 12-bar shuffle, and the crowd of processes dances below](docs/tui.png)
 
 One static-ish binary (`sysjam`, ~2.2 MB, x86_64, needs glibc ≥ 2.29). It
 links only libc, libm, libpthread and libdl. ALSA, D-Bus and PipeWire are
@@ -177,11 +186,14 @@ The arrow keys only work in the TUI; `--style` and `--tempo-bias` are the comman
 
 The UI runs in its own thread at nice 5. The audio thread publishes a small snapshot about every
 100 ms with a non-blocking `try_lock`, so a slow or stalled terminal can never hold up the audio.
-The whole UI refreshes about 3 times a second; in between, only the little people (and the beat
+The whole UI refreshes about twice a second; in between, only the little people (and the beat
 dots) are redrawn, at about 16 fps, straight to the changed cells, plus one extra frame exactly on
-every beat. The crowd moves at about 8 fps (and on every beat). Frames where nothing moved are
-skipped, and only colour changes are sent to the terminal. That keeps the UI thread at about 0.40%
-of one core with the crowd on (measured below).
+every beat. The stage and the crowd move at about 7–8 fps (and on every beat) and are diffed cell by
+cell against what is already on screen, so only the cells that actually changed are sent (about
+1,150–1,350 cells a second with the stage, lights and crowd on). The big background washes of the
+stage lights change bar by bar; the lamps and beam edges pulse on the beat. Frames where nothing
+moved are skipped, and only colour changes are sent to the terminal. That keeps the UI thread at
+about 0.42–0.47% of one core with the stage and the crowd on (measured below).
 
 All figures are drawn only from ASCII, light box drawing (`─│┌┐└┘├┤┬┴┼╭╮╯╰╱╲`) and `♪ ♫ • ·`:
 no block or shade elements (hats are drawn with box lines, e.g. the cowboy hat `~╭^╮~`), no heavy/light mixing, no rare
@@ -189,6 +201,41 @@ IPA letters, no emoji, no combining characters or variation selectors. Every fra
 mood, style and instrument is checked by a unit test to be exactly 12 (conductor) or 10
 (musician) cells wide by `unicode-width`, so nothing shears in any terminal font. (The old Tribal
 figure's `╿╽` headdress, `ᴗ` mouth and `▒` robe are gone: it now wears `\|||/`.)
+
+### The stage
+
+When the band panel has room (at least 64 × 18 cells inside; the 170 × 56 layout has plenty) the
+band plays **on a stage** instead of the list:
+
+- **A lighting truss** with lamps whose beams fan out over the players: the beam edges are drawn
+  with `╱ ╲` and the inside is a translucent wash (the light's colour blended into the
+  background, truecolor or the nearest 256-colour step). They pulse on the beat, all flash on the
+  downbeat and change colour with the section. The mood picks the rig: a red strobe on the 16ths
+  in Industrial's wall of sound and builds, steady warm amber in Jazz, Blues, Country and Baroque,
+  the theme's six accents cycling elsewhere. Amp stacks stand at the edges (with `##` grilles in
+  Industrial).
+- **Each player with their instrument as a prop**, picked from the GM program or synth behind
+  them: a grand piano with its lid up (programs 0–2), an upright/honky-tonk (3, 6), stage keys, an
+  organ with pipes and drawbars, a drum kit (taiko for Ambient Monk, timpani for Baroque, a metal
+  rig of pipes, sheet metal and drums for Industrial), a double bass or cello with its bow, a
+  bass guitar, a harp, a tuba/sousaphone, guitar, banjo, fiddle, sax, trumpet/brass, flute,
+  harmonica, accordion, bagpipes, sitar, koto, kalimba, steel drums, marimba/vibes, tubular bells,
+  a gong, a synth rig with a patch wall, a modular for the drone, DJ decks in Techno and a
+  vocalist's mic (the Biker frontman). Big instruments get wide slots; when the stage is tight
+  the amps go first, then synth rigs and then the others fall back to the small figures, the
+  drums last. Frame 2 is the hit, from the same heard-note clock as everything else: keys go down,
+  cymbals shake, the bow moves, harp strings shimmer, the tuba puffs a `♪`. A new instrument is
+  carried off to the right and the new one wheeled on (1 s). A soloist steps forward a row.
+- **One-line captions** (`keys·grand·E`, the addressed player highlighted), the **stage lip**,
+  and on the apron the **conductor from behind**, facing the band (baton; sledgehammer in
+  Industrial, bandana in Biker), the frontman's yells in a bubble, and wedge monitors.
+- Under the stage, **one condensed "thinking" line per player** (`bassist ↳ locked to the kick`).
+- Small terminals keep the old list view with the little figures. `SYSJAM_STAGE=0` forces it.
+
+All prop art is static text built once (two frames per prop), only from the same width-safe glyph
+set as the figures; a unit test checks every frame for width and glyphs and that it has exactly
+one face. The stage is redrawn in the in-between frames like the figures and crowd, and only the
+runs of cells that changed are written.
 
 ### In time with the audio
 
@@ -234,12 +281,12 @@ drums play (Space Cadet and Techno loosen this). Restraint and CPU stay as befor
 | **House Band** | the balanced default: a bit of everything, nothing pushed |
 | **Ambient Monk** | 50–84 bpm drones, sparse, strict hush, Lydian/major drone harmony, pads and choirs, almost no drums |
 | **Jazz Cat** | swing, ii–V–I and turnarounds with sevenths everywhere, walking upright bass, brushes and ride, EP/vibes/sax, more quotes, a loose conductor |
-| **Blues** | 12-bar form (standard, quick-change, VI7–ii–V and I–IV turnarounds), dominant sevenths, the blues scale with b3/b5/b7 on lead and colour (GM blue notes scooped up with pitch bend), triplet shuffle at 60–100 bpm, boogie bass 1-3-5-6-b7-6-5-3, harmonica/overdrive/organ/piano, call and response between lead and colour |
-| **Country** | I–IV–V, I–vi–IV–V and mixolydian I–bVII–IV, 80–120 bpm, train beat (brushed sixteenths) or two-step, boom-chick bass with walk-ups, chick strums on 2 and 4, steel and nylon guitars, fiddle, banjo, harmonica |
-| **Biker** | V-twin surges four times as likely, heavy low kick, distorted guitars and organ, Mixolydian rock changes, faster |
+| **Blues** | its own band (`src/blues.rs`): a swinging 12-bar shuffle in a major/dominant key (I7–IV7–V7, quick change now and then, a turnaround with a tom-triplet fill) at 80–120 bpm. **Every player swings the same triplet grid** (the "and" lands 2/3 through the beat, 2:1): ride/hat shuffle with the backbeat snare accented on 2 and 4 and the kick pushing into 3 and into the next bar, a boogie-woogie walking bass 1-3-5-6-b7-6-5-3 in swung 8ths, piano stabs (3-b7-9 shells) on the "and"s with anticipations of the next chord and a boogie left hand, the guitar's 5-6 shuffle chug, a warm GM organ bed, harmonica calls with bends and wails answered by guitar licks. Melody comes **only from blues scales** (minor blues 1 b3 4 b5 5 b7, major blues 1 2 b3 3 5 6, Mixolydian over the V7); no per-player keys, no modal drift, no minor dirges. The "synth seat" plays **featured solos** instead: 1–3 choruses of harmonica first, then guitar, tenor sax, a piano break or slide guitar, with AAB phrasing (a riff, the riff again over the IV, an answer), climbing register and heat each chorus while the band backs off; the conductor cues it ("take it, harp!", "Lord have mercy!") and the soloist steps forward on the stage. Synth: only a faint pad bed and a quiet sine under the bass |
+| **Country** | I–IV–V, I–vi–IV–V and mixolydian I–bVII–IV, 80–120 bpm, train beat (brushed sixteenths, cowbell on the beats) or two-step, boom-chick bass with walk-ups, chick strums on 2 and 4; acoustic instruments only: steel and nylon guitars, fiddle, banjo, accordion, honky-tonk piano (rolls into the turnaround, comping), harmonica fills between phrases (with a blues-harp bend); woodblock/cowbell accents instead of synth bells. The synth almost disappears (a barely audible pad bed, a quiet warm sub) |
+| **Biker** | hard rock at 110–160 bpm with a song form: verse → pre-chorus → CHORUS with a recurring hook (the same motif and progression come back, e.g. i–bVI–bVII–i or I–bVII–IV), and twin-guitar solos. Maiden gallops (8th + two 16ths) on two GM distortion/overdrive guitars, synth chugs and the bass, double-kick gallops; big kick, snare on 2 and 4, crashes, tom fills; open ringing chords in the chorus; twin leads in thirds, pinch squeals and bends; formant-synthesized vocals (shouts, growls, "yeah!", gang "whoa-oh") plus GM Choir Aahs/Voice Oohs in the chorus. The V-twin lope surges still come (from a verse). E or A, minor or Mixolydian |
 | **Baroque** | chorale cadences and Pachelbel-ish progressions, harpsichord, strings, church organ, contrabass, Bach/Handel/Mozart/Haydn quotes favoured, a steady tempo |
 | **Celtic Session** | fiddle, whistle, pipes and harp, hand-drum figures, Dorian/Mixolydian modal changes, O'Neill's/Ryan's/Aird's tunes favoured |
-| **Industrial** | metallic synth patches (FM-heavy), deliberate gated noise in alive moments, machine kits, minor/Phrygian |
+| **Industrial** | a NIN/Pig-style wall of sound (`src/rage.rs`) at 100–140 bpm: distorted synth kick with a click, gated metallic (ring-modulated) snare, mechanical 16th hats, FM anvils/sheet metal/pipes, tom fills; a distorted saw/square bass with a sub, locked to the kick, on Phrygian/Locrian/chromatic riffs that mutate; double-tracked GM distortion/overdrive guitar chugs; grit pads, whispers, noise sweeps and static. i–bII and i–bv harmony with sudden semitone key drops; menacing verse → build → wall-of-sound chorus, half-time crushes, stop-start hits with a tape stop, one-kick breakdowns and odd 7/8 bars, driven by load and typing. DSP: waveshaping with tone control, bitcrush, ring mod, an 8 kHz ceiling, a bus compressor and limiter (peaks ≈ −1 dBFS, loudness like the other styles). An angry conductor with a sledgehammer ("LOUDER.", "break it.", "again!") |
 | **Techno** | 120–135 bpm even while chilling (minimal/dub techno), four-on-the-floor deep synthesized sub kick (~50 Hz), off-beat open hats, claps on 2 and 4, an acid 303-style line (resonant filter, accents, slides, a slow sweep over 32 bars), dub chord stabs on the off-beat into the echo, and 16/32-bar grooves → breakdowns → builds (snare roll, filter opening) → drops driven by the machine's intensity. The drums stay in and the synth isn't pushed back, but there is a hard cap of 4–5 layers and no hiss |
 | **Space Cadet** | synth-forward (wavetable/FM, +4 dB allowance), slow, evolving, Lydian and major-third colours |
 | **Tribal / Gamelan** | hand percussion carries a 3+3+2 cycle, pelog-ish five-note melodies in minor and pentatonic in major, kalimba, steel drums, marimba, taiko |
@@ -271,10 +318,10 @@ speech marks. A few examples:
 - Blues: deep indigo and smoky blue; a pork-pie hat and sunglasses (off when he's upset); ♪.
 - Techno: neon black with cyan and magenta; borders and meters pulse on the kick; headphones and a DJ deck with spinning platters instead of a baton.
 - Jazz: warm amber; a beret; 🎷.
-- Biker: black and chrome orange; a bandana; flame meters.
+- Biker: black and chrome orange; a bandana (on the stage too, cueing "ALL TOGETHER NOW"); flame meters; the crowd throws the horns `\m/` and puts its fists up for the chorus.
 - Baroque: cream and gold; powdered wigs `@@@@@` with curls `{ }`; ornate double borders.
 - Celtic: greens; knotwork-ish borders (`✠∞∞✠`, `§`); a flat cap.
-- Industrial: rust grey; a hard hat; hazard-stripe borders.
+- Industrial: rust, red and black; a hard hat and a sledgehammer smashed down on the beat; hazard-stripe borders (`╱╱`) that glitch-flicker to amber and red in the wall of sound; the crowd moshes, headbangs and stomps.
 - Ambient Monk: soft lavender; a hood and robe; minimal borders.
 - Space Cadet: deep-space palette; a helmet; 🚀.
 - Gamelan: batik browns and golds; a `\\|||/` headdress.
@@ -362,6 +409,21 @@ how many kernel threads stay backstage.
   conductor). When it's chilling they mingle and nod. A like gets a round of applause. By style:
   cowboy hats and a grapevine in Country, glowsticks and the running man in Techno, a swing step
   with lighters in Blues, wigs, minuets and a polite golf clap in Baroque. After `n` they cheer briefly.
+  Industrial's wall of sound starts a mosh pit (headbanging hair flips, flailing fists, people
+  shoved sideways, stomps); in Biker everyone throws the horns `\m/` and puts their fists up to
+  sing along in the chorus; in Blues they swing-step on the shuffle and cheer the solos.
+- **Depth:** the floor has three layers. People drift **toward the stage** while the band is hot
+  and **back toward the bar** when idle or chilling (some always hang back). The back row is drawn
+  as smaller 3-row figures, hazier (their colour blended toward the background, precomputed per
+  theme; 256-colour terminals get the nearest dimmer step), then the middle, then the front row at
+  the stage, painted back to front so whoever is in front hides who is behind. A floor gradient
+  and a little drifting haze sit behind them. Name tags only for the middle and front rows.
+  ASCII / NO_COLOR terminals keep the depth through the small back figures.
+- **Held up overhead, now and then:** a beer 🍺, wine 🍷, an eggplant 🍆 or a phone 📱 (filming, its
+  screen glowing cyan in the big moments), swaying on the beat; lighters in Blues, glowsticks in
+  Techno (alternating green and magenta). Only a few at a time, mostly while the crowd is hyped,
+  in surges and choruses. Emoji are only used where a terminal draws them 2 cells wide (the
+  in-between frames skip the covered cell); ASCII (or `SYSJAM_EMOJI=0`) gets `U`, `Y`, `@` and `[]`.
 - **And back (lightly):** the crowd's excitement (how many there are × how busy × how alive the
   band is, smoothed over 6 s) adds at most 0.06 to the band's energy input. Above 0.55 the
   conductor may say so ("the crowd's into it!", at most every 2 minutes) and gets a small lift
@@ -1044,8 +1106,29 @@ Measured exactly (schedstat, all threads) on an 8-vCPU Xeon VM:
 | Techno, live animated UI (~16 fps figures, beat-locked frames), WAV sink, 40 s of a 75 s run, per thread | audio/engine thread 1.47%, **UI thread 0.45%**, monitor 0.10% (≈2.0% total) | |
 | same, **with the audience** (crowd of 7 on the floor, its own census, cheaper terminal output) vs `--no-audience` (previous output path) | engine 1.27%, **UI 0.40%**, monitor 0.10% (≈1.8% total; census 0.13 ms per 1.5 s) vs UI 0.42% | |
 | Techno / Space Cadet, live UI at 170×56 with the 5-row crowd, legs, beat-synced feet, next-idea + never-dead-air engine, WAV sink, 40 s of a 75 s run, per thread | engine 1.55% / 1.37%, **UI 0.45% / 0.42%**, monitor 0.12% (≈2.1% / 1.9% total) | |
+| Industrial / Biker / Blues, live UI at 170×56 with **the stage** (lights, props, apron) and the 3-layer crowd, WAV sink, 40 s of a 75 s run, per thread | engine 2.47% / 2.45% / 1.90%, **UI 0.47% / 0.45% / 0.42%**, monitor 0.10–0.12% (≈3.0% / 3.0% / 2.4% total) | |
+| offline bench (40 s idle / 80 s busy / 80 s idle), busy phase, TimGM6mb: Industrial wall of sound (3 seeds) / Biker hard rock / Blues shuffle (2 seeds) | 2.32–2.79% / 1.92–2.52% / 2.55–2.75% (before: Industrial 1.84–2.21%, Blues 1.79–1.99%) | |
 | the conductor's MLP (once a bar, offline bench) | 1–3 µs per call, ≈0.0001% | |
 | alive under heavy load (busy thread as guest, ~400 MB/s writes, ~40 MB/s downloads, file churn), UI on, X11 screen sampling, 60 s | 3.05% | |
+
+### Style rework, measured
+
+Offline bench (`SYSJAM_BENCH=1`, TimGM6mb, same box), previous release → this one:
+
+- **Industrial** (3 seeds): notes alive 770 → 1,000 per minute (+30%), drum hits alive 220 → 370
+  per minute (+68%); busy RMS −14.9 → −13.7 dBFS (peaks −1.0 dBFS after the limiter); the
+  250 Hz–4 kHz band (the guitar wall) −25.1 → −18.7 dB (+6.4 dB), 4–8 kHz −42…−49 → −28…−30 dB,
+  above 8 kHz still low (−37…−39 dB).
+- **Country**: the synth's share of the melodic power (synth patches + pad + bells vs the GM
+  instruments) 17–27% → 1.2–1.6% while the drums rest, 1.6–2.5% → 0.08–0.18% while they play.
+- **Blues** (seeds 1, 2, 5): synth share 17–30% (resting) / 2–4% (playing) → 0.05–0.07%; minor-key
+  choruses 100% → 0% (always a major/dominant 12-bar); tempo 66–100 → 84–119 bpm; notes outside
+  the blues scales (minor blues, major blues, Mixolydian over the V7) 3.4% / 4.2% → 0.5% / 0.2% / 0.1%
+  of ~2,900–3,000 melodic notes
+  (the rest are anticipations across the bar line). Swing, from the note log (`SYSJAM_NOTES`):
+  the off-beat 8th sat at 0.500 of the beat (straight) for bass, lead and colour before → 0.667
+  for every player now (a 2:1 triplet shuffle); from onsets folded out of the rendered audio
+  0.668–0.670 → 0.668–0.672.
 
 ## Troubleshooting
 
@@ -1084,7 +1167,7 @@ Tools:
 - `tools/shot.sh` screenshots the TUI in tmux (optionally sending arrow keys) and renders it with `tools/ansi2png.py`, which carries tmux's SGR state across lines, draws double-width emoji, and falls back to Noto Sans Symbols and a monochrome Noto Emoji font (`SYSJAM_EMOJI_FONT`, OFL, not shipped) for glyphs DejaVu lacks. `LOAD=75 tools/shot.sh country 55 "--seed 3 --style country"` made the gallery.
 - `tools/measure.py SECS ./sysjam --null` measures sysjam's own CPU.
 - `tools/portal_test.sh BIN COLOR ARGS…` runs the end-to-end portal test. It uses a private D-Bus, pipewire, wireplumber, a GStreamer test source and `tools/mock_portal.py`.
-- `SYSJAM_BENCH=1 SYSJAM_BENCH_LOG=1 ./sysjam --seed 1` gives an offline 200 s timeline with CPU figures, per-player note density per state, the conductor's intervention count and the list of theme quotes. Add `SYSJAM_RMS=1` for RMS per source (synth patches, pad bed, bells, sub, synth bass/kick, GM melodic, GM drums) split by drums playing/resting, and `SYSJAM_BENCH_SCALE=5` for a 5× longer timeline.
+- `SYSJAM_BENCH=1 SYSJAM_BENCH_LOG=1 ./sysjam --seed 1` gives an offline 200 s timeline with CPU figures, per-player note density per state, the conductor's intervention count and the list of theme quotes. Add `SYSJAM_RMS=1` for RMS per source (synth patches, pad bed, bells, sub, synth bass/kick, GM melodic, GM drums) split by drums playing/resting, and `SYSJAM_BENCH_SCALE=5` for a 5× longer timeline. `SYSJAM_NOTES=notes.txt` writes every played note (step position, player, pitch class relative to the tonic, chord root, scale, style, bpm, velocity; drum hits too), which is what the Blues swing and scale-conformance figures above are computed from.
 - `tools/extract_themes.py` regenerates `assets/themes/themes.txt` from the music21 corpus (see *Themes*).
 
 ## Licence

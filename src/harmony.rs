@@ -58,7 +58,7 @@ const FLATS: [&str; 12] = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A",
 const SHARPS: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 /// pitch class (C = 0) of semitone 0, i.e. of --root
-static ROOT_PC: AtomicI32 = AtomicI32::new(9);
+pub static ROOT_PC: AtomicI32 = AtomicI32::new(9);
 /// spell with sharps (follows the current key signature)
 static USE_SHARPS: AtomicBool = AtomicBool::new(false);
 /// C major / A minor: usual chromatic spellings (C# Eb F# G# Bb)
@@ -284,7 +284,7 @@ pub struct Change {
 }
 
 /// style-flavoured phrase templates (0 drone, 1 jazz, 2 rock, 3 chorale, 4 modal,
-/// 5 12-bar blues (one bar per chord), 6 country, 7 techno loops)
+/// 5 12-bar blues (one bar per chord), 6 country, 7 techno loops, 8 industrial riffs)
 pub const STYLE_TEMPLATES: &[(u8, Template)] = &[
     (5, Template { minor: false, chords: &["I7", "I7", "I7", "I7", "IV7", "IV7", "I7", "I7", "V7", "IV7", "I7", "V7"], w: 3.0 }),
     (5, Template { minor: false, chords: &["I7", "IV7", "I7", "I7", "IV7", "IV7", "I7", "I7", "V7", "IV7", "I7", "V7"], w: 2.5 }), // quick change
@@ -330,6 +330,16 @@ pub const STYLE_TEMPLATES: &[(u8, Template)] = &[
     (4, Template { minor: true, chords: &["i", "IV", "i", "IV"], w: 2.0 }), // Dorian
     (4, Template { minor: true, chords: &["i", "bII", "i", "VII"], w: 2.0 }), // Phrygian
     (4, Template { minor: true, chords: &["i", "VII", "i", "v"], w: 1.5 }),
+    // 8: industrial riff harmony — the tonic hammered, Phrygian bII and tritone bv moves
+    (8, Template { minor: true, chords: &["i", "i", "bII", "i"], w: 3.0 }),
+    (8, Template { minor: true, chords: &["i", "i", "bv", "i"], w: 2.0 }),
+    (8, Template { minor: true, chords: &["i", "bII", "i", "bv"], w: 2.0 }),
+    (8, Template { minor: true, chords: &["i", "i", "VI", "bII"], w: 1.5 }),
+    (8, Template { minor: true, chords: &["i", "bII", "bv", "i"], w: 1.5 }),
+    (8, Template { minor: true, chords: &["i", "i", "i", "bII"], w: 2.0 }),
+    // 9: biker song form (the machine normally plans each section itself)
+    (9, Template { minor: true, chords: &["i", "VII", "VI", "VII"], w: 2.0 }),
+    (9, Template { minor: false, chords: &["I", "bVII", "IV", "I"], w: 2.0 }),
 ];
 
 pub struct Harmony {
@@ -489,9 +499,14 @@ impl Harmony {
 
     fn plan_inner(&mut self, meander: bool) {
         // form-driven styles never meander off their form
-        let meander = meander && !matches!(self.flavour, Some(5) | Some(6) | Some(7));
-        // 12-bar blues and techno loops hold their form: no modulations or cadential detours
-        let locked = matches!(self.flavour, Some(5) | Some(7));
+        let meander = meander && !matches!(self.flavour, Some(5) | Some(6) | Some(7) | Some(8) | Some(9));
+        // 12-bar blues, techno loops and industrial riffs hold their form: no modulations or cadential detours
+        let locked = matches!(self.flavour, Some(5) | Some(7) | Some(8) | Some(9));
+        if self.flavour == Some(8) && !self.key.minor {
+            // industrial lives in minor / Phrygian
+            self.key.minor = true;
+            self.events.push(format!("industrial: into {}", self.key.name()));
+        }
         if locked {
             self.modulate = false;
             self.resolve = false;
@@ -615,6 +630,8 @@ impl Harmony {
                         5 => format!("12-bar in {kn}, turnaround {} → back to {}", last.name(), first.name()),
                         6 => format!("country changes in {kn}, heading home to {}: {names}", roman("I", key).name()),
                         7 => format!("loop in {kn}, sitting on {}: {names}", first.name()),
+                        8 => format!("riff in {kn} (Phrygian / tritone): {names}"),
+                        9 => format!("song in {kn}: {names}"),
                         _ => format!("{} riff in {kn}: {names}", ["drone", "jazz", "rock", "chorale", "modal", "", "", ""][f as usize % 8]),
                     };
                     let note = format!("{} phrase", ["drone", "jazz", "rock", "chorale", "modal", "12-bar blues", "country", "loop"][f as usize % 8]);
@@ -745,8 +762,10 @@ impl Harmony {
         let recent: Vec<Key> = self.hist.iter().map(|h| h.1).collect();
         let k = self.key;
         let mut cands: Vec<Key> = Vec::new();
+        let riff = self.flavour == Some(8);
         for step in [2, 3, 4, 5, 7, 8, 9, 10] {
             for minor in [k.minor, !k.minor] {
+                let minor = minor || riff;
                 let t = Key { tonic: (k.tonic + step).rem_euclid(12), minor };
                 if !recent.contains(&t) && t != k {
                     cands.push(t);
@@ -775,6 +794,35 @@ impl Harmony {
         to
     }
 
+    /// a sudden jump to `to` (industrial: the riff drops a semitone); tonic at the next bar
+    pub fn jump_to(&mut self, to: Key, why: &str) {
+        self.queue.clear();
+        self.key_after = None;
+        self.tension = false;
+        self.modulate = false;
+        self.resolve = false;
+        self.key = to;
+        self.home = to;
+        self.bars = 0;
+        let tonic = roman(if to.minor { "i" } else { "I" }, to);
+        self.queue.push_back((tonic, Some(format!("{why}: {}", to.name()))));
+        self.restart = true;
+    }
+
+    /// a section's chord plan, one queue entry per chord (biker song form)
+    pub fn set_plan(&mut self, chords: &[&str], why: &str) {
+        self.queue.clear();
+        self.key_after = None;
+        self.tension = false;
+        let key = self.key;
+        let cs: Vec<Chord> = chords.iter().map(|c| roman(c, key)).collect();
+        for (i, c) in cs.iter().enumerate() {
+            self.queue.push_back((*c, if i == 0 { Some(why.to_string()) } else { None }));
+        }
+        self.plan_desc = format!("{why} in {}: {}", key.name(), Self::names(&cs));
+        self.plans.push(self.plan_desc.clone());
+    }
+
     /// Called on every bar line. Returns a Change when the chord moves.
     pub fn restart(&mut self) {
         self.queue.clear();
@@ -794,6 +842,10 @@ impl Harmony {
 
     fn on_bar_inner(&mut self, bars_per_chord: u32, meander: bool) -> Option<Change> {
         self.bars += 1;
+        if matches!(self.flavour, Some(5) | Some(8) | Some(9)) {
+            // riffs, songs and the 12-bar don't take dominant detours (no borrowed bVI in a blues)
+            self.tension = false;
+        }
         let tension_now = self.tension;
         if self.bars < bars_per_chord.max(1) && !tension_now && !self.restart {
             return None;

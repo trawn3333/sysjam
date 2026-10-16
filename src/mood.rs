@@ -65,6 +65,20 @@ pub const PROTO: [(f32, f32); N] = [
     (-0.6, -0.4),
 ];
 
+/// the Industrial conductor's names for his moods (the brain's outputs stay fixed;
+/// only the label changes): he is furious, angry, intense, seething
+pub fn rage_name(m: Mood) -> &'static str {
+    match m {
+        Mood::Frustrated => "furious",
+        Mood::Annoyed => "angry",
+        Mood::Impatient => "intense",
+        Mood::Focused => "seething",
+        Mood::Delighted | Mood::Proud | Mood::Inspired => "fired up",
+        Mood::Content => "grim",
+        _ => m.name(),
+    }
+}
+
 impl Mood {
     pub fn name(self) -> &'static str {
         ["content", "delighted", "proud", "amused", "inspired", "nostalgic", "focused", "impatient", "frustrated", "annoyed", "bored", "sleepy", "anxious", "surprised", "tender", "melancholy"][self as usize]

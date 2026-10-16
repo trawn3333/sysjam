@@ -1,56 +1,56 @@
-@ 🌵 sysjam ★ ~ 🐎 style Country ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ input none @
-┊ Db major │ bVII B → bVII B → I Db   ⟶ next idea: a fresh start in Db major                                                                                             ┊
-┊ 98→113 bpm bar 16   ○○●○    alive   energy ▬▬▬▬▬▬▬▬▬▬▬··· 0.76  agitation ▬▬▬▬▬▬▬▬▬▬▬▬·· 0.84  seed 3    43s                                                           ┊
-┊ ♫ no theme quoted right now                                                                                                                                            ┊
-@ ↑↓ tempo  ←→ style  n next  l like  a crowd  space pause  q quit ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@
-@ 🌵 the band ★ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@@ 🌵 conductor · Country · inspired · 1 cue ★ ~~~~~~~~~~~~~~~~~~~~~@
-┊~╭^╮~    * drone    following  ▬▬······ Db major       sub drone + detuned pad                      ┊┊* ~╭^╮~                                                           ┊
-┊(-.-) ~ ~    ↳ voice-leading pad into Db, sub glides to Db1 · 5 voices, smooth                      ┊┊  (*o*)      ★ “right, moving on!”                                ┊
-┊╱|x|╲        ♪ Db1 F3 Ab3 Db4 Db4 Db4                                                               ┊┊  ╭┤x├────>                                                       ┊
-┊ ╯ ╰         ⇢ screen cool · curious 0.8 eager 0.8 busy 0.6                                         ┊┊   │x│                                                            ┊
-┊~╭^╮~    * bassist  comping    ▬▬······ Db major       synth warm saw bass + GM Fingered Bass (33)  ┊┊   ─ │       clutter ▬▬▬·····                                     ┊
-┊ (o_o) │     ↳ next idea → picking up a fingered bass                                               ┊┊🧠 content 0.36 → hush keys                                       ┊
-┊╱|x|─ (~)    ♪ F#1 F#2 C#2 C#3 B1 B2                                                                ┊@~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@
-┊ ╯ └  (_)    ⇢ disk/files 100% · curious 0.5 eager 0.0 busy 0.5                                     ┊@ 🌵 quoted themes · public domain ★ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@
-┊~╭^╮~    * drummer  following  ▬▬▬▬▬··· —              synth deep kick + GM Room kit · shakers      ┊┊none yet — themes come rarely                                     ┊
-┊(o_o)  ─┬─   ↳ bored after 31s on the same sound → switching to the GM Room kit with shakers        ┊┊                                                                  ┊
-┊╱|x|_ (_)    ♪ kick hat hat snare hat hat                                                           ┊┊                                                                  ┊
-┊ ╯ └ [O]     ⇢ cpu 74% · curious 0.0 eager 0.5 busy 0.4                                             ┊@~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@
-┊~╭^╮~    * keys     stretching ▬▬······ Db major       GM String Ensemble 1 (48) / synth Karplus-Str┊@ 🌵 machine ★ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@
-┊(OoO)        ↳ next idea → designing Karplus-Strong pluck, bright 0.3                               ┊┊cpu            65% ▆▆▆▆▆▆▆▆▆▆▅▅▆▆▆▆▆▆▆▆▅▆▅▅▆▆▆▆▆▆▆▆▅▆▆▆▆▆▆▆▆▆▆    ┊
-┊╱|x|─  [-    ♪ B4 D#5 F#5 D#3 F#3 B3                                                                ┊┊cores          5/8 ▅▆▅▅▆▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▇▅▅▅▅▅▅▅▅▅▅▅▅▅    ┊
-┊ ╯ └    ╰─   ⇢ input 0% · curious 0.4 eager 0.7 busy 0.6                                            ┊┊net         5 kB/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▃▁▁▁▄▄▄▃▂▁▁▁▁▁    ┊
-┊~╭^╮~    * lead     following  ········ Db major       GM Fiddle (110)                              ┊┊disk     67.2 MB/s ███████████████████████████████████████████    ┊
-┊(o_o)<       ↳ next idea → fresh motif in Db major                                                  ┊┊files          0/s ▁▄▃▁▃▃▃▃▁▁▁▃▁▁▁▁▃▁▁▁▁▄▄▃▁▁▁▁▁▁▃▁▃▁▁▁▄▁▁▁▁▁▁    ┊
-┊╱|x|────     ♪ ·                                                                                    ┊┊input         0.00 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    ┊
-┊ ╯ └         ⇢ cores 63% · curious 0.7 eager 0.7 busy 0.3                                           ┊┊screen        hue 1° bri 0.15                                     ┊
-┊ ~╭^╮~   * colour   following  ········ Db major       GM Banjo (105) + glass bells                 ┊┊top threads                                                       ┊
-┊ (OoO)       ↳ converging on Db major for the cadence                                               ┊┊  101% ▬▬▬▬▬▬ sh                                                  ┊
-┊ ╱|x|╲  o─   ♪ F#4 F#6                                                                              ┊┊  101% ▬▬▬▬▬▬ sh                                                  ┊
-┊  ╯ └        ⇢ net 7% · curious 0.6 eager 0.5 busy 0.5                                              ┊┊  101% ▬▬▬▬▬▬ sh                                                  ┊
-┊~╭^╮~    * guest    soloing    ▬······· Db major       saw/sine guest voice                         ┊┊  101% ▬▬▬▬▬▬ sh                                                  ┊
-┊(ooo)♪       ↳ thread sh at 101% cpu sits in → long A#4                                             ┊┊                                                                  ┊
-┊╲|x|╱        ♪ F4 F4 A#4 A#4 A#4                                                                    ┊┊                                                                  ┊
-┊ ╯ └         ⇢ its thread 101%                                                                      ┊┊                                                                  ┊
-┊                                                                                                    ┊┊                                                                  ┊
-┊                                                                                                    ┊┊                                                                  ┊
-┊                                                                                                    ┊┊                                                                  ┊
-┊                                                                                                    ┊┊                                                                  ┊
-┊                                                                                                    ┊┊                                                                  ┊
-┊                                                                                                    ┊┊                                                                  ┊
-@ 🌵 the crowd · 7 of your 145 processes · 0 at the bar · 0 kernel threads backstage ★ ~~~~~~~~~~~~~~@┊                                                                  ┊
-┊                                                                                             ┌─────┐┊┊                                                                  ┊
-┊   _n_         _n_         _n_         _n_          ===        _n_*        _n_        ===    │🍺 ☕│┊@~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@
-┊  (*o*)       (*o*)       (*o*)       (*o*)        (^-^)      (*o*)       (*o*)      (o_o)   ┴─────┴┊@ 🌵 levels ★ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@
-┊  -{=}\o      -{=}\o      -{=}\o      -{=}\o       /(~)|      -{o}\       -{=}\o     \(~)\     bar  ┊┊sub  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬···········   -18 dB  ┊
-┊   / |         / |         / |         / |          | |        / |         / |        | \           ┊┊bass ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬·················   -24 dB  ┊
-┊  _/  |_      _/  |_      _/  |_      _/  |_       _| |_      _/  |_      _/  |_     _|  \_         ┊┊mid  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬··················   -26 dB  ┊
-┊   sh          sh          sh          sh          sleep   websockify      sh        sleep          ┊┊high ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬·······························   -39 dB  ┊
-@~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@@~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@
-@ 🌵 band events ★ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@
-┊key change -> B major                                                                                                                                                   ┊
-┊~ harmony: country changes in B major, heading home to B: B → A → E → B                                                                                                 ┊
-┊+ GM String Ensemble 1 (48)  − synth subtractive PWM ±19c, res 0.3 pad [Pad]                                                                                            ┊
-┊+ GM Banjo (105)  − GM Applause (126) [Colour]                                                                                                                          ┊
-┊+ synth Karplus-Strong pluck, bright 0.3  − GM Orchestral Harp (46) [Comp]                                                                                              ┊
-@~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@
+╭ ♪ sysjam ♪ ─ ♪ style Blues  ← Country, changing over… ───────────────────────────────────────────────────────────────────────────────────────────────────── input none ╮
+│ E major │ I7 E7 → I7 E7 → IV7 A7 → I7 E7 → I7 E7 → IV7 A7 → IV7 A7   ⟶ 12-bar shuffle in E major: E7 → A7 → E7 → E7 → A7 → A7 → E7 → E7 → B7 → A7 → E7 → B7            │
+│ 128 bpm tempo bias +14 shuffle — 12-bar, swung triplets bar 17   ○○●○    alive   energy ▓▓▓▓▓▓▓▓▓▓▓░░░ 0.76  agitation ▓▓▓▓▓▓▓▓▓▓▓░░░ 0.81  seed 3    46s              │
+│ ♫ no theme quoted right now                                                                                                                                            │
+╰ ↑↓ tempo  ←→ style  n next  l like  a crowd  space pause  q quit ──────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ ♪ the band ♪ ──────────────────────────────────────────────────────────────────────────────────────╮╭ ♪ conductor · Blues · content · 1 cue ♪ ─────────────────────────╮
+│────────•───────────────•───────────────•───────────────•───────────────•───────────────•───────────││♪ _┌#┐_ ♪                                                         │
+│       ╱ ╲             ╱ ╲             ╱ ╲             ╱ ╲             ╱ ╲             ╱ ╲          ││ ╲(=_=)╱     “Lord have mercy… let's play the blues…”             │
+│      ╱   ╲           ╱   ╲           ╱   ╲           ╱   ╲           ╱   ╲           ╱   ╲         ││   ┤#├                                                            │
+│     ╱     ╲         ╱     ╲         ╱     ╲         ╱     ╲         ╱     ╲         ╱     ╲        ││   │#│                                                            │
+│    ╱       ╲       ╱       ╲       ╱       ╲       ╱       ╲       ╱       ╲       ╱       ╲       ││   ┴ ╰       clutter ▓░░░░░░░                                     │
+│   ╱         ╲     ╱         ╲     ╱         ╲     ╱         ╲     ╱         ╲     ╱         ╲      ││🧠 content 0.53 → shuffle → keep it swingin'                      │
+│  ╱           ╲   ╱           ╲   ╱           ╲   ╱           ╲   ╱           ╲   ╱           ╲     │╰──────────────────────────────────────────────────────────────────╯
+│ ╱             ╲ ╱             ╲ ╱             ╲ ╱             ╲ ╱             ╲ ╱             ╲    │╭ ♪ quoted themes · public domain ♪ ───────────────────────────────╮
+│                                       ~~     (^)     ~~                                            ││none yet — themes come rarely                                     │
+│                                       ╲╱     \|/     ╲╱        (^)                                 ││                                                                  │
+│  _┌#┐_       _┌#┐_       _┌#┐_         │ ╭─╮ ─┴─ ╭─╮  │        /|─          (^) ♪                  ││                                                                  │
+│  (=_=)       (=_=) ┌┴┐    (=_=) │      │ ╰┬╯╭───╮╰┬╯  │      ─────(o)♪     ╭[=]╮      _┌#┐_        │╰──────────────────────────────────────────────────────────────────╯
+│  ╱|#|╲┌───┐  ╱|#|─[===]  ╱|#|─ (~)     │  │ │ o │ │   │         │            │        (=_=) ♪      │╭ ♪ machine ♪ ─────────────────────────────────────────────────────╮
+│   ╯ ╰ │|||│   ╯ ╰ [===]   ╯ ╰  (_)    ╱ ╲   ╰───╯    ╱ ╲       ╱ ╲          ╱ ╲       ╲|#|╱        ││cpu            65% ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆    │
+│  keys·grand  drone·modul bassist·bas      drummer·kit       lead·guitar  colour·harp. guest·guest  ││cores          5/8 ▅▅▆▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅    │
+│────────────────────────────────────────────────────────────────────────────────────────────────────││net         3 kB/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│                                                ╲   ╱                                               ││disk     67.0 MB/s ███████▆███████████████████████████████▅███    │
+│                                                 ( )                                                ││files          0/s ▃▁▁▁▁▁▁▁▃▁▃▃▃▁▁▃▁▁▃▁▁▁▁▃▃▁▃▃▄▁▁▁▁▁▃▁▃▄▃▃▁▁▁    │
+│                                                ╱┼╲                                                 ││input         0.00 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│                                                 │                                                  ││screen        hue 1° bri 0.15                                     │
+│     ╱──╲        ╱──╲        ╱──╲             ╱─╱╲╲             ╱──╲         ╱──╲         ╱──╲      ││top threads                                                       │
+│keys     ↳ rolling arpeggio; pad holds the common tones                                             ││  100% ▓▓▓▓▓▓ sh                                                  │
+│drone    ↳ voice-leading pad into A7, sub glides to A1 · 6 voices, smooth                           ││  100% ▓▓▓▓▓▓ sh                                                  │
+│bassist  ↳ disk/file churn 96% → busier syncopated groove                                           ││  100% ▓▓▓▓▓▓ sh                                                  │
+│drummer  ↳ kicks follow the bassist's syncopations (cpu 74%)                                        ││  100% ▓▓▓▓▓▓ sh                                                  │
+│lead     ↳ drifting to E major over the band's E major (the band key, looking for colour)           ││                                                                  │
+│colour   ↳ listening for the lead's calls                                                           ││                                                                  │
+│guest    ↳ thread sh at 100% cpu sits in → long G#4                                                 ││                                                                  │
+│                                                                                                    ││                                                                  │
+│                                                                                                    ││                                                                  │
+├ ♪ the crowd · 7 of your 144 processes · 0 at the bar · 0 kernel threads backstage ♪ ───────────────┤│                                                                  │
+│                                                                                             ┌─────┐││                                                                  │
+│                 ·                      ·                      ·                 o    ·      │🍺 ☕│││                                                                  │
+│==     ·                      ·                      ·   ___>               ·   /|\          ┴─────┴││                                                                  │
+│_o)                                                     (-.-)                   / \            bar  ││                                                                  │
+│~)\                                                     \|v|\                                       ││                                                                  │
+│ \ ^^^          \\\        ^^^         ^^^               | \   ^^^         ^^^                      │╰──────────────────────────────────────────────────────────────────╯
+│  (*o*)        (^-^)      (*o*)       (*o*)             _|  \_(*o*)       (*o*)                     │╭ ♪ levels ♪ ──────────────────────────────────────────────────────╮
+│  \{=}-o       /{=}/o     \{=}-o      \{=}-o                  \{=}-o      \{=}-o                    ││sub  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░   -23 dB  │
+│   / |          | |        / |         / |                     / |         / |                      ││bass ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░   -23 dB  │
+│  _/  |_       _| |/      _/  |_      _/  |_                  _/  |_      _/  |_                    ││mid  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░   -23 dB  │
+│   sh          bash        sh          sh              timeout sh          sh                       ││high ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   -38 dB  │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────╯
+╭ ♪ band events ♪ ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│~ drums: conductor went Blues → switching to the GM Room kit with triangle & tambourine                                                                                 │
+│~ switch Country → Blues fully done in 0.98 s                                                                                                                           │
+│~ lead drifts to E major over E major                                                                                                                                   │
+│~ blues: shuffle — 12-bar, swung triplets                                                                                                                               │
+│♩ conductor: Lord have mercy… let's play the blues                                                                                                                      │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

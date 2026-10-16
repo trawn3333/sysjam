@@ -73,6 +73,8 @@ pub enum Entry {
 }
 
 pub struct Leader {
+    /// a style that arranges itself (Blues): no surprise solos, breakdowns or key changes
+    pub quiet: bool,
     rng: Rng,
     pub state: State,
     pub phrases_in_state: u32,
@@ -109,6 +111,7 @@ impl Leader {
         let mut rng = Rng::seeded(seed ^ 0x4c454144);
         let dwell = 3 + rng.below(2) as u32;
         Leader {
+            quiet: false,
             rng,
             state: State::Chill,
             phrases_in_state: 0,
@@ -270,7 +273,7 @@ impl Leader {
         }
         self.since_surprise += 1;
         let n_before = msgs.len();
-        if self.phrases_in_state > 0 && self.since_surprise >= 4 && self.soloist.is_none() && self.breakdown == 0 && self.lone.is_none() {
+        if self.phrases_in_state > 0 && self.since_surprise >= 4 && self.soloist.is_none() && self.breakdown == 0 && self.lone.is_none() && !self.quiet {
             let x = self.rng.f();
             match self.state {
                 State::Alive => {

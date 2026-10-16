@@ -229,6 +229,10 @@ impl Gm {
         self.cc(ch as i32, 7, (gain * 110.0) as i32);
         self.chans[ch].program = p;
     }
+    /// pan (CC10), 0 left .. 127 right
+    pub fn pan(&mut self, ch: usize, v: i32) {
+        self.cc(ch as i32, 10, v);
+    }
     pub fn note_on(&mut self, ch: usize, key: i32, vel: i32, now: u64) {
         if !(0..128).contains(&key) {
             return;

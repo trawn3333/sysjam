@@ -175,6 +175,10 @@ impl Limiter {
     pub fn new(sr: f32) -> Self {
         Limiter { env: 0.0, att: 1.0 - (-1.0 / (sr * 0.004)).exp(), rel: 1.0 - (-1.0 / (sr * 0.35)).exp(), thr: 0.6 }
     }
+    /// a limiter with its own threshold (before the soft clip; 1.25 → peaks near −1 dBFS)
+    pub fn with_thr(sr: f32, thr: f32) -> Self {
+        Limiter { thr, ..Limiter::new(sr) }
+    }
     #[inline]
     pub fn run(&mut self, l: f32, r: f32) -> (f32, f32) {
         let p = l.abs().max(r.abs());

@@ -14,6 +14,7 @@ mod audio;
 mod clock;
 mod audience;
 mod band;
+mod blues;
 mod brain;
 mod conductor;
 mod dbus;
@@ -30,9 +31,11 @@ mod mood;
 mod music;
 mod portal;
 mod pwcap;
+mod rage;
 mod screen;
 mod shared;
 mod speech;
+mod stage;
 mod style;
 mod theme;
 mod synth;
@@ -351,6 +354,8 @@ fn main() {
         let mut ver = 0;
         let mut keys = parse_keys();
         let scale: usize = std::env::var("SYSJAM_BENCH_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1).max(1);
+        // optional keyboard activity during the busy phase (0..1), e.g. to hear Industrial rage
+        let busy_input: f32 = std::env::var("SYSJAM_BENCH_INPUT").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
         for (phase, secs, busy) in [("idle", 40usize * scale, false), ("busy", 80 * scale, true), ("idle again", 80 * scale, false)] {
             let t = std::time::Instant::now();
             let blocks = RATE as usize * secs / BLOCK;
@@ -361,7 +366,7 @@ fn main() {
                     ver += 1;
                     c.version = ver;
                     if busy {
-                        c.sig = band::Signals { cpu: 0.85, cores: 0.8, net: 0.75, file: 0.75, fd: 0.5, screen_change: 0.0, input: 0.0, crowd: 0.0 };
+                        c.sig = band::Signals { cpu: 0.85, cores: 0.8, net: 0.75, file: 0.75, fd: 0.5, screen_change: 0.0, input: busy_input, crowd: 0.0 };
                     }
                     en.set_control(&c);
                     let now = en.time();
