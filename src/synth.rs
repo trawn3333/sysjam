@@ -376,6 +376,8 @@ pub struct Engine {
     prev_tied: [f32; 7],
     // per-source RMS meter (SYSJAM_RMS, bench only), split by drums playing / resting
     meter: Option<Box<Meter>>,
+    /// bench only: every chord played (time s, chord, flavour-locked form)
+    chord_log: Option<Vec<(f32, Chord, bool)>>,
     last_drum: u64,
     // synth vs the rest: when a GM / lead note stops sounding, per player
     gm_until: [u64; 7],
@@ -710,6 +712,7 @@ impl Engine {
             play_run: [0; 7],
             prev_tied: [0.0; 7],
             meter: std::env::var_os("SYSJAM_RMS").map(|_| Box::default()),
+            chord_log: std::env::var_os("SYSJAM_BENCH").map(|_| Vec::new()),
             last_drum: 0,
             gm_until: [0; 7],
             mel_until: [0; 7],
@@ -765,6 +768,56 @@ impl Engine {
     }
 
     /// distinct GM programs used, GM picks, synth patches designed
+    /// repetition measures over the free (non-form) chords: A-B-A-B loop rate and
+    /// distinct chord bigrams per 5 minutes
+    pub fn chord_report(&self) -> String {
+        let Some(l) = self.chord_log.as_ref() else { return String::new() };
+        let free: Vec<&(f32, Chord, bool)> = l.iter().filter(|x| !x.2).collect();
+        let n = free.len();
+        if n < 8 {
+            return format!("{n} free chords");
+        }
+        let mut abab = 0;
+        for i in 3..n {
+            let (a, b, c, d) = (free[i - 3].1, free[i - 2].1, free[i - 1].1, free[i].1);
+            if a == c && b == d && a != b {
+                abab += 1;
+            }
+        }
+        let mut per = Vec::new();
+        let mut t0 = free[0].0;
+        let mut set: Vec<(Chord, Chord)> = Vec::new();
+        let mut cnt = 0;
+        for i in 1..n {
+            if free[i].0 - t0 >= 300.0 {
+                per.push((set.len(), cnt));
+                set.clear();
+                cnt = 0;
+                t0 = free[i].0;
+            }
+            let bg = (free[i - 1].1, free[i].1);
+            cnt += 1;
+            if !set.contains(&bg) {
+                set.push(bg);
+            }
+        }
+        let avg = if per.is_empty() { set.len() as f32 } else { per.iter().map(|p| p.0 as f32).sum::<f32>() / per.len() as f32 };
+        let avgc = if per.is_empty() { cnt as f32 } else { per.iter().map(|p| p.1 as f32).sum::<f32>() / per.len() as f32 };
+        // 4-chord runs that already occurred within the previous 32 chords
+        let mut rep4 = 0;
+        for i in 4..n {
+            let lo = i.saturating_sub(32);
+            if (lo + 3..i).any(|j| (0..4).all(|k| free[j - k].1 == free[i - k].1)) {
+                rep4 += 1;
+            }
+        }
+        format!(
+            "{n} free chords; A-B-A-B loops {:.1}% of changes; 4-chord runs repeated within 32 chords {:.1}%; {avg:.1} distinct bigrams per 5 min (of {avgc:.0} changes)",
+            100.0 * abab as f32 / (n - 3) as f32,
+            100.0 * rep4 as f32 / (n - 4) as f32
+        )
+    }
+
     pub fn sound_stats(&self) -> (usize, u32, u32) {
         (self.gm_used.iter().filter(|&&n| n > 0).count(), self.gm_used.iter().sum(), self.synth_used)
     }
@@ -1128,6 +1181,7 @@ impl Engine {
             hat: self.sty().hat,
             face: self.sty().face,
             style_id: self.sty().id,
+            plan: self.harm.plan_desc.clone(),
         };
     }
 
@@ -3406,6 +3460,9 @@ impl Engine {
                 }
             }
         }
+        for pl in std::mem::take(&mut self.harm.plans) {
+            self.band_say(format!("~ harmony: {pl}"));
+        }
         for e in std::mem::take(&mut self.harm.events) {
             self.say(format!("~ {e}"));
             for i in 1..6 {
@@ -3416,6 +3473,11 @@ impl Engine {
 
     fn on_chord(&mut self, c: Chord, note: Option<String>, init: bool) {
         self.bars_since_change = 0;
+        let t = self.time();
+        let locked = matches!(self.sty().harm, Harm::Blues | Harm::Loop | Harm::Country);
+        if let Some(l) = self.chord_log.as_mut() {
+            l.push((t, c, locked));
+        }
         // harmonic rhythm depends on the arrangement state
         let cb = self.chord_bars;
         self.cur_bpc = match self.leader.state {

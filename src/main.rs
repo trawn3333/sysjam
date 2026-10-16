@@ -380,6 +380,7 @@ fn main() {
         }
         let (distinct, gm_picks, synth) = en.sound_stats();
         say!("bench sounds: {distinct} distinct GM programs, {gm_picks} GM picks, {synth} synth patches designed");
+        say!("bench chords: {}", en.chord_report());
         return;
     }
     let mut sink = if let Some(p) = &wav {

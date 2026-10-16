@@ -89,6 +89,8 @@ pub struct BandSnap {
     pub hat: &'static str,
     pub face: Option<&'static str>,
     pub style_id: &'static str,
+    /// where the harmony is heading
+    pub plan: String,
 }
 
 pub const HIST: usize = 120;
@@ -374,9 +376,9 @@ fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, 
             _ => Style::default().fg(th(Color::Gray)),
         };
         prog.push(Span::styled(format!("{roman} {name}"), st));
-        if *when == 0 {
-            // nothing
-        }
+    }
+    if !b.plan.is_empty() {
+        prog.push(Span::styled(crate::theme::asciify(&format!("   ⟶ {}", b.plan)), Style::default().fg(th(Color::LightCyan))));
     }
     let beat: String = (0..4).map(|i| if i == b.beat { '●' } else { '○' }).collect();
     let line2 = vec![
