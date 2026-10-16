@@ -1484,9 +1484,9 @@ fn vibe(b: &BandSnap) -> crate::audience::Vibe {
 /// one crowd cell: glyph, colour, background ('\0' = the right half of a wide glyph)
 type Cell = (char, Color, Color);
 
-/// the floor as rows of cells, `fw` cells wide (the bar is drawn separately). Three depth
-/// layers, drawn back to front (painter's algorithm): small hazy figures at the back, then
-/// the middle, then the front row at the stage; a floor gradient and a little haze behind.
+/// the floor as rows of cells, `fw` cells wide (the bar is drawn separately). Stacked rows of
+/// full-size people drawn back to front (painter's algorithm); depth is colour only (back rows
+/// dimmer, greyer, blended toward the floor); a floor gradient and a little haze behind.
 static PROF_CROWD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static PROF_CROWD_CELLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static PROF_DIFF: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1498,7 +1498,7 @@ fn crowd_grid(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<Ce
     r
 }
 fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<Cell>> {
-    use crate::audience::{fig, fig_small, item, tag, Act, Look, Vibe, FH, FW, SLOT};
+    use crate::audience::{fig, item, tag, Act, Look, Vibe, FH, FW, SLOT};
     let v = vibe(b);
     anim.floor.step(&anim.crowd, fw, v);
     let ascii = crate::theme::ascii();
@@ -1530,7 +1530,7 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
     let layer = |z: f32| -> usize { (z + 0.5).floor().clamp(0.0, (layers - 1) as f32) as usize };
     order.sort_by_key(|&i| {
         let p = &anim.floor.people[i];
-        (layer(p.z), (p.act != Act::Here) as u8)
+        (layer(p.z), (p.act != Act::Here) as u8 + 2 * (p.act == Act::Star) as u8)
     });
     for i in order {
         let p = &anim.floor.people[i];
@@ -1540,9 +1540,12 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
         let depth = layers - 1 - z;
         // far away (the small figures) moves only on the beat: fewer cells to repaint;
         // a deep (5-row) crowd moves on the eighths, so a big screen stays cheap
-        let (lb, lt) = if depth >= 2 { (beats.floor(), (t * 2.0).floor() * 0.5) } else if (depth == 1 && layers >= 3) || layers >= 5 { ((beats * 2.0).floor() * 0.5, (t * 4.0).floor() * 0.25) } else { (beats, t) };
-        let look = Look { style: b.style_id, act: p.act, vibe: v, beats: lb, t: lt + (p.seed % 1000) as f32 * 0.013, cpu: m.cpu, disk: m.disk > 2e5, chat: m.chat > 2e4, idle: m.idle, step: p.step, beer: p.beer, id: p.seed, surge, chorus };
-        let base = if matches!(p.act, Act::Wave | Act::Leave) {
+        let star = p.act == Act::Star;
+        let (lb, lt) = if star { (beats, t) } else if depth >= 2 { (beats.floor(), (t * 2.0).floor() * 0.5) } else if (depth == 1 && layers >= 3) || layers >= 5 { ((beats * 2.0).floor() * 0.5, (t * 4.0).floor() * 0.25) } else { (beats, t) };
+        let look = Look { style: b.style_id, act: p.act, vibe: v, beats: lb, t: lt + (p.seed % 1000) as f32 * 0.013, cpu: m.cpu, disk: m.disk > 2e5, chat: m.chat > 2e4, idle: m.idle, step: p.step, beer: p.beer, id: p.seed, surge, chorus, phase: p.t_act, dizzy: p.dizzy > 0.0 };
+        let base = if star {
+            Color::White
+        } else if matches!(p.act, Act::Wave | Act::Leave | Act::Out | Act::Carried) {
             Color::Gray
         } else if p.act == Act::Bar || p.act == Act::ToBar {
             Color::LightYellow
@@ -1559,18 +1562,13 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
         } else {
             Color::Gray
         };
-        // depth = haze: the back row is dimmer (blended toward the floor), the middle a bit
-        let col = crate::theme::dim(base, depth.min(2) as u8);
-        // the two rows nearest the stage are full size, the ones behind them smaller
-        let small = depth >= 2;
-        let (rows, lift, dx): (Vec<String>, bool, i32) = if small {
-            (fig_small(&look).to_vec(), false, 0)
-        } else {
-            let (r, l, d) = fig(&look);
-            (r.to_vec(), l, d)
-        };
-        let y0: i32 = 1 + 3 * z as i32 + small as i32 - lift as i32;
-        let x0 = p.x.round() as i32 + if p.act == Act::Here { dx - 1 } else { 0 };
+        // everyone is full size; depth is colour only: each row further back is dimmer,
+        // greyer and blended further toward the floor (the standout dancer shines a row brighter)
+        let lvl = if star { depth.saturating_sub(1) } else { depth };
+        let col = crate::theme::dim(base, lvl.min(3) as u8);
+        let (rows, lift, dx) = fig(&look);
+        let y0: i32 = 1 + 3 * z as i32 - lift as i32;
+        let x0 = p.x.round() as i32 + if matches!(p.act, Act::Here | Act::Star) { dx - 1 } else { 0 };
         let top_row = rows.iter().position(|r| r.trim() != "").unwrap_or(0) as i32;
         for (r, row) in rows.iter().enumerate() {
             let y = y0 + r as i32;
@@ -1590,16 +1588,16 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
             }
         }
         // something held up overhead, swaying on the beat
-        if !small {
+        {
             if let Some((it, sway)) = item(&look) {
                 let (gl, w) = it.glyph(ascii, emoji);
                 let y = y0 + top_row - 1;
                 let x = x0 + 4 + sway;
                 if y >= 0 && x >= 0 && (x as usize + w) < fw {
                     let ic = match it {
-                        crate::audience::Item::Phone => th(Color::LightCyan),
-                        crate::audience::Item::Lighter => th(Color::LightYellow),
-                        crate::audience::Item::Glow => if (beats.floor() as i64 + p.seed as i64) % 2 == 0 { th(Color::LightGreen) } else { th(Color::LightMagenta) },
+                        crate::audience::Item::Phone => crate::theme::dim(Color::LightCyan, lvl.min(3) as u8),
+                        crate::audience::Item::Lighter => crate::theme::dim(Color::LightYellow, lvl.min(3) as u8),
+                        crate::audience::Item::Glow => if (beats.floor() as i64 + p.seed as i64) % 2 == 0 { crate::theme::dim(Color::LightGreen, lvl.min(3) as u8) } else { crate::theme::dim(Color::LightMagenta, lvl.min(3) as u8) },
                         _ => col,
                     };
                     let yy = y as usize;
@@ -1625,7 +1623,7 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
         let tcol = if show_file { th(Color::Cyan) } else if m.fresh && m.cpu > 0.02 { th(Color::LightYellow) } else { crate::theme::dim(Color::DarkGray, depth.min(1) as u8) };
         // the tag stays put while its owner moshes (no jitter: fewer cells to repaint)
         let lx = p.x.round() as i32 - 1 + FW as i32 / 2 - label.chars().count() as i32 / 2;
-        tags.push((p.act == Act::Here || p.act == Act::Bar, lx, label, tcol));
+        tags.push((matches!(p.act, Act::Here | Act::Bar | Act::Out), lx, label, tcol));
     }
     let _ = FH;
     tags.sort_by_key(|t| !t.0);

@@ -379,6 +379,12 @@ pub enum Act {
     Back,
     Wave,
     Leave,
+    /// the standout dancer, roaming through the rows
+    Star,
+    /// passed out: lying on the floor for a while
+    Out,
+    /// passed out and crowd-surfed off by the people around
+    Carried,
 }
 
 /// how the whole crowd feels right now (from the band)
@@ -413,6 +419,10 @@ pub struct Look<'a> {
     pub surge: bool,
     /// a big sing-along chorus (Biker): fists up
     pub chorus: bool,
+    /// seconds in the current act (falling over, getting up)
+    pub phase: f32,
+    /// just got back up after passing out: seeing stars
+    pub dizzy: bool,
 }
 
 /// FNV-1a of the exe name
@@ -425,6 +435,9 @@ pub fn name_id(name: &str) -> u32 {
     h ^ (h >> 15)
 }
 
+/// the personal dance vibes (`Persona::dance`)
+pub const DANCES: [&str; 9] = ["hip shaker", "hand waver", "hips and hands", "head bopper", "stomper", "side-stepper", "kicker", "twister", "robot"];
+
 /// a person's fixed looks and habits, all from the name hash
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Persona {
@@ -433,19 +446,22 @@ pub struct Persona {
     /// 0 none, 1 headphones, 2 earring, 3 scarf, 4 bag, 5 flower
     pub acc: usize,
     pub tall: bool,
-    /// 0 bounce, 1 sway, 2 two-step, 3 headbang, 4 robot, 5 twist, 6 kicker
+    /// their own dance vibe, an index into `DANCES`
     pub dance: usize,
     /// wears the style's hat (half the crowd dresses up)
     pub themed: bool,
+    /// follows the style's own dance (line dance, jig, swing step) when the band is hot
+    pub follower: bool,
 }
 
 pub fn persona(id: u32) -> Persona {
     let b = |s: u32, n: u32| ((id >> s) % n) as usize;
-    Persona { hair: b(0, HAIR.len() as u32), top: b(5, TOPS.len() as u32), acc: b(9, 6), tall: (id >> 13) & 3 != 0, dance: b(16, 7), themed: (id >> 20) & 1 == 1 }
+    Persona { hair: b(0, HAIR.len() as u32), top: b(5, TOPS.len() as u32), acc: b(9, 6), tall: (id >> 13) & 3 != 0, dance: b(16, DANCES.len() as u32), themed: (id >> 20) & 1 == 1, follower: (id >> 21) % 3 == 0 }
 }
 
 const HAIR: [&str; 11] = ["  ___  ", "  ,,,  ", " ~~~~~ ", "  ^^^  ", "  (@)  ", "  ===  ", "  ///  ", "  .-.  ", "  ~~~  ", "  ___> ", "  \\\\\\  "];
 const TOPS: [&str; 10] = ["[#]", "{=}", "(:)", "|v|", "<+>", "[=]", "(~)", "[*]", "{o}", "|:|"];
+const BLANK: &str = "       ";
 
 /// legs: (knees, feet), 7 cells each
 mod legs {
@@ -469,86 +485,169 @@ mod legs {
     pub const POINT: [&str; 2] = ["  | \\  ", " _|  '-"];
     pub const TOES: [&str; 2] = ["  | |  ", "  ^ ^  "];
     pub const TUCK: [&str; 2] = ["  > <  ", "  ' '  "];
-    pub const SIT: [&str; 2] = ["  |_   ", " _/ \\_ "];
+    pub const SPLIT: [&str; 2] = ["  / \\  ", " /   \\ "];
 }
 
-/// footwork for this instant: (legs, lift = both feet off the ground, x shift)
-fn footwork(l: &Look, p: &Persona, hype: bool) -> ([&'static str; 2], bool, i32) {
+/// shift a 7-cell row one cell right (d > 0) or left (d < 0) when there's room
+fn nudge(s: &str, d: i32) -> String {
+    if d > 0 && s.ends_with(' ') {
+        format!(" {}", &s[..s.len() - 1])
+    } else if d < 0 && s.starts_with(' ') {
+        format!("{} ", &s[1..])
+    } else {
+        s.to_string()
+    }
+}
+
+/// one instant of someone's dance: legs, both feet off the ground, x step, hips and head
+/// sway (cells), and the arms (left, right) if the dance sets them
+struct Mv {
+    lg: [&'static str; 2],
+    lift: bool,
+    dx: i32,
+    hips: i32,
+    head: i32,
+    arms: Option<(char, char)>,
+    nod: bool,
+}
+
+fn mv(lg: [&'static str; 2]) -> Mv {
+    Mv { lg, lift: false, dx: 0, hips: 0, head: 0, arms: None, nod: false }
+}
+
+/// the style's own dance for the followers when the band is hot (legs and steps only)
+fn style_steps(l: &Look, p: &Persona) -> Option<Mv> {
     use legs::*;
     let b = l.beats;
     let beat = b.floor() as i64;
     let frac = b.fract() as f32;
-    let half = (b * 2.0).floor() as i64; // eighths
+    let half = (b * 2.0).floor() as i64;
     let on = frac < 0.22;
+    let m = |lg, lift, dx| Some(Mv { lift, dx, ..mv(lg) });
+    match l.style {
+        // line-dance grapevine (step, cross behind, step, touch; and back) + heel-toe
+        "country" => match beat.rem_euclid(8) {
+            0 => m(STEP_R, false, 1),
+            1 => m(CROSS, false, 1),
+            2 => m(STEP_R, false, 2),
+            3 => m(if on { TAP_L } else { STAND }, false, 2),
+            4 => m(HEEL_R, false, 1),
+            5 => m(TAP_R, false, 1),
+            6 => m(STEP_L, false, 0),
+            _ => m(if on { TAP_R } else { STAND }, false, 0),
+        },
+        // shuffle (heels in/out on the eighths) and the running man (knees up)
+        "techno" | "house" => {
+            if p.dance % 2 == 0 {
+                m(if half.rem_euclid(2) == 0 { SHUF_A } else { SHUF_B }, false, 0)
+            } else {
+                m(match half.rem_euclid(4) { 0 => KNEE_R, 1 => PASS, 2 => KNEE_L, _ => PASS }, false, 0)
+            }
+        }
+        // swing step on the shuffle: step, kick on the swung "and", step back
+        "blues" | "jazz" => {
+            let b4 = beat.rem_euclid(4) as usize;
+            m(if frac < 0.66 { [STEP_R, PASS, STEP_L, PASS][b4] } else { [KICK_L, TAP_R, KICK_R, TAP_L][b4] }, false, [0, 1, 0, -1][b4])
+        }
+        // minuet: point the toe, rise on the toes, a small step
+        "baroque" => match beat.rem_euclid(6) {
+            0 | 3 => m(POINT, false, 0),
+            1 | 4 => m(TOES, false, 0),
+            2 => m(STEP_R, false, 1),
+            _ => m(STEP_L, false, 0),
+        },
+        // jig: hop-kicks on the eighths, little hops off the ground
+        "celtic" => match half.rem_euclid(4) {
+            0 => m(KICK_R, false, 0),
+            1 => m(TUCK, frac.fract() < 0.5, 0),
+            2 => m(KICK_L, false, 0),
+            _ => m(TUCK, true, 0),
+        },
+        _ => None,
+    }
+}
+
+/// someone's own dance, locked to the beat (twice as fast when the band is hot)
+fn moves(l: &Look, p: &Persona, hype: bool) -> Mv {
+    use legs::*;
+    let b = if hype { l.beats * 2.0 } else { l.beats };
+    let beat = b.floor() as i64;
+    let frac = b.fract() as f32;
+    let half = (b * 2.0).floor() as i64;
+    let on = frac < 0.25;
+    let alt = beat.rem_euclid(2) == 0;
     if l.surge {
         // surge: jumps with both feet off the ground, kicks, stomps, knee bounces
-        return match (beat.rem_euclid(4), p.dance % 3) {
-            (_, 0) => if on { (TUCK, true, 0) } else { (BOUNCE, false, 0) },
-            (0 | 2, 1) => if on { (STOMP_R, false, 0) } else { (BOUNCE, false, 0) },
-            (_, 1) => if on { (STOMP_L, false, 0) } else { (BOUNCE, false, 0) },
-            (k, _) => if half.rem_euclid(2) == 0 { (if k % 2 == 0 { KICK_R } else { KICK_L }, false, 0) } else { (TUCK, frac > 0.5 && frac < 0.75, 0) },
+        let lb = l.beats;
+        let (bt, fr) = (lb.floor() as i64, lb.fract());
+        let hf = (lb * 2.0).floor() as i64;
+        let on = fr < 0.22;
+        let mut m = match (bt.rem_euclid(4), p.dance % 3) {
+            (_, 0) => if on { Mv { lift: true, ..mv(TUCK) } } else { mv(BOUNCE) },
+            (0 | 2, 1) => mv(if on { STOMP_R } else { BOUNCE }),
+            (_, 1) => mv(if on { STOMP_L } else { BOUNCE }),
+            (k, _) => if hf.rem_euclid(2) == 0 { mv(if k % 2 == 0 { KICK_R } else { KICK_L }) } else { Mv { lift: fr > 0.5 && fr < 0.75, ..mv(TUCK) } },
         };
+        m.arms = Some(if bt % 2 == 0 { ('\\', '/') } else { ('|', '|') });
+        return m;
     }
-    if hype {
-        // per-style footwork
-        return match l.style {
-            // line-dance grapevine (step, cross behind, step, touch; and back) + heel-toe
-            "country" => {
-                let k = beat.rem_euclid(8);
-                match k {
-                    0 => (STEP_R, false, 1),
-                    1 => (CROSS, false, 1),
-                    2 => (STEP_R, false, 2),
-                    3 => (if on { TAP_L } else { STAND }, false, 2),
-                    4 => (HEEL_R, false, 1),
-                    5 => (TAP_R, false, 1),
-                    6 => (STEP_L, false, 0),
-                    _ => (if on { TAP_R } else { STAND }, false, 0),
-                }
-            }
-            // shuffle (heels in/out on the eighths) and the running man (knees up)
-            "techno" | "house" => {
-                if p.dance % 2 == 0 {
-                    (if half.rem_euclid(2) == 0 { SHUF_A } else { SHUF_B }, false, 0)
-                } else {
-                    (match half.rem_euclid(4) { 0 => KNEE_R, 1 => PASS, 2 => KNEE_L, _ => PASS }, false, 0)
-                }
-            }
-            // swing step: side step-touch, rock on 2 and 4
-            "blues" | "jazz" => match beat.rem_euclid(4) {
-                0 => (STEP_R, false, 1),
-                1 => (if on { TAP_L } else { BOUNCE }, false, 1),
-                2 => (STEP_L, false, 0),
-                _ => (if on { TAP_R } else { BOUNCE }, false, 0),
-            },
-            // minuet: point the toe, rise on the toes, a small step
-            "baroque" => match beat.rem_euclid(6) {
-                0 | 3 => (POINT, false, 0),
-                1 | 4 => (TOES, false, 0),
-                2 => (STEP_R, false, 1),
-                _ => (STEP_L, false, 0),
-            },
-            // biker stomp: heavy alternate stomps on every beat
-            "biker" | "industrial" | "metal" => (if on { if beat % 2 == 0 { STOMP_R } else { STOMP_L } } else { BOUNCE }, false, 0),
-            // jig: hop-kicks on the eighths, little hops off the ground
-            "celtic" => match half.rem_euclid(4) {
-                0 => (KICK_R, false, 0),
-                1 => (TUCK, frac.fract() < 0.5, 0),
-                2 => (KICK_L, false, 0),
-                _ => (TUCK, true, 0),
-            },
-            _ => if on && (p.dance % 2 == 0 || beat % 2 == 0) { (TUCK, true, 0) } else { (BOUNCE, false, 0) },
-        };
+    if hype && p.follower {
+        if let Some(mut m) = style_steps(l, p) {
+            m.arms = None;
+            return m;
+        }
     }
-    // everyday dancing by personality, feet on the beat
+    let wave = [('\\', '/'), ('-', '-'), ('\\', '/'), ('/', '\\')][half.rem_euclid(4) as usize];
     match p.dance {
-        0 => (if on { BOUNCE } else { STAND }, false, 0),
-        1 => (if beat.rem_euclid(4) < 2 { TAP_R } else { TAP_L }, false, (beat.rem_euclid(4) >= 2) as i32),
-        2 => (match beat.rem_euclid(4) { 0 => STEP_R, 1 => STAND, 2 => STEP_L, _ => STAND }, false, 0),
-        3 => (if on { TAP_R } else { STAND }, false, 0),
-        4 => (if beat % 2 == 0 { STAND } else { PASS }, false, 0),
-        5 => (if beat % 2 == 0 { SHUF_A } else { SHUF_B }, false, 0),
-        _ => (if on { if beat % 2 == 0 { KICK_R } else { KICK_L } } else { STAND }, false, 0),
+        // hip shaker: hands on the hips, the hips swing out on every beat
+        0 => Mv { hips: if alt { 1 } else { -1 }, arms: Some(('<', '>')), ..mv(if alt { TAP_R } else { TAP_L }) },
+        // hand waver: hands up and waving on the eighths, stepping side to side
+        1 => Mv { arms: Some(wave), ..mv(if alt { STEP_R } else { STEP_L }) },
+        // both: hips and hands
+        2 => Mv { hips: if alt { 1 } else { -1 }, arms: Some(wave), ..mv(if on { BOUNCE } else { STAND }) },
+        // head bopper: the head nods on every beat, knees bounce
+        3 => Mv { head: if on { 0 } else if alt { 1 } else { -1 }, nod: on, arms: Some(('/', '\\')), ..mv([BOUNCE, TAP_R, BOUNCE, TAP_L][half.rem_euclid(4) as usize]) },
+        // stomper: a heavy stomp on every beat, fists pumping
+        4 => Mv { arms: Some(if alt { ('\\', '|') } else { ('|', '/') }), ..mv(if on { if alt { STOMP_R } else { STOMP_L } } else { BOUNCE }) },
+        // side-stepper: step right, together, step left, together
+        5 => {
+            let k = beat.rem_euclid(4);
+            Mv { dx: [0, 1, 1, 0][k as usize], arms: Some(if k < 2 { ('/', '/') } else { ('\\', '\\') }), ..mv([STEP_R, PASS, STEP_L, PASS][k as usize]) }
+        }
+        // kicker: kick on the beat, tuck between
+        6 => Mv { arms: Some(('-', '-')), ..mv(if on { if alt { KICK_R } else { KICK_L } } else { TUCK }) },
+        // twister: heels in and out on the eighths, the hips going the other way
+        7 => {
+            let a = half.rem_euclid(2) == 0;
+            Mv { hips: if a { -1 } else { 1 }, arms: Some(if a { ('/', '\\') } else { ('\\', '/') }), ..mv(if a { SHUF_A } else { SHUF_B }) }
+        }
+        // robot: angular arms, a knee on every beat, the head clicks round
+        _ => Mv { head: if beat.rem_euclid(4) == 1 { 1 } else { 0 }, arms: Some(if alt { ('-', '/') } else { ('\\', '-') }), ..mv([KNEE_R, PASS, KNEE_L, STAND][beat.rem_euclid(4) as usize]) },
+    }
+}
+
+/// the standout dancer's moves: a different one every two beats
+fn star_moves(l: &Look) -> (Mv, [char; 2]) {
+    use legs::*;
+    let b = l.beats;
+    let beat = b.floor() as i64;
+    let q = (b * 4.0).floor() as i64; // sixteenths
+    let half = (b * 2.0).floor() as i64;
+    let mv_i = ((beat / 2) + (l.id % 5) as i64).rem_euclid(5);
+    match mv_i {
+        // spin: the head turns round on the sixteenths
+        0 => {
+            let k = q.rem_euclid(4) as usize;
+            (Mv { head: [0, 1, 0, -1][k], arms: Some([('-', '-'), ('/', '\\'), ('-', '-'), ('\\', '/')][k]), ..mv([TOES, CROSS, TOES, CROSS][k]) }, [['^', 'O'], [' ', ' '], ['^', ' '], [' ', '^']][k])
+        }
+        // high kicks
+        1 => (Mv { lift: half.rem_euclid(4) == 1, arms: Some(('\\', '/')), ..mv([KICK_R, TUCK, KICK_L, TUCK][half.rem_euclid(4) as usize]) }, ['*', 'O']),
+        // the slide: heels skating on the eighths
+        2 => (Mv { hips: if half.rem_euclid(2) == 0 { 1 } else { -1 }, arms: Some(('-', '-')), ..mv(if half.rem_euclid(2) == 0 { SHUF_A } else { SHUF_B }) }, ['^', 'o']),
+        // arm waves rolling through the body
+        3 => (Mv { hips: [0, 1, 0, -1][q.rem_euclid(4) as usize], arms: Some([('\\', '-'), ('-', '/'), ('/', '-'), ('-', '\\')][q.rem_euclid(4) as usize]), ..mv(if beat % 2 == 0 { TAP_R } else { TAP_L }) }, ['^', 'O']),
+        // jump into the splits on the beat
+        _ => (Mv { lift: b.fract() < 0.3, arms: Some(('\\', '/')), ..mv(if b.fract() < 0.3 { SPLIT } else { BOUNCE }) }, ['*', 'O']),
     }
 }
 
@@ -561,6 +660,22 @@ pub fn fig(l: &Look) -> ([String; FH], bool, i32) {
     let odd = beat.rem_euclid(2) == 1;
     let st = l.style;
     let blink = ((l.t * 0.6 + (l.id % 97) as f32 * 0.31) % 4.0) < 0.15;
+    let top = TOPS[p.top];
+    // passed out: falling over, then flat on the floor (seeing stars at first)
+    if matches!(l.act, Act::Out | Act::Carried) {
+        let lying = format!("(x){top}<");
+        let rows = if l.act == Act::Carried {
+            // crowd-surfed off: lying on a sea of hands
+            let hands = if l.step.rem_euclid(2) == 0 { " ^ ^ ^ " } else { "^ ^ ^ ^" };
+            [BLANK.into(), BLANK.into(), BLANK.into(), lying, hands.into()]
+        } else if l.phase < 0.5 {
+            [BLANK.into(), BLANK.into(), "   (x) ".into(), format!("  /{top} "), " _/ \\  ".into()]
+        } else {
+            let stars = if l.phase < 4.0 { if (l.t * 3.0) as i32 % 2 == 0 { " * . * " } else { " . * . " } } else { BLANK };
+            [BLANK.into(), BLANK.into(), BLANK.into(), stars.into(), lying]
+        };
+        return (rows, false, 0);
+    }
     // hair or hat
     let mut hair = HAIR[p.hair].to_string();
     if p.themed {
@@ -581,7 +696,7 @@ pub fn fig(l: &Look) -> ([String; FH], bool, i32) {
         hair.replace_range(5..6, "*"); // a flower behind the ear
     }
     // expression: from the music (vibe) and the process's own activity
-    let hype = l.act == Act::Here && l.vibe == Vibe::Hype;
+    let hype = matches!(l.act, Act::Here | Act::Star) && l.vibe == Vibe::Hype;
     let (mut eye, mut mouth) = match (l.act, l.vibe) {
         (Act::Wave | Act::Leave, _) => ('^', '-'),
         (Act::Bar, _) => ('-', 'o'),
@@ -590,7 +705,6 @@ pub fn fig(l: &Look) -> ([String; FH], bool, i32) {
         (Act::Here, Vibe::Hype) => if odd { ('^', 'O') } else { ('*', 'o') },
         _ if l.disk => ('@', '_'),
         _ if l.cpu > 0.5 => ('>', 'o'),
-        _ if l.idle > 40.0 => ('-', '.'),
         _ if l.chat => ('\'', 'o'),
         _ if l.cpu > 0.08 => ('^', '_'),
         (_, Vibe::Chill) => if frac < 0.35 { ('^', '_') } else { ('-', '_') },
@@ -602,11 +716,12 @@ pub fn fig(l: &Look) -> ([String; FH], bool, i32) {
     if l.surge && l.act == Act::Here {
         mouth = 'O';
     }
+    if l.dizzy {
+        eye = '@';
+        mouth = '~';
+    }
     let (lb, rb) = if p.acc == 1 { ('d', 'b') } else { ('(', ')') };
     let ear = if p.acc == 2 { '\'' } else { ' ' };
-    let head = format!(" {lb}{eye}{mouth}{eye}{rb}{ear}");
-    // body: arms + clothes
-    let top = TOPS[p.top];
     let mut tc: Vec<char> = top.chars().collect();
     if p.acc == 3 {
         tc[0] = '~'; // scarf
@@ -617,7 +732,9 @@ pub fn fig(l: &Look) -> ([String; FH], bool, i32) {
     let mut body;
     let mut lift = false;
     let mut dx = 0;
-    let mut lg: [&str; 2];
+    let mut hips = 0;
+    let mut hd = 0;
+    let lg: [&str; 2];
     match l.act {
         Act::Enter | Act::Back | Act::ToBar | Act::Leave => {
             // a 4-frame walking cycle, arms swinging against the legs
@@ -647,84 +764,77 @@ pub fn fig(l: &Look) -> ([String; FH], bool, i32) {
             // tapping a foot at the bar
             lg = if frac < 0.22 { TAP_R } else { STAND };
         }
+        Act::Star => {
+            let (m, em) = star_moves(l);
+            lg = m.lg;
+            lift = m.lift;
+            hips = m.hips;
+            hd = m.head;
+            let (la, ra) = m.arms.unwrap_or(('\\', '/'));
+            body = arms(la, ra);
+            eye = em[0];
+            mouth = em[1];
+            if em[0] == ' ' && em[1] == ' ' {
+                eye = ' '; // the back of the head mid-spin
+            }
+            if (beat + (l.id % 3) as i64) % 4 == 0 && frac < 0.5 {
+                hair = "  * *  ".into(); // sparkle
+            }
+        }
+        Act::Out | Act::Carried => unreachable!(),
         Act::Here => {
-            let (f, up, x) = footwork(l, &p, hype);
-            lg = f;
-            lift = up;
-            dx = x;
+            let m = moves(l, &p, hype);
+            lg = m.lg;
+            lift = m.lift;
+            dx = m.dx;
+            hips = m.hips;
+            hd = m.head;
+            if m.nod && eye != '@' {
+                eye = '-';
+            }
+            let (la, ra) = m.arms.unwrap_or(('/', '\\'));
             body = match l.vibe {
                 Vibe::Applause => if (l.t * 6.0) as i32 % 2 == 0 { arms('>', '<') } else { arms('-', '-') },
                 Vibe::Hype => match st {
                     // moshing: headbang (hair flips on the beat), flailing fists, shoved about
-                    "industrial" => {
+                    "industrial" if (l.id >> 3) % 2 == 0 => {
                         hair = if frac < 0.35 { "  \\\\\\  ".into() } else { "  ///  ".into() };
-                        dx += [0, 1, -1, 1, 0, -1][((beat + (l.id % 5) as i64) as usize) % 6];
                         if odd { arms('\\', '/') } else { arms('/', '\\') }
                     }
-                    // fists up for the chorus, the horns \m/ the rest of the time
-                    // metal: half the pit throws the horns, the other half moshes
-                    "metal" if (l.id >> 3) % 2 == 0 => {
+                    // metal / biker: some throw the horns, some headbang, the rest dance their own way
+                    "metal" | "biker" if (l.id >> 3) % 3 == 0 => {
                         hair = if odd { "\\m/ \\m/".into() } else { "  \\m/  ".into() };
                         if odd { arms('|', '|') } else { arms('\\', '|') }
                     }
-                    "metal" => {
+                    "metal" if (l.id >> 3) % 3 == 1 => {
                         hair = if frac < 0.4 { "  \\\\\\  ".into() } else { "  ///  ".into() };
-                        dx += [0, 1, -1, 1, 0, -1][((beat + (l.id % 5) as i64) as usize) % 6];
                         if odd { arms('\\', '/') } else { arms('/', '\\') }
                     }
                     "biker" if l.chorus => {
                         hair = if frac < 0.5 { " \\o o/ ".into() } else { " \\o_o/ ".into() };
                         arms('|', '|')
                     }
-                    "biker" if (l.id >> 3) % 3 != 0 => {
-                        hair = if odd { "\\m/ \\m/".into() } else { " \\m/   ".into() };
-                        if odd { arms('|', '|') } else { arms('|', '\\') }
-                    }
-                    "country" => if odd { arms('/', '-') } else { arms('-', '\\') },
-                    "baroque" => if frac < 0.2 { arms('.', '.') } else { arms('/', '\\') },
-                    "blues" => arms('\\', '\\'),
-                    _ => arms('\\', '/'),
+                    _ => arms(la, ra),
                 },
                 _ if l.disk => {
                     hair = "  [#]  ".into();
                     arms('\\', '/')
                 }
-                _ if l.cpu > 0.5 => if (l.beats * 2.0).floor() as i64 % 2 == 0 { arms('\\', '/') } else { arms('/', '\\') },
-                _ if l.idle > 40.0 => {
-                    // sitting it out
-                    lg = SIT;
-                    lift = false;
-                    dx = 0;
-                    hair = if (l.t as i32 + (l.id % 7) as i32) % 4 < 2 { "      z".into() } else { "     z ".into() };
-                    arms('/', '\\')
-                }
-                _ => match p.dance {
-                    3 => if frac < 0.3 { arms('/', '\\') } else { arms('|', '|') }, // headbang
-                    4 => if odd { arms('-', '/') } else { arms('\\', '-') },     // robot
-                    _ if l.cpu > 0.08 => if odd { arms('\\', '\\') } else { arms('/', '/') },
-                    _ => if beat.rem_euclid(4) < 2 { arms('/', '\\') } else { arms('|', '\\') },
-                },
+                _ => arms(la, ra),
             };
-            // the blues: a swing step on the shuffle (step, kick on the swung "and", step back)
-            if st == "blues" && l.idle <= 40.0 && l.vibe != Vibe::Applause {
-                let b4 = beat.rem_euclid(4) as usize;
-                lg = if frac < 0.66 { [STEP_R, PASS, STEP_L, PASS][b4] } else { [KICK_L, TAP_R, KICK_R, TAP_L][b4] };
-                dx = [0, 1, 0, -1][b4];
-                lift = false;
-                if hype {
-                    body = if b4 % 2 == 0 { arms('\\', '-') } else { arms('-', '/') };
-                }
-            }
             if l.chat && !hype {
                 hair.replace_range(5..7, "..");
             }
         }
     }
+    let head = nudge(&format!(" {lb}{eye}{mouth}{eye}{rb}{ear}"), hd);
+    let hair = nudge(&hair, hd);
+    let body = nudge(&body, hips);
     let rows = if p.tall {
         [hair, head, body, lg[0].to_string(), lg[1].to_string()]
     } else {
         // shorter: no knee row
-        ["       ".to_string(), hair, head, body, lg[1].to_string()]
+        [BLANK.to_string(), hair, head, body, lg[1].to_string()]
     };
     (rows, lift, dx)
 }
@@ -761,7 +871,7 @@ impl Item {
 
 /// who holds what overhead right now (occasional, mostly in big moments); the x sway
 pub fn item(l: &Look) -> Option<(Item, i32)> {
-    if l.act != Act::Here || l.idle > 40.0 {
+    if !matches!(l.act, Act::Here | Act::Star) {
         return None;
     }
     let big = l.vibe == Vibe::Hype || l.surge || l.chorus;
@@ -784,31 +894,6 @@ pub fn item(l: &Look) -> Option<(Item, i32)> {
     Some((it, sway))
 }
 
-/// a back-row figure: 3 rows (head, body, legs), smaller and further away
-pub fn fig_small(l: &Look) -> [String; 3] {
-    let beat = l.beats.floor() as i64;
-    let odd = beat.rem_euclid(2) == 1;
-    let hype = l.act == Act::Here && l.vibe == Vibe::Hype;
-    let head = match (l.act, hype, l.style) {
-        (Act::Here, true, "industrial" | "metal") => if odd { "   x   " } else { "   o   " },
-        (Act::Here, true, _) => if odd { "  \\o/  " } else { "   o   " },
-        _ => "   o   ",
-    };
-    let body = match l.act {
-        Act::Bar => "  /|U  ",
-        Act::Here if hype && (l.style == "biker" || l.style == "metal") => if odd { "  m|m  " } else { "  /|\\  " },
-        Act::Here if hype => if odd { "   |   " } else { "  /|\\  " },
-        Act::Enter | Act::Back | Act::ToBar | Act::Leave => if l.step.rem_euclid(2) == 0 { "  /|\\  " } else { "  \\|/  " },
-        _ => "  /|\\  ",
-    };
-    let legs = match l.act {
-        Act::Enter | Act::Back | Act::ToBar | Act::Leave => if l.step.rem_euclid(2) == 0 { "  / \\  " } else { "   |\\  " },
-        Act::Here if hype && odd => "  ' '  ",
-        _ => "  / \\  ",
-    };
-    [head.to_string(), body.to_string(), legs.to_string()]
-}
-
 /// the bar at the right end of the floor: 3 rows of BARW-1 cells (emoji width 2) + a label
 pub fn bar_rows(ascii: bool) -> [String; 4] {
     if ascii {
@@ -823,6 +908,7 @@ pub fn tag(name: &str, w: usize) -> String {
     name.chars().take(w).collect()
 }
 
+
 /// UI memory for each figure on the floor
 pub struct Person {
     pub m: Member,
@@ -836,6 +922,10 @@ pub struct Person {
     pub stay: f32,
     /// depth: 0 back (by the bar, hazy) .. rows-1 front (at the stage)
     pub z: f32,
+    /// seconds of seeing stars left after getting back up
+    pub dizzy: f32,
+    /// the standout dancer's next waypoint (x, row)
+    pub wp: (f32, f32),
 }
 
 /// the floor's places: stacked rows of slots, back rows staggered half a slot so the people
@@ -854,6 +944,10 @@ pub fn slots(fw: usize, rows: usize) -> Vec<(usize, f32)> {
     v
 }
 
+fn env_secs(k: &str) -> Option<f32> {
+    std::env::var(k).ok().and_then(|v| v.parse().ok())
+}
+
 pub struct Floor {
     pub people: Vec<Person>,
     /// sent home to make room: not back for a while
@@ -864,17 +958,42 @@ pub struct Floor {
     rng: u64,
     /// stacked rows of people on the floor (from the panel height)
     pub rows: usize,
+    /// no new standout dancer / pass-out before these times
+    star_cd: f32,
+    out_cd: f32,
+    /// debug: SYSJAM_CROWD_STAR / SYSJAM_CROWD_PASSOUT = seconds after start
+    force_star: Option<f32>,
+    force_out: Option<f32>,
 }
 
 impl Floor {
     pub fn new() -> Floor {
-        Floor { people: Vec::new(), benched: HashMap::new(), evict_t: 0.0, last: None, t: 0.0, rng: 0xA5A5_1234_5678_9ABC, rows: 1 }
+        Floor {
+            people: Vec::new(),
+            benched: HashMap::new(),
+            evict_t: 0.0,
+            last: None,
+            t: 0.0,
+            rng: 0xA5A5_1234_5678_9ABC,
+            rows: 1,
+            star_cd: 20.0,
+            out_cd: 150.0,
+            force_star: env_secs("SYSJAM_CROWD_STAR"),
+            force_out: env_secs("SYSJAM_CROWD_PASSOUT"),
+        }
     }
     fn rand(&mut self) -> f32 {
         self.rng ^= self.rng << 13;
         self.rng ^= self.rng >> 7;
         self.rng ^= self.rng << 17;
         (self.rng >> 40) as f32 / (1u64 << 24) as f32
+    }
+
+    /// a fresh waypoint for the standout dancer: anywhere on the floor, any row
+    fn waypoint(&mut self, fw: usize) -> (f32, f32) {
+        let x = self.rand() * fw.saturating_sub(FW + 2) as f32;
+        let row = (self.rand() * self.rows as f32).floor().min(self.rows as f32 - 1.0);
+        (x.round(), row)
     }
 
     /// advance everyone to now on a floor `fw` cells wide (bar excluded)
@@ -886,14 +1005,15 @@ impl Floor {
         let places = slots(fw, self.rows);
         let nslots = places.len().clamp(1, CAP);
         WANT.store(nslots, std::sync::atomic::Ordering::Relaxed);
+        let away = |a: Act| matches!(a, Act::Wave | Act::Leave | Act::Carried);
         // new data: arrivals, departures, fresh numbers
         for m in &snap.members {
             match self.people.iter_mut().find(|p| p.m.pid == m.pid) {
                 Some(p) => {
                     let was_gone = p.m.gone;
                     p.m = m.clone();
-                    if m.gone && !was_gone && !matches!(p.act, Act::Wave | Act::Leave) {
-                        p.act = if p.x < -1.0 || p.x > fw as f32 { Act::Leave } else { Act::Wave };
+                    if m.gone && !was_gone && !away(p.act) {
+                        p.act = if p.act == Act::Out { Act::Carried } else if p.x < -1.0 || p.x > fw as f32 { Act::Leave } else { Act::Wave };
                         p.t_act = 0.0;
                     }
                 }
@@ -901,7 +1021,7 @@ impl Floor {
                     if self.benched.get(&m.pid).map_or(false, |&u| u > self.t) {
                         continue;
                     }
-                    let used: Vec<usize> = self.people.iter().filter(|p| !matches!(p.act, Act::Wave | Act::Leave)).map(|p| p.slot).collect();
+                    let used: Vec<usize> = self.people.iter().filter(|p| !away(p.act)).map(|p| p.slot).collect();
                     let mut free: Vec<usize> = (0..nslots).filter(|s| !used.contains(s)).collect();
                     if free.is_empty() && (m.fresh || m.cpu > 0.3 || m.disk > 2e5) && self.evict_t <= self.t {
                         // a newcomer worth seeing: the idlest one at home goes home
@@ -925,36 +1045,83 @@ impl Floor {
                     let slot = row_free[((r * row_free.len() as f32) as usize).min(row_free.len() - 1)];
                     let from_left = places[slot].1 < fw as f32 * 0.5;
                     // looks and habits come from the exe name, so the same program is always the same person
-                    let seed = name_id(&m.name);
+                    // the dance vibe (and hat) also varies per process, so two of a kind don't move alike
+                    let seed = name_id(&m.name) ^ (((m.pid as u32).wrapping_mul(0x9E37_79B1) >> 25) << 16);
                     let beer = (seed >> 24) % 5 < 3;
-                    self.people.push(Person { m: m.clone(), x: if from_left { -(FW as f32) } else { fw as f32 }, slot, act: Act::Enter, t_act: 0.0, step: 0, beer, seed, stay: 0.0, z: places[slot].0 as f32 });
+                    self.people.push(Person { m: m.clone(), x: if from_left { -(FW as f32) } else { fw as f32 }, slot, act: Act::Enter, t_act: 0.0, step: 0, beer, seed, stay: 0.0, z: places[slot].0 as f32, dizzy: 0.0, wp: (0.0, 0.0) });
                 }
                 None => {}
             }
         }
         // people whose process vanished from the census entirely: leave too
         for p in self.people.iter_mut() {
-            if !snap.members.iter().any(|m| m.pid == p.m.pid) && !matches!(p.act, Act::Wave | Act::Leave) {
-                p.act = Act::Wave;
+            if !snap.members.iter().any(|m| m.pid == p.m.pid) && !away(p.act) {
+                p.act = if p.act == Act::Out { Act::Carried } else { Act::Wave };
                 p.t_act = 0.0;
             }
         }
+        // the standout dancer: one at a time, now and then, far more often when the band is hot
+        let star_on = self.people.iter().any(|p| p.act == Act::Star);
+        let here: Vec<usize> = (0..self.people.len()).filter(|&i| self.people[i].act == Act::Here && self.people[i].t_act > 3.0).collect();
+        let forced_star = self.force_star.map_or(false, |s| self.t >= s);
+        if !star_on && !here.is_empty() && (forced_star || self.t >= self.star_cd) {
+            let rate = match vibe {
+                Vibe::Hype => 1.0 / 10.0,
+                Vibe::Normal | Vibe::Applause => 1.0 / 70.0,
+                Vibe::Chill => 0.0,
+            };
+            if forced_star || self.rand() < dt * rate {
+                self.force_star = None;
+                let i = here[((self.rand() * here.len() as f32) as usize).min(here.len() - 1)];
+                let wp = self.waypoint(fw);
+                let dur = 16.0 + 10.0 * self.rand();
+                let p = &mut self.people[i];
+                p.act = Act::Star;
+                p.t_act = 0.0;
+                p.stay = dur;
+                p.wp = wp;
+                self.star_cd = self.t + dur + if vibe == Vibe::Hype { 12.0 } else { 40.0 };
+            }
+        }
+        // passing out: rare, one at a time
+        let out_on = self.people.iter().any(|p| matches!(p.act, Act::Out | Act::Carried));
+        let forced_out = self.force_out.map_or(false, |s| self.t >= s);
+        if !out_on && here.len() >= 4 && (forced_out || self.t >= self.out_cd) {
+            if forced_out || self.rand() < dt / if vibe == Vibe::Hype { 150.0 } else { 300.0 } {
+                self.force_out = None;
+                // someone in one of the two front rows, so it's seen
+                let front: Vec<usize> = here.iter().copied().filter(|&i| self.people[i].z >= self.rows as f32 - 2.0).collect();
+                let pool = if front.is_empty() { &here } else { &front };
+                let i = pool[((self.rand() * pool.len() as f32) as usize).min(pool.len() - 1)];
+                let stay = 7.0 + 6.0 * self.rand();
+                let p = &mut self.people[i];
+                p.act = Act::Out;
+                p.t_act = 0.0;
+                p.stay = stay;
+                self.out_cd = self.t + 200.0 + 200.0 * self.rand();
+            }
+        }
         let at_bar = self.people.iter().filter(|p| matches!(p.act, Act::ToBar | Act::Bar)).count();
+        let n_here = here.len();
         let mut bar_q = 0usize;
         // one walker back from the bar at a time, so they don't walk through each other
         let mut backing = self.people.iter().any(|p| p.act == Act::Back);
         let mut want_bar: Option<usize> = None;
         let mut want_move: Option<usize> = None;
+        let mut checked_out = false;
         // one wanderer at a time (each step of a walk repaints a whole figure)
         let walking = self.people.iter().any(|p| matches!(p.act, Act::Enter | Act::Back | Act::ToBar));
         let n = self.people.len();
         for i in 0..n {
             let r = self.rand();
+            let r2 = self.rand();
+            let wp_new = if self.people[i].act == Act::Star { Some(self.waypoint(fw)) } else { None };
             let p = &mut self.people[i];
             p.t_act += dt;
+            p.dizzy = (p.dizzy - dt).max(0.0);
             let home = places.get(p.slot).map_or(0.0, |s| s.1);
             let speed = if p.m.fresh && p.m.cpu > 0.05 { 16.0 } else { 9.0 };
-            let go = |p: &mut Person, target: f32| -> bool {
+            let go = |p: &mut Person, target: f32, speed: f32| -> bool {
                 let d = target - p.x;
                 let s = speed * dt;
                 let old = p.x.round() as i32;
@@ -970,12 +1137,21 @@ impl Floor {
             };
             match p.act {
                 Act::Enter | Act::Back => {
-                    if go(p, home) {
+                    if go(p, home, speed) {
                         p.act = Act::Here;
                         p.t_act = 0.0;
                     }
                 }
                 Act::Here => {
+                    if p.m.idle > 60.0 && p.t_act > 20.0 && n_here > 4 && !checked_out && r2 < dt / 300.0 {
+                        // checking out: no sleeping on the dance floor, they just go home
+                        checked_out = true;
+                        p.act = Act::Wave;
+                        p.t_act = 0.0;
+                        let pid = p.m.pid;
+                        self.benched.insert(pid, self.t + 90.0);
+                        continue;
+                    }
                     // idle ones wander off to the bar now and then (not while the band is on fire)
                     if vibe != Vibe::Hype && p.m.idle > 12.0 && p.t_act > 8.0 && at_bar < 2 && want_bar.is_none() && r < dt / 15.0 {
                         want_bar = Some(i);
@@ -984,10 +1160,46 @@ impl Floor {
                         want_move = Some(i);
                     }
                 }
+                Act::Star => {
+                    // roaming: sliding along and weaving through the rows
+                    let fast = if ((p.t_act * 0.5) as i32) % 3 == 1 { 16.0 } else { 8.0 };
+                    let at = go(p, p.wp.0, fast);
+                    if at && (p.z - p.wp.1).abs() < 0.2 {
+                        if let Some(w) = wp_new {
+                            p.wp = w;
+                        }
+                    }
+                    if p.t_act > p.stay {
+                        p.act = Act::Back;
+                        p.t_act = 0.0;
+                    }
+                }
+                Act::Out => {
+                    if p.t_act > p.stay {
+                        p.t_act = 0.0;
+                        if r < 0.45 {
+                            // gets back up, a bit dizzy
+                            p.act = Act::Here;
+                            p.dizzy = 4.0;
+                        } else if r < 0.8 {
+                            p.act = Act::Carried;
+                        } else {
+                            p.act = Act::Wave;
+                        }
+                        if p.act != Act::Here {
+                            let pid = p.m.pid;
+                            self.benched.insert(pid, self.t + 60.0);
+                        }
+                    }
+                }
+                Act::Carried => {
+                    let exit = if p.x < fw as f32 * 0.5 { -(FW as f32) - 1.0 } else { fw as f32 + 1.0 };
+                    go(p, exit, 6.0);
+                }
                 Act::ToBar => {
                     let spot = fw as f32 - FW as f32 - 1.0 - (FW + 1) as f32 * bar_q as f32;
                     bar_q += 1;
-                    if go(p, spot) {
+                    if go(p, spot, speed) {
                         p.act = Act::Bar;
                         p.t_act = 0.0;
                         p.stay = 6.0 + 8.0 * r;
@@ -1009,7 +1221,7 @@ impl Floor {
                 }
                 Act::Leave => {
                     let exit = if p.x < fw as f32 * 0.5 { -(FW as f32) - 1.0 } else { fw as f32 + 1.0 };
-                    go(p, exit);
+                    go(p, exit, speed);
                 }
             }
         }
@@ -1020,7 +1232,7 @@ impl Floor {
         if let Some(i) = want_move {
             // the music pulls people forward, a calm band lets them drift back
             let row = places.get(self.people[i].slot).map_or(0, |s| s.0);
-            let used: Vec<usize> = self.people.iter().filter(|p| !matches!(p.act, Act::Wave | Act::Leave)).map(|p| p.slot).collect();
+            let used: Vec<usize> = self.people.iter().filter(|p| !away(p.act)).map(|p| p.slot).collect();
             let dir: i32 = match vibe {
                 Vibe::Hype | Vibe::Applause => 1,
                 Vibe::Chill => -1,
@@ -1037,23 +1249,24 @@ impl Floor {
             }
         }
         // depth: each place is in a row; the bar is at the back, so drinkers drift back
-        // (and come forward again to their row)
+        // (and come forward again to their row); the standout dancer weaves between rows
         for p in self.people.iter_mut() {
             let row = places.get(p.slot).map_or(0, |s| s.0) as f32;
-            let target = match p.act {
-                Act::Here | Act::Enter | Act::Back => row,
-                Act::Bar | Act::ToBar => 0.0,
-                Act::Wave | Act::Leave => p.z,
+            let (target, rate) = match p.act {
+                Act::Here | Act::Enter | Act::Back => (row, 0.9),
+                Act::Bar | Act::ToBar => (0.0, 0.9),
+                Act::Star => (p.wp.1, 1.4),
+                Act::Wave | Act::Leave | Act::Out | Act::Carried => (p.z, 0.9),
             };
-            let k = (dt * 0.9).min(1.0);
+            let k = (dt * rate).min(1.0);
             p.z += (target - p.z) * k;
         }
-        self.people.retain(|p| !(p.act == Act::Leave && (p.x < -(FW as f32) || p.x > fw as f32)));
+        self.people.retain(|p| !(matches!(p.act, Act::Leave | Act::Carried) && (p.x < -(FW as f32) || p.x > fw as f32)));
         let t = self.t;
         self.benched.retain(|_, u| *u > t);
         // a narrower terminal: whoever no longer has a slot steps out
         for p in self.people.iter_mut() {
-            if p.slot >= nslots && !matches!(p.act, Act::Wave | Act::Leave) {
+            if p.slot >= nslots && !away(p.act) {
                 p.act = Act::Leave;
             }
         }
@@ -1071,29 +1284,28 @@ mod tests {
 
     #[test]
     fn crowd_figures_are_clean_and_fixed_width() {
-        let acts = [Act::Enter, Act::Here, Act::ToBar, Act::Bar, Act::Back, Act::Wave, Act::Leave];
+        let acts = [Act::Enter, Act::Here, Act::ToBar, Act::Bar, Act::Back, Act::Wave, Act::Leave, Act::Star, Act::Out, Act::Carried];
         let vibes = [Vibe::Hype, Vibe::Applause, Vibe::Chill, Vibe::Normal];
         let names = ["firefox", "bash", "cargo", "node", "sysjam", "tmux: server", "kworker", "x", "python3", "gnome-shell", "Xorg", "zsh"];
         let mut looks = std::collections::HashSet::new();
+        let mut dances = std::collections::HashSet::new();
         for name in names {
             let id = name_id(name);
             assert_eq!(id, name_id(name));
             looks.insert(format!("{:?}", persona(id)));
+            dances.insert(persona(id).dance);
             for st in crate::style::STYLES {
                 for &act in &acts {
                     for &vibe in &vibes {
-                        for k in 0..24 {
-                            let l = Look { style: st.id, act, vibe, beats: k as f64 * 0.37, t: k as f32 * 0.29, cpu: (k % 4) as f32 * 0.25, disk: k % 5 == 0, chat: k % 3 == 0, idle: (k * 5) as f32, step: k as i32, beer: k % 2 == 0, id, surge: k % 7 == 0, chorus: k % 5 == 0 };
+                        for k in 0..32 {
+                            let l = Look { style: st.id, act, vibe, beats: k as f64 * 0.37, t: k as f32 * 0.29, cpu: (k % 4) as f32 * 0.25, disk: k % 5 == 0, chat: k % 3 == 0, idle: (k * 5) as f32, step: k as i32, beer: k % 2 == 0, id, surge: k % 7 == 0, chorus: k % 5 == 0, phase: k as f32 * 0.2, dizzy: k % 6 == 0 };
                             let (rows, _, dx) = fig(&l);
                             assert!(dx.abs() <= 3);
-                            for r in fig_small(&l).iter() {
-                                assert_eq!(r.width(), FW, "small {r:?}");
-                                assert!(r.chars().all(|c| (' '..='~').contains(&c)), "non-ASCII in {r:?}");
-                            }
                             for r in rows.iter() {
                                 assert_eq!(r.width(), FW, "{} {name} {act:?} {vibe:?}: {r:?}", st.id);
                                 assert_eq!(r.chars().count(), FW);
                                 assert!(r.chars().all(|c| (' '..='~').contains(&c)), "non-ASCII in {r:?}");
+                                assert!(!r.contains('z'), "no snoozing: {r:?}");
                             }
                         }
                     }
@@ -1101,6 +1313,7 @@ mod tests {
             }
         }
         assert!(looks.len() >= 10, "names should look different: {}", looks.len());
+        assert!(dances.len() >= 5, "dance vibes should vary: {}", dances.len());
         for a in [true, false] {
             for r in bar_rows(a) {
                 assert_eq!(r.width(), BARW - 1, "{r:?}");
