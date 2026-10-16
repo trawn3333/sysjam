@@ -104,6 +104,11 @@ fn vmstat_dirtied(buf: &str) -> u64 {
 
 /// Parse /proc/<pid>/stat: (comm, utime+stime, num_threads)
 fn parse_pid_stat(buf: &str) -> Option<(&str, u64, u32)> {
+    parse_pid_stat2(buf).map(|(c, t, n, _)| (c, t, n))
+}
+
+/// … plus the parent pid
+fn parse_pid_stat2(buf: &str) -> Option<(&str, u64, u32, i32)> {
     let l = buf.find('(')?;
     let r = buf.rfind(')')?;
     let comm = &buf[l + 1..r];
@@ -114,7 +119,8 @@ fn parse_pid_stat(buf: &str) -> Option<(&str, u64, u32)> {
     }
     let t = f[11].parse::<u64>().ok()? + f[12].parse::<u64>().ok()?;
     let nt = f[17].parse::<u32>().unwrap_or(1);
-    Some((comm, t, nt))
+    let ppid = f[1].parse::<i32>().unwrap_or(0);
+    Some((comm, t, nt, ppid))
 }
 
 struct Rates {
@@ -144,6 +150,9 @@ struct ThreadScanner {
     threads: HashMap<i32, u64>,
     last: Option<Instant>,
     buf: String,
+    /// every process of the last walk (pid, ppid, comm, cpu or None when new), for the audience
+    want_all: bool,
+    all: Vec<(i32, i32, String, Option<f32>)>,
 }
 
 struct Cand {
@@ -163,6 +172,8 @@ impl ThreadScanner {
             threads: HashMap::new(),
             last: None,
             buf: String::with_capacity(1024),
+            want_all: false,
+            all: Vec::new(),
         }
     }
 
@@ -175,6 +186,7 @@ impl ThreadScanner {
         let mut newp = HashMap::with_capacity(self.procs.len() + 16);
         let mut hot: Vec<(i32, String, f32, u32)> = Vec::new();
         let mut path = String::with_capacity(64);
+        self.all.clear();
         if let Ok(rd) = fs::read_dir("/proc") {
             for e in rd.flatten() {
                 let name = e.file_name();
@@ -187,14 +199,19 @@ impl ThreadScanner {
                 let _ = write!(path, "/proc/{}/stat", pid);
                 let mut b = std::mem::take(&mut self.buf);
                 if read_into(&path, &mut b) {
-                    if let Some((comm, t, nt)) = parse_pid_stat(&b) {
+                    if let Some((comm, t, nt, ppid)) = parse_pid_stat2(&b) {
+                        let mut seen = None;
                         if let Some(&pt) = self.procs.get(&pid) {
                             if dt > 0.0 {
                                 let cpu = (t.saturating_sub(pt)) as f64 / (self.clk * dt);
+                                seen = Some(cpu as f32);
                                 if cpu >= 0.03 {
                                     hot.push((pid, comm.to_string(), cpu as f32, nt));
                                 }
                             }
+                        }
+                        if self.want_all {
+                            self.all.push((pid, ppid, comm.to_string(), seen));
                         }
                         newp.insert(pid, t);
                     }
@@ -284,6 +301,14 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
     let mut disk = Rates::new();
     let mut dirt = Rates::new();
     let mut scanner = ThreadScanner::new();
+    let audience = cfg.ui.is_some() && crate::audience::ENABLED.load(Ordering::Relaxed);
+    scanner.want_all = audience;
+    let mut census = if audience { Some(crate::audience::Census::new()) } else { None };
+    let mut crowd = crate::audience::CrowdSnap::default();
+    let mut last_census = Instant::now();
+    let mut census_cost = (Duration::ZERO, 0u32);
+    let mut walkin_ver = 0u64;
+    let mut walkin: Option<String> = None;
     let mut prev_files: Option<i64> = None;
     let mut fd_rate_acc = 0.0f64;
     let mut c = Control::default();
@@ -360,6 +385,24 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
             // --- threads every 1.5 s: only a sustained heavy thread may sing ---
             let dt = 1.5f32;
             let cands = scanner.scan();
+            if let Some(cs) = census.as_mut() {
+                let t = Instant::now();
+                let procs: Vec<crate::audience::Proc> = scanner.all.iter().map(|(pid, ppid, comm, cpu)| crate::audience::Proc { pid: *pid, ppid: *ppid, comm, cpu: *cpu }).collect();
+                let cdt = last_census.elapsed().as_secs_f32();
+                last_census = Instant::now();
+                crowd = cs.update(&procs, cdt);
+                if let Some(w) = cs.walkin.take() {
+                    walkin = Some(w);
+                    walkin_ver += 1;
+                }
+                census_cost.0 += t.elapsed();
+                census_cost.1 += 1;
+                if census_cost.1 % 40 == 0 {
+                    if let Some(p) = std::env::var_os("SYSJAM_CROWDPROF") {
+                        let _ = std::fs::write(p, format!("census {} runs, {:.3} ms each (on top of the shared /proc walk)\n", census_cost.1, census_cost.0.as_secs_f64() * 1e3 / census_cost.1 as f64));
+                    }
+                }
+            }
             if tui {
                 top = cands.iter().filter(|c| !c.pcomm.starts_with("sysjam")).take(4).map(|c| (c.name.clone(), c.cpu)).collect();
             }
@@ -438,7 +481,12 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
             prev_raw = raw_score;
             started = true;
             let act = input.as_mut().map(|t| t.poll()).unwrap_or_default();
-            c.sig = crate::band::Signals { cpu: cpu_e, cores: cores_e, net: net_e, file: file_e, fd: fl, screen_change, input: act.input };
+            c.sig = crate::band::Signals { cpu: cpu_e, cores: cores_e, net: net_e, file: file_e, fd: fl, screen_change, input: act.input, crowd: 0.0 };
+            let (cn, ca) = crate::audience::Census::liveliness(&crowd);
+            c.crowd_n = cn;
+            c.crowd_act = ca;
+            c.walkin = walkin.clone();
+            c.walkin_ver = walkin_ver;
             c.warmth = score_e.clamp(-1.0, 1.0);
             c.brightness = sc.brightness;
             c.screen_valid = sc.valid;
@@ -467,6 +515,7 @@ pub fn run(cfg: MonitorCfg, ctl: Arc<Mutex<Control>>, screen: Arc<Mutex<ScreenCo
                     screen: if sc.valid { Some((sc.hue, sc.saturation, sc.brightness)) } else { None },
                     top: top.clone(),
                     hist: hist.clone(),
+                    crowd: crowd.clone(),
                 };
                 if let Ok(mut g) = ui.lock() {
                     *g = snap;

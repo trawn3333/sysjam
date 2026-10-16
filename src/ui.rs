@@ -107,6 +107,8 @@ pub struct BandSnap {
     /// seconds since the last ♥, and how many likes are stored
     pub liked: f32,
     pub likes_n: usize,
+    /// the audience's excitement 0..1
+    pub crowd_hype: f32,
 }
 
 pub const HIST: usize = 120;
@@ -128,6 +130,7 @@ pub struct MonSnap {
     pub top: Vec<(String, f32)>,
     /// cpu, cores, net, disk, files, input — each 0..1
     pub hist: [VecDeque<f32>; 6],
+    pub crowd: crate::audience::CrowdSnap,
 }
 
 pub static TUI_ON: AtomicBool = AtomicBool::new(false);
@@ -251,6 +254,12 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
                     KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Enter if last_l.elapsed() >= Duration::from_millis(400) => {
                         last_l = Instant::now();
                         crate::shared::KEY_LIKE.fetch_add(1, Ordering::Relaxed);
+                        last = Instant::now() - slow;
+                        force_full = true;
+                    }
+                    KeyCode::Char('a') | KeyCode::Char('A') if crate::audience::ENABLED.load(Ordering::Relaxed) => {
+                        let on = crate::audience::SHOWN.load(Ordering::Relaxed);
+                        crate::audience::SHOWN.store(!on, Ordering::Relaxed);
                         last = Instant::now() - slow;
                         force_full = true;
                     }
@@ -452,16 +461,36 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
     let area = f.area();
     crate::theme::frame(b.style_id, b.beat);
     f.render_widget(Block::default().style(Style::default().bg(crate::theme::bg()).fg(th(Color::Gray))), area);
+    // the crowd strip under the band needs 5 more rows (it shares the band's bottom border);
+    // on a short terminal the event log gives up to 2 lines for it, below that it hides
+    let crowd_on = crate::audience::ENABLED.load(Ordering::Relaxed) && crate::audience::SHOWN.load(Ordering::Relaxed);
+    let need = 30 + CROWD_H - 1;
+    let mut log_h = 7u16;
+    let mut show_crowd = false;
+    if crowd_on && area.height >= 5 + 5 + need {
+        show_crowd = true;
+        log_h = (area.height - 5 - need).min(7);
+    }
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(5), Constraint::Min(10), Constraint::Length(7)])
+        .constraints([Constraint::Length(5), Constraint::Min(10), Constraint::Length(log_h)])
         .split(area);
     draw_header(f, rows[0], b, m, paused, quitting, anim, ctx);
     let mid = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(rows[1]);
-    draw_band(f, mid[0], b, anim, ctx);
+    anim.crowd = m.crowd.clone();
+    if show_crowd {
+        let l = mid[0];
+        let band = Rect { height: l.height - (CROWD_H - 1), ..l };
+        let cr = Rect { y: l.y + band.height - 1, height: CROWD_H, ..l };
+        draw_band(f, band, b, anim, ctx);
+        draw_crowd(f, cr, b, anim, ctx);
+    } else {
+        anim.aud = None;
+        draw_band(f, mid[0], b, anim, ctx);
+    }
     let right = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(8), Constraint::Length(5), Constraint::Min(8), Constraint::Length(6)])
@@ -564,7 +593,7 @@ fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, 
             .title(style_title(b))
             .title(heart(b))
             .title(Line::from(inp).right_aligned())
-            .title_bottom(Span::styled(crate::theme::asciify(" ↑↓ tempo  ←→ style  l like  space pause  q quit "), dim)),
+            .title_bottom(Span::styled(crate::theme::asciify(if crate::audience::ENABLED.load(Ordering::Relaxed) { " ↑↓ tempo  ←→ style  l like  a crowd  space pause  q quit " } else { " ↑↓ tempo  ←→ style  l like  space pause  q quit " }), dim)),
     );
     f.render_widget(p, r);
 }
@@ -579,6 +608,8 @@ fn emit(out: &mut impl Write, cache: &ratatui::buffer::Buffer, x: u16, y: u16, t
     }
     let _ = crossterm::queue!(out, cursor::MoveTo(x, y));
     let mut chars = text.map(|t| t.0.chars());
+    // only send attribute/colour changes (most runs are one colour on one background)
+    let mut cur: Option<(Color, Color, bool)> = None;
     for k in 0..w as u16 {
         if x + k >= a.x + a.width {
             break;
@@ -588,13 +619,17 @@ fn emit(out: &mut impl Write, cache: &ratatui::buffer::Buffer, x: u16, y: u16, t
             (Some(it), Some((_, st))) => (it.next().unwrap_or(' ').to_string(), st.fg.unwrap_or(base.fg), st.add_modifier.contains(Modifier::BOLD)),
             _ => (base.symbol().to_string(), base.fg, base.modifier.contains(Modifier::BOLD)),
         };
-        let _ = crossterm::queue!(
-            out,
-            SetAttribute(if bold { Attribute::Bold } else { Attribute::NormalIntensity }),
-            SetForegroundColor(CC::from(fg)),
-            SetBackgroundColor(CC::from(base.bg)),
-            Print(sym)
-        );
+        let st = (fg, base.bg, bold);
+        if cur != Some(st) {
+            let _ = crossterm::queue!(
+                out,
+                SetAttribute(if bold { Attribute::Bold } else { Attribute::NormalIntensity }),
+                SetForegroundColor(CC::from(fg)),
+                SetBackgroundColor(CC::from(base.bg))
+            );
+            cur = Some(st);
+        }
+        let _ = crossterm::queue!(out, Print(sym));
     }
 }
 
@@ -666,11 +701,18 @@ pub struct Anim {
     cond: Option<(Rect, Color)>,
     band: Option<(Rect, usize, bool)>,
     dots: Option<(u16, u16, Style)>,
+    /// the crowd: who is on the floor (from the monitor), their UI-side walks, the floor rect
+    crowd: crate::audience::CrowdSnap,
+    floor: crate::audience::Floor,
+    aud: Option<(Rect, usize)>,
+    crowd_rows: Vec<Vec<(char, Color)>>,
+    crowd_t: Instant,
+    crowd_beat: i64,
 }
 
 impl Anim {
     pub fn new() -> Anim {
-        Anim { t0: Instant::now(), fam: [None; 7], swap: [None; 7], present: [false; 7], walk: [None; 7], hush: [None; 7], col: [Color::Gray; 7], cond: None, band: None, dots: None }
+        Anim { t0: Instant::now(), fam: [None; 7], swap: [None; 7], present: [false; 7], walk: [None; 7], hush: [None; 7], col: [Color::Gray; 7], cond: None, band: None, dots: None, crowd: Default::default(), floor: crate::audience::Floor::new(), aud: None, crowd_rows: Vec::new(), crowd_t: Instant::now(), crowd_beat: 0 }
     }
 }
 
@@ -888,7 +930,186 @@ fn anim_cells(b: &BandSnap, anim: &mut Anim, ctx: &Ctx) -> Vec<(u16, u16, String
             }
         }
     }
+    // the crowd moves at ~8 fps (and on every beat); its cells go last so a change in the
+    // number of colour runs doesn't shift the musicians' cells
+    if let Some((r, fw)) = anim.aud {
+        let beat = ctx.pos.map(|p| p.beats().floor() as i64).unwrap_or(0);
+        if anim.crowd_rows.is_empty() || anim.crowd_t.elapsed() >= Duration::from_millis(120) || beat != anim.crowd_beat || anim.crowd_rows[0].len() != fw {
+            anim.crowd_rows = crowd_grid(b, anim, ctx, fw);
+            anim.crowd_t = Instant::now();
+            anim.crowd_beat = beat;
+        }
+        for (k, row) in anim.crowd_rows.iter().enumerate() {
+            let mut x = r.x;
+            for sp in grid_spans(row) {
+                let n = sp.content.chars().count();
+                out.push((x, r.y + k as u16, sp.content.to_string(), n, sp.style));
+                x += n as u16;
+            }
+        }
+    }
     out
+}
+
+const CROWD_H: u16 = 6;
+
+/// how the crowd feels: applause after a like, cheering when the band is on fire
+fn vibe(b: &BandSnap) -> crate::audience::Vibe {
+    use crate::audience::Vibe;
+    let delighted = crate::mood::ALL[b.mood.min(crate::mood::N - 1)] == crate::mood::Mood::Delighted;
+    if b.liked >= 0.0 && b.liked < 3.5 {
+        Vibe::Applause
+    } else if b.cond.pose == crate::conductor::Pose::Surge || b.feel.starts_with("surge") || b.crowd_hype > 0.6 || (b.state == "alive" && (b.energy > 0.55 || delighted)) {
+        Vibe::Hype
+    } else if b.state == "chilling" {
+        Vibe::Chill
+    } else {
+        Vibe::Normal
+    }
+}
+
+/// the floor as rows of (char, colour), `fw` cells wide (the bar is drawn separately)
+fn crowd_grid(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<(char, Color)>> {
+    use crate::audience::{fig, tag, Act, Look, Vibe, FW, SLOT};
+    let v = vibe(b);
+    anim.floor.step(&anim.crowd, fw, v);
+    let mut g = vec![vec![(' ', Color::Reset); fw]; 4];
+    let beats = ctx.pos.map(|p| p.beats()).unwrap_or(ctx.t as f64 * 1.5);
+    let t = anim.floor.t;
+    let odd = beats.floor() as i64 % 2 == 1;
+    // people at home first, walkers on top
+    let mut tags: Vec<(bool, i32, String, Color)> = Vec::new();
+    let mut order: Vec<usize> = (0..anim.floor.people.len()).collect();
+    order.sort_by_key(|&i| (anim.floor.people[i].act != Act::Here) as u8);
+    for i in order {
+        let p = &anim.floor.people[i];
+        let m = &p.m;
+        let look = Look { style: b.style_id, act: p.act, vibe: v, beats: beats + (p.seed % 7) as f64 * 0.0, t: t + p.seed as f32 * 0.13, cpu: m.cpu, disk: m.disk > 2e5, chat: m.chat > 2e4, idle: m.idle, step: p.step, beer: p.beer, seed: p.seed };
+        let (rows, lift) = fig(&look);
+        let mut x0 = p.x.round() as i32;
+        if p.act == Act::Here {
+            match (v, b.style_id) {
+                (Vibe::Hype, "country") => x0 += if odd { 1 } else { -1 },
+                (Vibe::Hype, "blues") => x0 += if beats.rem_euclid(4.0) < 2.0 { 1 } else { 0 },
+                _ => {}
+            }
+        }
+        let col = if matches!(p.act, Act::Wave | Act::Leave) {
+            th(Color::Gray)
+        } else if p.act == Act::Bar || p.act == Act::ToBar {
+            th(Color::LightYellow)
+        } else if m.cpu > 0.5 {
+            th(Color::LightRed)
+        } else if m.disk > 2e5 {
+            th(Color::LightBlue)
+        } else if m.chat > 2e4 {
+            th(Color::LightCyan)
+        } else if m.cpu > 0.08 {
+            th(Color::LightMagenta)
+        } else if v == Vibe::Hype || v == Vibe::Applause {
+            th(Color::White)
+        } else {
+            th(Color::Gray)
+        };
+        for (r, row) in rows.iter().enumerate() {
+            let y = r as i32 - lift as i32;
+            if y < 0 {
+                continue;
+            }
+            for (k, ch) in row.chars().enumerate() {
+                let x = x0 + k as i32;
+                if ch != ' ' && x >= 0 && (x as usize) < fw {
+                    g[y as usize][x as usize] = (ch, col);
+                }
+            }
+        }
+        // name tag (now and then the name of a file it has open)
+        let show_file = m.file.is_some() && ((t / 4.0) as u32 + p.seed) % 3 == 0;
+        let label = if show_file { m.file.clone().unwrap().chars().take(SLOT - 1).collect::<String>() } else { tag(&m.name, m.pid, SLOT - 1) };
+        let tcol = if show_file { th(Color::Cyan) } else if m.fresh && m.cpu > 0.02 { th(Color::LightYellow) } else { th(Color::DarkGray) };
+        let lx = x0 + FW as i32 / 2 - label.chars().count() as i32 / 2;
+        tags.push((p.act == Act::Here || p.act == Act::Bar, lx, label, tcol));
+    }
+    // name tags: the ones standing still first; walkers' tags only where they fit
+    tags.sort_by_key(|t| !t.0);
+    let mut taken = vec![false; fw];
+    for (still, lx, label, tcol) in tags {
+        let n = label.chars().count() as i32;
+        let cells: Vec<usize> = (lx..lx + n).filter(|&x| x >= 0 && (x as usize) < fw).map(|x| x as usize).collect();
+        let clash = cells.iter().any(|&x| taken[x] || (x > 0 && taken[x - 1]) || (x + 1 < fw && taken[x + 1]));
+        if !still && (clash || cells.len() < n as usize) {
+            continue;
+        }
+        if still && cells.iter().any(|&x| taken[x]) {
+            continue;
+        }
+        for (k, ch) in label.chars().enumerate() {
+            let x = lx + k as i32;
+            if x >= 0 && (x as usize) < fw {
+                g[3][x as usize] = (ch, tcol);
+                taken[x as usize] = true;
+            }
+        }
+    }
+    g
+}
+
+fn grid_spans(row: &[(char, Color)]) -> Vec<Span<'static>> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut cc = None;
+    for &(ch, c) in row {
+        if Some(c) != cc && !cur.is_empty() {
+            out.push(Span::styled(std::mem::take(&mut cur), Style::default().fg(cc.unwrap()).add_modifier(Modifier::BOLD)));
+        }
+        cc = Some(c);
+        cur.push(ch);
+    }
+    if !cur.is_empty() {
+        out.push(Span::styled(cur, Style::default().fg(cc.unwrap()).add_modifier(Modifier::BOLD)));
+    }
+    out
+}
+
+fn draw_crowd(f: &mut Frame, r: Rect, b: &BandSnap, anim: &mut Anim, ctx: &Ctx) {
+    use crate::audience::BARW;
+    let c = &anim.crowd;
+    let here = anim.floor.people.iter().filter(|p| !matches!(p.act, crate::audience::Act::Leave | crate::audience::Act::Wave)).count();
+    let title = if c.on {
+        let full = format!(" the crowd · {here} of your {} processes · {} at the bar · {} kernel threads backstage ", c.own, anim.floor.at_bar(), c.kthreads);
+        let short = format!(" the crowd · {here} of your {} · {} at the bar · {} kthreads ", c.own, anim.floor.at_bar(), c.kthreads);
+        if full.chars().count() + 6 <= r.width as usize { full } else { short }
+    } else {
+        " the crowd · doors opening… ".to_string()
+    };
+    let bs = crate::theme::border_set();
+    let block = Block::default().borders(Borders::ALL).border_set(bs).border_style(Style::default().fg(crate::theme::border_color())).title(crate::theme::title(&title));
+    let inner = block.inner(r);
+    f.render_widget(block, r);
+    // join the band panel above: ├ ┤ instead of corners
+    let (l, rr) = match bs.vertical_left {
+        "│" => ("├", "┤"),
+        "║" => ("╠", "╣"),
+        "┃" => ("┣", "┫"),
+        _ => (bs.top_left, bs.top_right),
+    };
+    let buf = f.buffer_mut();
+    buf[(r.x, r.y)].set_symbol(l);
+    buf[(r.x + r.width - 1, r.y)].set_symbol(rr);
+    if (inner.width as usize) < BARW + 12 || inner.height < 4 {
+        anim.aud = None;
+        return;
+    }
+    let fw = inner.width as usize - BARW;
+    anim.aud = Some((inner, fw));
+    let g = crowd_grid(b, anim, ctx, fw);
+    anim.crowd_rows = g.clone();
+    anim.crowd_t = Instant::now();
+    let lines: Vec<Line> = g.iter().map(|row| Line::from(grid_spans(row))).collect();
+    f.render_widget(Paragraph::new(lines), Rect { width: fw as u16, ..inner });
+    let bar = crate::audience::bar_rows(crate::theme::ascii());
+    let bl: Vec<Line> = bar.iter().enumerate().map(|(i, s)| Line::from(Span::styled(s.clone(), Style::default().fg(if i == 1 { th(Color::LightYellow) } else { th(Color::Yellow) })))).collect();
+    f.render_widget(Paragraph::new(bl), Rect { x: inner.x + fw as u16 + 1, width: BARW as u16 - 1, ..inner });
 }
 
 fn draw_machine(f: &mut Frame, r: Rect, m: &MonSnap) {

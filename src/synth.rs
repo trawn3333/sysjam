@@ -319,6 +319,10 @@ pub struct Engine {
     pub likes: crate::likes::Likes,
     like_lvl: f32,
     like_t: f32,
+    /// the audience's excitement 0..1, when the crowd last got a word, last walk-in seen
+    crowd_hype: f32,
+    crowd_said: f32,
+    walkin_seen: u64,
     prev_ag: f32,
     prev_cpu: f32,
     stub_lvl: f32,
@@ -690,6 +694,9 @@ impl Engine {
             likes: if std::env::var_os("SYSJAM_NO_LIKES").is_some() { Default::default() } else { crate::likes::Likes::load() },
             like_lvl: 0.0,
             like_t: -99.0,
+            crowd_hype: 0.0,
+            crowd_said: -60.0,
+            walkin_seen: 0,
             prev_ag: 0.0,
             prev_cpu: 0.0,
             stub_lvl: 0.0,
@@ -1281,6 +1288,7 @@ impl Engine {
             brain: self.brain_line.clone(),
             liked: self.time() - self.like_t,
             likes_n: self.likes.likes.len(),
+            crowd_hype: self.crowd_hype,
         };
     }
 
@@ -2525,6 +2533,45 @@ impl Engine {
         self.say(format!("~ tempo {:.0} → {:.0} bpm over {bars} bars ({}, {}{tag})", self.bpm, to, st.name(), sty.name));
     }
 
+    /// the audience: they get excited when the band is (and the band feels it, a little);
+    /// a notable process walking in gets a nod from someone on stage
+    fn crowd(&mut self, c: &Control, dt: f32) -> f32 {
+        use crate::band::State;
+        use crate::mood::Mood;
+        let live = match self.leader.state {
+            State::Alive => 1.0,
+            State::Awaken => 0.6,
+            State::Subside => 0.4,
+            State::Chill => 0.2,
+        } * (0.4 + 0.6 * self.leader.energy.clamp(0.0, 1.0));
+        let (dom, w) = self.mood.dom();
+        let pleased = matches!(dom, Mood::Delighted | Mood::Inspired | Mood::Proud) as i32 as f32 * w;
+        let target = (c.crowd_n * (0.35 + 0.65 * c.crowd_act) * (live + 0.3 * pleased)).clamp(0.0, 1.0);
+        self.crowd_hype += (target - self.crowd_hype) * (1.0 - (-dt / 6.0).exp());
+        let t = self.time();
+        if self.crowd_hype > 0.55 && t - self.crowd_said > 120.0 && t - self.like_t > 10.0 && matches!(dom, Mood::Delighted | Mood::Inspired | Mood::Proud | Mood::Content | Mood::Amused) {
+            self.crowd_said = t;
+            let lines = ["the crowd's into it!", "listen to that crowd!", "they're dancing back there!", "hands up, everybody!"];
+            let line = lines[self.rng.below(lines.len())].to_string();
+            self.mood.impulse(Mood::Delighted, 0.25);
+            self.cond.speech = line.clone();
+            self.say(format!("♩ conductor: {line}"));
+        }
+        if c.walkin_ver != self.walkin_seen {
+            self.walkin_seen = c.walkin_ver;
+            if let Some(w) = c.walkin.clone() {
+                let who: Vec<usize> = (0..6).filter(|&i| self.on[i]).collect();
+                if !who.is_empty() {
+                    let i = who[self.rng.below(who.len())];
+                    let name = w.split(':').next().unwrap_or(&w).to_string();
+                    self.set_think(i, format!("nods at the door: {name} just walked in"));
+                    self.band_say(format!("~ {w} walked in; the {} nods", self.minds[i].name));
+                }
+            }
+        }
+        self.crowd_hype
+    }
+
     fn say(&mut self, m: String) {
         if let Some(tx) = &self.tx {
             let _ = tx.send(m);
@@ -2547,7 +2594,9 @@ impl Engine {
         let mut msgs = Vec::new();
         let dt = if first { 0.0 } else { ((self.now - self.last_ctl) as f32 / self.sr).clamp(0.05, 3.0) };
         self.last_ctl = self.now;
-        let req = self.leader.listen(&c.sig, dt, &mut msgs);
+        let mut sig = c.sig;
+        sig.crowd = self.crowd(c, dt);
+        let req = self.leader.listen(&sig, dt, &mut msgs);
         // each player's tied signal: a sharp rise can inspire a new sound
         let (a, b) = (self.prev_sig, c.sig);
         let spikes = [

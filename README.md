@@ -32,9 +32,9 @@ he learns what you like, but **only** when you press **`l`** (like). See
 
 (Formerly developed under the working name *sysmusic*.) Listen: [`docs/sample.mp3`](docs/sample.mp3) is a 75 s demo at 192 kbps. It starts calm with no hiss, then hits chaos (CPU + network + disk load plus simulated fast typing), where a short burst of industrial noise comes in, then settles again. Its verbose log is `docs/sample-render.log`. [`docs/sample-tempo.mp3`](docs/sample-tempo.mp3) is a 90 s demo (seed 5, made with `tools/demo_tempo.sh`). It starts in A major at 84 bpm, and the tempo eases down to 73 while the band is chilling. Under load (from 18 s) the band comes alive and ramps toward 97 bpm. At about 60 s a **surge** opens the throttle from 85 to 133 bpm with the V-twin lope, while the band modulates to D minor. The surge winds down to 109 bpm at about 75 s, and the band then subsides. Its log is `docs/sample-tempo-render.log`.
 
-![sysjam's live terminal UI mid-transition: two ↑ presses gave tempo bias +14, then ← switched Country to Blues; the players change over one by one ("conductor went Blues → picking up a fingered bass")](docs/tui.png)
+![sysjam's live terminal UI mid-transition: two ↑ presses gave tempo bias +14, then ← switched Country to Blues; the players change over one by one ("conductor went Blues → picking up a fingered bass"), and the crowd of processes below holds up lighters](docs/tui.png)
 
-One static-ish binary (`sysjam`, ~2.1 MB, x86_64, needs glibc ≥ 2.29). It
+One static-ish binary (`sysjam`, ~2.2 MB, x86_64, needs glibc ≥ 2.29). It
 links only libc, libm, libpthread and libdl. ALSA, D-Bus and PipeWire are
 loaded at run time with `dlopen`, so it starts even when one of them is missing.
 
@@ -65,6 +65,7 @@ loaded at run time with `dlopen`, so it starts even when one of them is missing.
 | `--clicks L` | file open/close click texture 0–1 (default 0.25) |
 | `--no-leads` | never let a busy thread sit in as a guest soloist |
 | `--no-input` | don't watch keyboard/mouse activity (see below) |
+| `--no-audience` | no process crowd under the band, and no audience scan at all (see [the audience](#the-audience-your-processes-on-the-dance-floor)) |
 | `--no-screen`, `--screen-method auto\|portal\|grim\|x11\|cmd`, `--screen-cmd CMD`, `--screen-interval S` | screen colour (see below) |
 | `--device NAME` | ALSA device (`default`, `pipewire`, `pulse`, `hw:0`) |
 | `--no-tui` | plain log lines instead of the live terminal UI (the UI is the default when stdout is a terminal) |
@@ -167,6 +168,7 @@ Keys:
 | `←` / `→` | previous / next conductor style (auto → House Band → … → Tribal → auto) |
 | `q`, `Esc`, `Ctrl-C` | fade out and quit (press again to quit immediately) |
 | `l` or `Enter` | **like** what's playing now (see [likes](#likes-the-only-thing-sysjam-learns-from)) |
+| `a` | show / hide the crowd panel |
 | `space` | pause / resume the display (the music keeps playing) |
 
 The arrow keys only work in the TUI; `--style` and `--tempo-bias` are the command-line equivalents.
@@ -175,8 +177,9 @@ The UI runs in its own thread at nice 5. The audio thread publishes a small snap
 100 ms with a non-blocking `try_lock`, so a slow or stalled terminal can never hold up the audio.
 The whole UI refreshes about 3 times a second; in between, only the little people (and the beat
 dots) are redrawn, at about 16 fps, straight to the changed cells, plus one extra frame exactly on
-every beat. Frames where nothing moved are skipped. That keeps the UI thread at about 0.45% of one
-core (measured below).
+every beat. The crowd moves at about 8 fps (and on every beat). Frames where nothing moved are
+skipped, and only colour changes are sent to the terminal. That keeps the UI thread at about 0.40%
+of one core with the crowd on (measured below).
 
 All figures are drawn only from ASCII, light box drawing (`─│┌┐└┘├┤┬┴┼╭╮╯╰╱╲`) and `♪ ♫ • ·`:
 no block or shade elements (hats are drawn with box lines, e.g. the cowboy hat `~╭^╮~`), no heavy/light mixing, no rare
@@ -305,6 +308,55 @@ The header shows the plan, for example:
 
 Repetition over 12 runs of 600 s (6 styles × 2 seeds, free harmony only): A-B-A-B rate 3.72% → 2.12%,
 repeated 4-chord runs within 32 chords 6.9% → 1.5%, distinct chord bigrams per 5 minutes 39.8 → 46.3.
+
+## The audience: your processes on the dance floor
+
+Under the band there is a strip of floor with a little crowd: up to 16 of **your own processes**
+(as many as fit, one per 10 columns, about 7 on a 140-column terminal), each a 3-row ASCII figure
+with a name tag such as `firefox:4123` or `cargo:9981` (long names are shortened, `fire:4123`).
+Now and then the tag shows instead the name of a file the process has open (`notes.md`,
+`spawn.log`): the base name only, never a path. At the right end is the bar (`🍺 ☕`, or `U c` in
+ASCII). The panel title counts how many of your processes there are, how many are at the bar and
+how many kernel threads stay backstage.
+
+- **Who comes:** a rotating, CPU-weighted sample. Processes that start after sysjam ("fresh"
+  ones: compilers, shell commands, a browser) get priority and **walk in** from the edge; an idle
+  one goes home to make room. When a process exits its figure **waves and walks out**. Short
+  spawns (a `cc1`, a `sleep`) pop in for a few seconds and leave again. Fresh spawns are let in
+  at most one per 4 s, and not a second copy of a name already on the floor, so a shell that
+  spawns all the time can't flood it. Kernel threads are only counted, never shown.
+- **What they do, from real numbers:** CPU-hungry processes (over 50% of a core) dance hard; a
+  little CPU makes them groove; idle ones sway, and after 40 s they sit down (`z`). Processes
+  doing storage I/O (over 200 kB/s from `/proc/<pid>/io`, `read_bytes + write_bytes`) carry a box
+  `[#]` over their heads; processes with a lot of other I/O (sockets, pipes, ttys and page-cache
+  reads: `rchar + wchar` minus the storage part, which is the cheap stand-in for "network" a
+  process can have) chat (`..`). Idle ones wander off to the bar now and then, have a beer `U` or a
+  coffee `c` for 6–14 s and come back (at most two at the bar).
+- **What they do with the music:** when the band is alive and hot, in a surge, or the crowd is
+  roaring, everyone puts their hands up and jumps on the beat (from the same beat clock as the
+  conductor). When it's chilling they mingle and nod. A like gets a round of applause. By style:
+  cowboy hats and a line dance in Country, glowsticks in Techno, swaying with lighters in Blues,
+  wigs and a polite golf clap in Baroque.
+- **And back (lightly):** the crowd's excitement (how many there are × how busy × how alive the
+  band is, smoothed over 6 s) adds at most 0.06 to the band's energy input. Above 0.55 the
+  conductor may say so ("the crowd's into it!", at most every 2 minutes) and gets a small lift
+  of delight. When a notable process walks in (a browser, an editor, a compiler, anything over 30%
+  CPU) a musician nods: `~ firefox:4123 walked in; the keys nods`.
+
+**Cost.** It reuses the monitor's existing `/proc/<pid>/stat` walk (every 1.5 s, already there
+for the "top threads" panel), plus one `stat` of `/proc/<pid>` for the owner of each new pid,
+`/proc/<pid>/io` for the ≤16 people in the crowd, and every 6 s the `fd` links of one of them
+(at most 48). Measured: 0.13 ms per census on top of the walk (≈0.01% of a core); the monitor
+thread stayed at 0.10% and the UI thread at 0.40% with the crowd on (0.42% without it before the
+terminal-output tweak), see [Performance](#performance).
+
+**Privacy.** Process names, pids and file names are only drawn on your own screen; nothing is
+logged, sent or stored. Only processes owned by your user are named, and only their file
+descriptors are looked at (the kernel wouldn't show other users' anyway); other users' processes
+and kernel threads are only counted. File tags are base names with no path, skipping `/dev`,
+`/proc`, `/sys`, `/run`, `/usr`, hidden files, libraries, fonts, caches and lock files.
+`--no-audience` turns the whole thing off (no scan at all); `a` hides the panel. The crowd needs
+about 46 rows (on shorter terminals the event log gives up two lines for it, below that it hides).
 
 ## The conductor's feelings and his tiny brain
 
@@ -898,6 +950,7 @@ Measured exactly (schedstat, all threads) on an 8-vCPU Xeon VM:
 | idle, themed UI per style, whole process (60 s, truecolor): Techno / Country / Baroque | 2.16% / 2.08% / 1.53% (UI thread 0.31% / 0.28% / 0.27%, fades included) | |
 | offline bench with scripted style switches and tempo nudges (13 key presses through 10 styles, incl. Techno build/drop) | 1.06% / 1.66% / 1.63% (idle / busy / idle) | |
 | Techno, live animated UI (~16 fps figures, beat-locked frames), WAV sink, 40 s of a 75 s run, per thread | audio/engine thread 1.47%, **UI thread 0.45%**, monitor 0.10% (≈2.0% total) | |
+| same, **with the audience** (crowd of 7 on the floor, its own census, cheaper terminal output) vs `--no-audience` (previous output path) | engine 1.27%, **UI 0.40%**, monitor 0.10% (≈1.8% total; census 0.13 ms per 1.5 s) vs UI 0.42% | |
 | the conductor's MLP (once a bar, offline bench) | 1–3 µs per call, ≈0.0001% | |
 | alive under heavy load (busy thread as guest, ~400 MB/s writes, ~40 MB/s downloads, file churn), UI on, X11 screen sampling, 60 s | 3.05% | |
 

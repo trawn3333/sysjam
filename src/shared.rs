@@ -17,6 +17,11 @@ pub struct Control {
     pub screen_valid: bool,
     pub click_rate: f32,
     pub leads: [Option<LeadInfo>; 3],
+    /// the audience: size and liveliness 0..1, and the last notable process to walk in
+    pub crowd_n: f32,
+    pub crowd_act: f32,
+    pub walkin: Option<String>,
+    pub walkin_ver: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

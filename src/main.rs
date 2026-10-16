@@ -12,6 +12,7 @@ macro_rules! say {
 
 mod audio;
 mod clock;
+mod audience;
 mod band;
 mod brain;
 mod conductor;
@@ -72,13 +73,15 @@ USAGE: sysjam [OPTIONS]
   --no-leads          never let a busy thread sit in as a guest musician
   --verbose           band events, chords, instruments, and metrics every 5 s (with --no-tui)
   --no-tui            plain log output instead of the live terminal UI
-                      (the UI is the default when stdout is a terminal; keys: ↑↓ tempo, ←→ style, l like, space pause, q quit)
+                      (the UI is the default when stdout is a terminal; keys: ↑↓ tempo, ←→ style, l like, a crowd, space pause, q quit)
   --device NAME       ALSA device (default \"default\"; e.g. pipewire, pulse, hw:0)
   --wav FILE          render to a WAV file instead of the sound card (real time)
   --null              run without any audio output (testing)
   --duration S        stop after S seconds (default: forever; 30 with --wav)
   --no-screen         don't sample screen colour
   --no-input          don't watch keyboard/mouse activity
+  --no-audience       no process crowd below the band (no audience scan at all; `a` toggles
+                      the panel otherwise)
   --screen-method M   auto (default), portal, grim, x11, cmd
   --screen-cmd CMD    shell command that prints a P6 PPM screenshot (implies --screen-method cmd)
   --screen-interval S seconds between screen samples (default 4)
@@ -186,6 +189,10 @@ fn main() {
             "--volume" => volume = num(val(&mut i), "--volume").clamp(0.0, 1.0),
             "--no-screen" => no_screen = true,
             "--no-input" => no_input = true,
+            "--no-audience" => {
+                audience::ENABLED.store(false, std::sync::atomic::Ordering::Relaxed);
+                audience::SHOWN.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
             "--scale" => {
                 let s = val(&mut i);
                 scale = Some(music::find_scale(&s).unwrap_or_else(|| die(&format!("unknown scale {s}"))))
@@ -350,7 +357,7 @@ fn main() {
                     ver += 1;
                     c.version = ver;
                     if busy {
-                        c.sig = band::Signals { cpu: 0.85, cores: 0.8, net: 0.75, file: 0.75, fd: 0.5, screen_change: 0.0, input: 0.0 };
+                        c.sig = band::Signals { cpu: 0.85, cores: 0.8, net: 0.75, file: 0.75, fd: 0.5, screen_change: 0.0, input: 0.0, crowd: 0.0 };
                     }
                     en.set_control(&c);
                     let now = en.time();

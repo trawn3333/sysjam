@@ -54,6 +54,8 @@ pub struct Signals {
     pub screen_change: f32,
     /// combined keyboard + mouse activity 0..1 (counts only)
     pub input: f32,
+    /// the audience's excitement (set by the engine, not the monitor), a light push
+    pub crowd: f32,
 }
 
 #[derive(Default)]
@@ -144,7 +146,7 @@ impl Leader {
         self.n_hi = n_hi;
         // input activity tips energy; capped so compositor chatter can't dominate
         let input = (0.55 * s.input).min(0.45);
-        let mut inst = 0.40 * s.cpu + 0.12 * s.cores + 0.18 * s.net + 0.18 * s.file + 0.04 * s.fd + 0.08 * s.screen_change + input;
+        let mut inst = 0.40 * s.cpu + 0.12 * s.cores + 0.18 * s.net + 0.18 * s.file + 0.04 * s.fd + 0.08 * s.screen_change + input + 0.06 * s.crowd.clamp(0.0, 1.0);
         if n_hi >= 2 {
             inst += 0.12 * (n_hi - 1) as f32;
         }

@@ -1,46 +1,46 @@
 ╭ ♪ sysjam ♪ ─ ♪ style Blues ────────────────────────────────────────────────────────────────────────────────────────────────── input none ╮
-│ E major │ IV A → V B → I7 E7 → I7 E7 → I7 E7 → IV7 A7 → IV7 A7   ⟶ 12-bar in E major, turnaround A7 → back to E7                         │
-│ 107 bpm tempo bias +14 bar 17   ○●○○    alive   energy ▓▓▓▓▓▓▓▓▓▓▓░░░ 0.75  agitation ▓▓▓▓▓▓▓▓▓▓▓░░░ 0.81  seed 3    45s                 │
+│ E major │ III7 G#7 → vi C#m → I7 E7 → I7 E7 → I7 E7 → IV7 A7 → IV7 A7   ⟶ 12-bar in E major, turnaround A7 → back to E7                  │
+│ 108 bpm tempo bias +14 bar 17   ○●○○    alive   energy ▓▓▓▓▓▓▓▓▓▓▓░░░ 0.79  agitation ▓▓▓▓▓▓▓▓▓▓▓▓░░ 0.85  seed 3    45s                 │
 │ ♫ no theme quoted right now                                                                                                              │
-╰ ↑↓ tempo  ←→ style  l like  space pause  q quit ─────────────────────────────────────────────────────────────────────────────────────────╯
-╭ ♪ the band ♪ ────────────────────────────────────────────────────────────────────╮╭ ♪ conductor · Blues · content · 1 cue ♪ ─────────────╮
+╰ ↑↓ tempo  ←→ style  l like  a crowd  space pause  q quit ────────────────────────────────────────────────────────────────────────────────╯
+╭ ♪ the band ♪ ────────────────────────────────────────────────────────────────────╮╭ ♪ conductor · Blues · content · 0 cues ♪ ────────────╮
 │_┌#┐_      drone    following  ░░░░░░░░ E major        sub drone + detuned pad    ││  _┌#┐_                                               │
 │(-.-) ~ ~    ↳ voice-leading pad into E7, sub glides to E1 · 6 voices, smooth     ││  (=_=)      “Lord have mercy… let's play the blues…” │
 │╱(#)╲        ♪ E1 G#3 B3 D4 E4 E4 E4                                              ││  ╭┤#├────>                                           │
 │ ╯ ╰         ⇢ screen cool · curious 0.8 eager 0.8 busy 0.6                       ││   │#│                                                │
-│_┌#┐_      bassist  comping    ▓▓▓▓▓▓▓░ E major        synth warm saw bass + GM Ac││   ╯ ╰       clutter ▓░░░░░░░                         │
-│(=_=)  │     ↳ conductor went Blues → picking up an acoustic bass                 ││🧠 content 0.34 → praise                              │
+│_┌#┐_      bassist  comping    ▓▓▓▓▓▓▓░ E major        synth warm saw bass + GM Fi││   ╯ ╰       clutter ▓░░░░░░░                         │
+│(=_=)  │     ↳ conductor went Blues → picking up a fingered bass                  ││🧠 content 0.30 → invite someone                      │
 │╱|#|╲ (│)    ♪ G#1 G#2 E1 E2 G#1 G#2                                              │╰──────────────────────────────────────────────────────╯
 │ ╯ ╰  (_)    ⇢ disk/files 100% · curious 0.5 eager 0.0 busy 0.5                   │╭ ♪ quoted themes · public domain ♪ ───────────────────╮
-│_┌#┐_      drummer  following  ▓▓▓▓▓▓▓░ —              synth deep kick + GM Jazz k││none yet — themes come rarely                         │
-│(=_=)  ─┬─   ↳ conductor went Blues → switching to the GM Jazz kit with triangle &││                                                      │
-│╱|#|╲ (_)    ♪ ride kick ride ride snare                                          ││                                                      │
-│ ╯ ╰ [O]     ⇢ cpu 74% · curious 0.0 eager 0.5 busy 0.4                           │╰──────────────────────────────────────────────────────╯
-│_┌#┐_ z    keys     laying out ░░░░░░░░ A major        GM FX Atmosphere (99) / GM │╭ ♪ machine ♪ ─────────────────────────────────────────╮
-│(-.-)        ↳ conductor went Blues → picking up a jazz guitar                    ││cpu            65% ▆▆▆▆▆▆▆▆▆▆▆▅▆▆▆▆▆▆▆▆▆▆▆▅▆▆▆▆▆▆▆    │
-│╭|#|╮        ♪ A4 C#5 E5 A4 C#5 E5                                                ││cores          5/8 ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅    │
-│ └─┘         ⇢ input 0% · curious 0.4 eager 0.7 busy 0.6                          ││net         2 kB/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▄▄▁▁▁▁▁    │
-│_┌#┐_      lead     comping    ░░░░░░░░ E major        GM Rock Organ (18)         ││disk     67.1 MB/s ███████████████████████████████    │
-│(=_=) ┌┴┐    ↳ conductor went Blues → picking up a rock organ                     ││files          0/s ▁▁▃▁▁▁▁▁▁▁▄▁▁▁▁▁▃▁▃▁▃▁▁▁▄▁▁▁▁▁▁    │
-│╱|#|─[===]   ♪ ·                                                                  ││input         0.00 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│ ╯ ╰ [===]   ⇢ cores 62% · curious 0.7 eager 0.7 busy 0.3                         ││screen        hue 1° bri 0.15                         │
-│_┌#┐_      colour   following  ▓░░░░░░░ B major        GM Clean Guitar (27) + glas││top threads                                           │
-│(=_=)        ↳ conductor went Blues → picking up a clean guitar                   ││  100% ▓▓▓▓▓▓ sh                                      │
-│╱|#|╱o──┤    ♪ C#5 C#5 A#4                                                        ││  100% ▓▓▓▓▓▓ sh                                      │
-│ ╯ ╰         ⇢ net 5% · curious 0.6 eager 0.5 busy 0.5                            ││  100% ▓▓▓▓▓▓ sh                                      │
+│_┌#┐_      drummer  following  ▓▓░░░░░░ —              synth deep kick + GM Brush ││none yet — themes come rarely                         │
+│(=_=)  ─┬─   ↳ conductor went Blues → switching to the GM Brush kit with triangle ││                                                      │
+│╱|#|╲ (_)    ♪ hat hat hat hat snare hat                                          ││                                                      │
+│ ╯ ╰ [O]     ⇢ cpu 75% · curious 0.0 eager 0.5 busy 0.4                           │╰──────────────────────────────────────────────────────╯
+│_┌#┐_      keys     comping    ▓▓▓▓▓▓▓░ E major        synth subtractive 2×square │╭ ♪ machine ♪ ─────────────────────────────────────────╮
+│(=_=)        ↳ conductor went Blues → picking up a bright acoustic piano          ││cpu            66% ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▇▆▆▆▆▆▆▆    │
+│╱|#|╲┌───┐   ♪ B3 D#4 E3 G#3 B3 D4                                                ││cores          5/8 ▅▆▆▅▅▆▅▅▅▅▅▅▅▅▅▆▅▆▅▅▆█▇█▆▆▆▅▆▅▅    │
+│ ╯ ╰ │|||│   ⇢ input 0% · curious 0.4 eager 0.7 busy 0.6                          ││net         3 kB/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▂▁▁▁▁▁▅▁▁▇▁▁▁▁▁▁    │
+│_┌#┐_      lead     comping    ░░░░░░░░ E major        GM Reed Organ (20)         ││disk     67.1 MB/s ████████████▇██████████████████    │
+│(OoO)        ↳ developing the motif: fragment                                     ││files          0/s ▁▃▃▁▁▁▃▃▃▃▁▁▃▃▁▄▃▁▁▃▄▁▁▁▁▃▁▁▁▅▁    │
+│╱|#|─    [   ♪ ·                                                                  ││input         0.00 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│ ╯ ╰     [   ⇢ cores 69% · curious 0.7 eager 0.7 busy 0.3                         ││screen        hue 1° bri 0.15                         │
+│_┌#┐_      colour   following  ░░░░░░░░ B major        GM Halo Pad (94) + glass be││top threads                                           │
+│(=_=)        ↳ conductor went Blues → picking up a halo pad                       ││  100% ▓▓▓▓▓▓ sh                                      │
+│╱|#|─[| -]   ♪ ·                                                                  ││  100% ▓▓▓▓▓▓ sh                                      │
+│ ╯ ╰  ╰─╯    ⇢ net 4% · curious 0.6 eager 0.5 busy 0.5                            ││  100% ▓▓▓▓▓▓ sh                                      │
 │_┌#┐_      guest    soloing    ▓▓▓░░░░░ E major        saw/sine guest voice       ││  100% ▓▓▓▓▓▓ sh                                      │
 │(=_=) ♪      ↳ thread sh at 100% cpu sits in → long D#4                           ││                                                      │
-│╲|#|╱        ♪ G#4 G#4 D#4 D#4 D#4                                                │╰──────────────────────────────────────────────────────╯
-│ ╯ ╰         ⇢ its thread 100%                                                    │╭ ♪ levels ♪ ──────────────────────────────────────────╮
-│                                                                                  ││sub  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░   -20 dB  │
-│                                                                                  ││bass ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░   -25 dB  │
-│                                                                                  ││mid  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░   -28 dB  │
-│                                                                                  ││high ▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░   -44 dB  │
+│╲|#|╱        ♪ B4 B4 D#4 D#4 D#4                                                  ││                                                      │
+│ ╯ ╰         ⇢ its thread 100%                                                    │╰──────────────────────────────────────────────────────╯
+├ ♪ the crowd · 7 of your 146 · 0 at the bar · 0 kthreads ♪ ───────────────────────┤╭ ♪ levels ♪ ──────────────────────────────────────────╮
+│    '         i         '         '         i         i         i          ┌─────┐││sub  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░   -18 dB  │
+│    \o\/o\    \o\       \o\       \o\       \o\       \o\       \o\        │🍺 ☕│││bass ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░   -22 dB  │
+│    / \| \    / \       / \       / \       / \       / \       / \        ┴─────┴││mid  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░   -25 dB  │
+│ sh:47842  sh:47846  bash:1412 sh:47843  node:1592 sh:47844  sh:47841        bar  ││high ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░   -41 dB  │
 ╰──────────────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────╯
 ╭ ♪ band events ♪ ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│~ drums: conductor went Blues → switching to the GM Jazz kit with triangle & tambourine                                                   │
-│~ switch Country → Blues fully done in 0.57 s                                                                                             │
 │~ the band has switched to Blues                                                                                                          │
-│~ keys drifts to A major over E major                                                                                                     │
+│~ keys comes home to E major                                                                                                              │
 │bassist joins                                                                                                                             │
+│lead joins                                                                                                                                │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
