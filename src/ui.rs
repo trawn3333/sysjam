@@ -1078,7 +1078,7 @@ fn anim_cells(b: &BandSnap, anim: &mut Anim, ctx: &Ctx) -> (Vec<(u16, u16, Strin
     // number of colour runs doesn't shift the musicians' cells
     if let Some((r, fw)) = anim.aud {
         let beat = ctx.pos.map(|p| p.beats().floor() as i64).unwrap_or(0);
-        if anim.crowd_rows.is_empty() || anim.crowd_t.elapsed() >= Duration::from_millis(if anim.floor.rows >= 4 { 170 } else { 120 }) || beat != anim.crowd_beat || anim.crowd_rows[0].len() != fw {
+        if anim.crowd_rows.is_empty() || anim.crowd_t.elapsed() >= Duration::from_millis(if anim.floor.rows >= 5 { 220 } else if anim.floor.rows >= 4 { 170 } else { 120 }) || beat != anim.crowd_beat || anim.crowd_rows[0].len() != fw {
             let g = crowd_grid(b, anim, ctx, fw);
             let n0 = delta.len();
             grid_delta(&anim.crowd_rows, &g, r.x, r.y, false, &mut delta);
@@ -1605,8 +1605,9 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
                 }
             }
         }
-        // something held up overhead, swaying on the beat
-        {
+        // something held up overhead, swaying on the beat (not from the far back rows: a
+        // sea of phones would hide the faces)
+        if depth <= 2 {
             if let Some((it, sway)) = item(&look) {
                 let (gl, w) = it.glyph(ascii, emoji);
                 let y = y0 + top_row - 1;
