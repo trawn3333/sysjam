@@ -4,7 +4,8 @@ A jam band of machine musicians playing your Linux system. Six autonomous
 players (drone, bassist, drummer, keys, lead, colour/FX) listen to CPU,
 cores, network, disk writes, file activity and screen colour, and to each other.
 A loose bandleader moves the arrangement through **chilling → awakening →
-alive → subsiding**. Chords keep moving even on an idle machine. Every run
+alive → subsiding** on its own musical drive, so **an idle machine sounds just as full**: load,
+typing and the rest only push the band higher and faster and colour its sound choices. Every run
 starts in a random key (any of the 12 roots, major or minor) at a random tempo
 (60–100 bpm). The tempo then breathes with the arrangement and the key wanders
 around the circle of fifths. Players pick up a new General MIDI instrument or
@@ -31,6 +32,10 @@ he learns what you like, but **only** when you press **`l`** (like). See
 | ![Country: the conductor beats 4/4 in a cowboy hat while the band plays](docs/anim-country.gif) | ![Techno: the DJ conductor's platters spin, hands up on every kick](docs/anim-techno.gif) |
 
 (Formerly developed under the working name *sysmusic*.) Listen: [`docs/sample.mp3`](docs/sample.mp3) is a 75 s demo at 192 kbps. It starts calm with no hiss, then hits chaos (CPU + network + disk load plus simulated fast typing), where a short burst of industrial noise comes in, then settles again. Its verbose log is `docs/sample-render.log`. [`docs/sample-tempo.mp3`](docs/sample-tempo.mp3) is a 90 s demo (seed 5, made with `tools/demo_tempo.sh`). It starts in A major at 84 bpm, and the tempo eases down to 73 while the band is chilling. Under load (from 18 s) the band comes alive and ramps toward 97 bpm. At about 60 s a **surge** opens the throttle from 85 to 133 bpm with the V-twin lope, while the band modulates to D minor. The surge winds down to 109 bpm at about 75 s, and the band then subsides. Its log is `docs/sample-tempo-render.log`.
+
+[`docs/sample-idle.mp3`](docs/sample-idle.mp3) is 60 s of an **idle machine** (House Band, seed 1,
+no load and no input at all; offline idle profile from 25 s): the drummer joins at 0.4 s, the band
+goes alive at 12.1 s, and its own surge (the V-twin lope) comes at 51.1 s; −13.7 LUFS.
 
 Per-style samples (offline renders, GM TimGM6mb):
 [`docs/sample-industrial.mp3`](docs/sample-industrial.mp3) (60 s: a menacing verse, a build, the
@@ -546,6 +551,55 @@ A scripted test: six likes during a Celtic Session run, then four 20-minute *aut
 7, 9, 13) with and without that file. Without likes, Celtic got 0% of the time in all four; with them
 29%, 26%, 28% and 0% (21% on average). Time at 70–89 bpm went from 15% to 45% on average,
 and guitar picks (a liked family) from 14 to 29.
+
+## The band's own drive: an idle machine sounds good too
+
+The band doesn't need load to play. The bandleader runs an **internal arc** per style, a
+several-minute cycle: a valley (breathe), the rise (build), a long peak that dips once in the
+middle (a breakdown or a solo space), then the fall. The arrangement state, the style machines
+(the Blues shuffle and its solos, the Biker and Industrial song forms, the Techno sections, the
+Country train beat) and the players' intensity all follow it, with zero system activity.
+
+- **Load, input and the other signals are modulators, not gates**: the energy target is the arc
+  plus up to 65% of the remaining headroom from the machine (`arc + 0.65·signals·(1 − arc)`),
+  and load runs the arc's clock up to 1.8× faster. Spikes still inspire new sounds, CPU spikes
+  still ask for tension, surges still come from fast typing.
+- **Per style** (low, high, cycle): Ambient Monk 0.10–0.40 over 6 min (lush but never pushy:
+  chilling/awakening only), Space Cadet 0.14–0.56, House 0.20–0.66, Baroque 0.18–0.68,
+  Jazz/Celtic 0.20–0.76, Tribal/Country 0.20–0.78 over 4.5 min, Blues 0.22–0.85, Biker/Techno
+  0.22–0.88, Industrial 0.22–0.90 over 4 min.
+- **Fast first entrance**: the run starts just before the arc's rise; the first chill is a one
+  phrase warm-up and awakening goes alive after two phrases once the energy is up. Techno's first
+  drop is arranged straight away (8 bars of build, then DROP at about 30 s).
+- **Deep bass everywhere**: the sub drone is no longer ducked in the synth-less styles (Blues,
+  Country) and only lightly in Biker/Industrial.
+
+Measured offline (`SYSJAM_BENCH_PROFILE=idle|loaded`, 600 s per run, seeds 1 and 2, TimGM6mb;
+idle = 2–5% cpu with the odd disk write or packet and no input, loaded = 45–90% cpu, busy
+disk/net and bursts of typing). States are chilling/awakening/alive/subsiding % of the time,
+then melodic notes per minute, the mean number of players playing, the % of time the drums
+play; the last column is the time to the style's signature moment on the idle machine (seed 1/2):
+
+| style | idle before: states c/a/A/s %, melodic/min, players, drums on % | **idle now** | loaded now | idle signature (before → now) |
+|---|---|---|---|---|
+| auto | 100/0/0/0, 173, 3.1, 5 | **14/9/63/15, 383, 4.1, 43** | 0/2/98/0, 572, 5.0, 62 | first alive —/— → 37/34 s |
+| house | 100/0/0/0, 85, 2.6, 0 | **15/9/64/13, 390, 4.1, 41** | 0/2/98/0, 569, 5.0, 52 | first alive —/— → 39/38 s |
+| monk | 100/0/0/0, 70, 2.7, 0 | **21/67/0/12, 105, 3.8, 7** | 0/3/97/0, 368, 4.7, 29 | first alive —/— → —/— s |
+| jazz | 100/0/0/0, 96, 2.3, 0 | **14/10/64/12, 415, 4.4, 42** | 0/2/98/0, 576, 5.1, 55 | first alive —/— → 32/32 s |
+| blues | 100/0/0/0, 844, 6.0, 100 | **12/10/67/10, 1034, 6.0, 100** | 0/2/98/0, 1153, 6.0, 100 | first SOLO 33/32 → 32/32 s |
+| country | 100/0/0/0, 89, 2.5, 0 | **15/10/62/13, 310, 4.1, 38** | 0/2/98/0, 400, 5.0, 56 | train beat playing —/— → 22/32 s |
+| biker | 100/0/0/0, 538, 4.0, 100 | **12/8/71/10, 605, 4.1, 100** | 0/1/99/0, 663, 4.1, 100 | first CHORUS 22/22 → 22/22 s |
+| baroque | 100/0/0/0, 82, 2.7, 0 | **15/8/64/13, 343, 4.1, 19** | 0/2/98/0, 474, 5.1, 28 | first alive —/— → 38/37 s |
+| celtic | 100/0/0/0, 90, 2.5, 0 | **15/11/62/12, 416, 4.3, 30** | 0/2/98/0, 599, 5.1, 57 | first alive —/— → 35/34 s |
+| industrial | 100/0/0/0, 321, 4.5, 100 | **13/8/69/9, 382, 4.6, 100** | 0/1/99/0, 708, 4.8, 100 | first RAGE wall 16/16 → 16/16 s |
+| techno | 100/0/0/0, 327, 4.1, 10 | **10/8/72/10, 537, 4.2, 70** | 0/1/99/0, 730, 4.4, 89 | first drop —/— → 31/31 s |
+| space | 100/0/0/0, 72, 2.8, 0 | **16/10/64/10, 324, 4.1, 28** | 0/2/98/0, 462, 4.9, 46 | first alive —/— → 44/58 s |
+| tribal | 100/0/0/0, 91, 2.6, 0 | **17/11/59/13, 365, 4.1, 30** | 0/2/98/0, 551, 5.0, 59 | first alive —/— → 37/36 s |
+
+Dead air on an idle House run fell from 14.7% to 1.4% of the time (`bench deadtime`), and the
+sub band (<90 Hz) now sits at −19 to −21 dB in every style, idle or loaded (Blues was −25.4 dB
+idle, Country −21.7). `SYSJAM_BENCH_PROBE=file` logs one line per second (state, feel, section,
+players, notes, energy, loudness, sub level).
 
 ## Next idea, and never dead air
 
@@ -1108,6 +1162,7 @@ Measured exactly (schedstat, all threads) on an 8-vCPU Xeon VM:
 | Techno / Space Cadet, live UI at 170×56 with the 5-row crowd, legs, beat-synced feet, next-idea + never-dead-air engine, WAV sink, 40 s of a 75 s run, per thread | engine 1.55% / 1.37%, **UI 0.45% / 0.42%**, monitor 0.12% (≈2.1% / 1.9% total) | |
 | Industrial / Biker / Blues, live UI at 170×56 with **the stage** (lights, props, apron) and the 3-layer crowd, WAV sink, 40 s of a 75 s run, per thread | engine 2.47% / 2.45% / 1.90%, **UI 0.47% / 0.45% / 0.42%**, monitor 0.10–0.12% (≈3.0% / 3.0% / 2.4% total) | |
 | offline bench (40 s idle / 80 s busy / 80 s idle), busy phase, TimGM6mb: Industrial wall of sound (3 seeds) / Biker hard rock / Blues shuffle (2 seeds) | 2.32–2.79% / 1.92–2.52% / 2.55–2.75% (before: Industrial 1.84–2.21%, Blues 1.79–1.99%) | |
+| offline 600 s runs, all 13 styles × seeds 1–2 (7 in parallel): idle profile / loaded profile, before → after the band's own drive | idle 1.43% → 1.80% (max 2.46%), loaded 1.94% → 2.00% (max 2.81%) | |
 | the conductor's MLP (once a bar, offline bench) | 1–3 µs per call, ≈0.0001% | |
 | alive under heavy load (busy thread as guest, ~400 MB/s writes, ~40 MB/s downloads, file churn), UI on, X11 screen sampling, 60 s | 3.05% | |
 
@@ -1167,7 +1222,7 @@ Tools:
 - `tools/shot.sh` screenshots the TUI in tmux (optionally sending arrow keys) and renders it with `tools/ansi2png.py`, which carries tmux's SGR state across lines, draws double-width emoji, and falls back to Noto Sans Symbols and a monochrome Noto Emoji font (`SYSJAM_EMOJI_FONT`, OFL, not shipped) for glyphs DejaVu lacks. `LOAD=75 tools/shot.sh country 55 "--seed 3 --style country"` made the gallery.
 - `tools/measure.py SECS ./sysjam --null` measures sysjam's own CPU.
 - `tools/portal_test.sh BIN COLOR ARGS…` runs the end-to-end portal test. It uses a private D-Bus, pipewire, wireplumber, a GStreamer test source and `tools/mock_portal.py`.
-- `SYSJAM_BENCH=1 SYSJAM_BENCH_LOG=1 ./sysjam --seed 1` gives an offline 200 s timeline with CPU figures, per-player note density per state, the conductor's intervention count and the list of theme quotes. Add `SYSJAM_RMS=1` for RMS per source (synth patches, pad bed, bells, sub, synth bass/kick, GM melodic, GM drums) split by drums playing/resting, and `SYSJAM_BENCH_SCALE=5` for a 5× longer timeline. `SYSJAM_NOTES=notes.txt` writes every played note (step position, player, pitch class relative to the tonic, chord root, scale, style, bpm, velocity; drum hits too), which is what the Blues swing and scale-conformance figures above are computed from.
+- `SYSJAM_BENCH=1 SYSJAM_BENCH_LOG=1 ./sysjam --seed 1` gives an offline 200 s timeline with CPU figures, per-player note density per state, the conductor's intervention count and the list of theme quotes. Add `SYSJAM_RMS=1` for RMS per source (synth patches, pad bed, bells, sub, synth bass/kick, GM melodic, GM drums) split by drums playing/resting, and `SYSJAM_BENCH_SCALE=5` for a 5× longer timeline. `SYSJAM_NOTES=notes.txt` writes every played note (step position, player, pitch class relative to the tonic, chord root, scale, style, bpm, velocity; drum hits too), which is what the Blues swing and scale-conformance figures above are computed from. `SYSJAM_BENCH_PROFILE=idle` (or `loaded`) replaces the three phases with one realistic run of `SYSJAM_BENCH_SECS` seconds (default 600), and `SYSJAM_BENCH_PROBE=probe.tsv` logs a line per second for it.
 - `tools/extract_themes.py` regenerates `assets/themes/themes.txt` from the music21 corpus (see *Themes*).
 
 ## Licence

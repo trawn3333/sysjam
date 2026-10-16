@@ -162,6 +162,24 @@ const COUNTRY_CH: [usize; 2] = [13, 14];
 const BLUES_CH: [usize; 5] = [11, 12, 13, 14, 15];
 const RAGE_CH: [usize; 6] = [11, 12, 13, 14, 15, 15];
 
+/// each style's own musical drive on an idle machine: the internal arc's (low, high) energy
+/// and its cycle in seconds. Calm styles breathe low and slow, the rock / dance styles reach
+/// their signature sections on their own; load and input push on top of this
+pub fn drive_for(id: &str) -> (f32, f32, f32) {
+    match id {
+        "monk" => (0.10, 0.40, 360.0),
+        "space" => (0.14, 0.56, 330.0),
+        "house" => (0.20, 0.66, 300.0),
+        "baroque" => (0.18, 0.68, 300.0),
+        "jazz" | "celtic" => (0.20, 0.76, 270.0),
+        "tribal" | "country" => (0.20, 0.78, 270.0),
+        "blues" => (0.22, 0.85, 240.0),
+        "biker" | "techno" => (0.22, 0.88, 240.0),
+        "industrial" => (0.22, 0.90, 240.0),
+        _ => (0.20, 0.72, 280.0),
+    }
+}
+
 pub struct Engine {
     pub orph: crate::orphans::Orphans,
     /// keys/lead/colour: committed to play through bar index < in_until[i] (a whole statement)
@@ -1244,6 +1262,27 @@ impl Engine {
     }
 
     /// notes per minute per player in each arrangement state (bench / measurement)
+    /// one probe line for the bench (tab separated): state, feel, section, techno section,
+    /// drum mode, train beat, players playing (of 6), notes so far, energy
+    pub fn probe(&self) -> String {
+        let feel = if self.blues_live { self.blues.feel() } else if self.rage_live { self.rage.feel() } else { match self.feel {
+            Feel::Normal => "-",
+            Feel::Half => "half-time",
+            Feel::Double => "double-time",
+            Feel::Surge => "surge",
+        } };
+        let sec = if self.blues_live { self.blues.sec_name() } else if self.rage_live { self.rage.sec.name() } else { "-" };
+        let playing = (0..6).filter(|&i| self.playing(i)).count();
+        let notes: u32 = self.dens.iter().map(|d| d.iter().sum::<u32>()).sum();
+        let drums: u32 = self.dens.iter().map(|d| d[2]).sum();
+        let dm = match self.rmode[2] {
+            RMode::Rest => "rest",
+            RMode::Hold => "hold",
+            RMode::Play => "play",
+        };
+        format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{}", self.leader.state.name(), feel, if sec.is_empty() { "-" } else { sec }, self.tsec, if self.on[2] { dm } else { "off" }, self.train as u8, playing, notes, drums, self.leader.energy, self.sty().id)
+    }
+
     pub fn density_report(&self) -> String {
         let names = ["drone", "bass", "drums", "keys", "lead", "colour", "guest"];
         let mut out = String::new();
@@ -2205,6 +2244,21 @@ impl Engine {
 
     fn techno_sections(&mut self) {
         self.tsec_ph += 1;
+        if self.n_tsec[3] == 0 && self.tsec == 0 && self.step >= 16 * 8 {
+            // the first drop comes early, on its own: a short groove, a build, then DROP
+            let len = 2;
+            self.tsec = 2;
+            self.tsec_left = len;
+            self.tsec_len = len;
+            self.tsec_ph = 0;
+            self.n_tsec[2] += 1;
+            self.mark("techno section");
+            self.say(format!("~ techno: build for {} bars (the set's first drop is coming)", len * 4));
+            self.cond_say("build it up…".into(), Pose::Point, None);
+            self.hold[2] = 0;
+            self.think(2, "soloing", format!("build → kick back in, snare roll rising over {} bars", len * 4));
+            return;
+        }
         if self.tsec_left > 1 {
             self.tsec_left -= 1;
             if self.tsec == 2 && self.tsec_left == 1 {
@@ -2217,6 +2271,7 @@ impl Engine {
         }
         let e = (0.6 * self.leader.energy + 0.4 * self.leader.agitation).clamp(0.0, 1.0);
         let hot = e > 0.55;
+
         let (next, len, line): (u8, u32, &str) = match self.tsec {
             0 | 3 if e > 0.3 && self.rng.chance(0.25 + 0.6 * e) => (1, if hot { 2 } else { 4 }, "breakdown — kick out, let it breathe"),
             0 | 3 => (0, if self.rng.chance(0.5) { 4 } else { 8 }, ""),
@@ -2743,7 +2798,8 @@ impl Engine {
         }
         let mut p = 0.012;
         if st == State::Alive {
-            p += 0.05;
+            // a hot band can surge on its own now and then; load makes it likelier
+            p += 0.05 * (0.25 + 0.75 * self.leader.sys.clamp(0.0, 1.0));
         }
         if kb > 0.6 {
             p += 0.25;
@@ -2940,6 +2996,7 @@ impl Engine {
         self.last_ctl = self.now;
         let mut sig = c.sig;
         sig.crowd = self.crowd(c, dt);
+        self.leader.drive = drive_for(self.sty().id);
         let req = self.leader.listen(&sig, dt, &mut msgs);
         // each player's tied signal: a sharp rise can inspire a new sound
         let (a, b) = (self.prev_sig, c.sig);
@@ -3347,6 +3404,10 @@ impl Engine {
         let tb = ["under 70", "70-89", "90-109", "110-129", "130 up"].iter().position(|b| *b == crate::likes::tempo_bucket(self.bpm)).unwrap_or(0);
         self.bpm_secs[tb] += dt;
         self.step += 1;
+        if s == 0 && self.sty().id == "blues" && !self.blues_live && !self.harm.restarting() {
+            // the blues key is set before the bar's first chord sounds (no stray first bar)
+            self.blues_on();
+        }
         if s == 0 {
             if let Some(w) = self.notes_log.as_mut() {
                 use std::io::Write;
@@ -6835,7 +6896,9 @@ impl Engine {
             let trim_t = if self.sty().synth <= 0.0 && self.gm.is_some() { 0.25 } else { 1.0 };
             self.bed_trim += (trim_t - self.bed_trim) * 0.01;
             let duck = self.rage_duck * self.bed_trim;
-            let sub_duck = self.rage_duck * (0.45 + 0.55 * (self.bed_trim - 0.25) / 0.75);
+            // the deep sub stays strong everywhere (the listener loves deep bass): only the
+            // machine styles with their own distorted bass trim it a little
+            let sub_duck = (0.8 + 0.2 * ((self.rage_duck - 0.25) / 0.25).clamp(0.0, 1.0)) * (0.85 + 0.15 * (self.bed_trim - 0.25) / 0.75);
             for j in 0..n {
                 if self.cr_count == 0 {
                     self.control_rate();

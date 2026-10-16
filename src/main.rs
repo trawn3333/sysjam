@@ -356,7 +356,22 @@ fn main() {
         let scale: usize = std::env::var("SYSJAM_BENCH_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1).max(1);
         // optional keyboard activity during the busy phase (0..1), e.g. to hear Industrial rage
         let busy_input: f32 = std::env::var("SYSJAM_BENCH_INPUT").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
-        for (phase, secs, busy) in [("idle", 40usize * scale, false), ("busy", 80 * scale, true), ("idle again", 80 * scale, false)] {
+        // SYSJAM_BENCH_PROFILE=idle|loaded: one long run (SYSJAM_BENCH_SECS, default 600) with a
+        // realistic idle desktop (near-zero cpu, a little disk/net, no typing) or a loaded one
+        // (varying heavy cpu/disk/net plus some typing); SYSJAM_BENCH_PROBE=file logs a line
+        // per second (state, feel, section, players, notes, energy, loudness, sub level)
+        let profile = std::env::var("SYSJAM_BENCH_PROFILE").ok();
+        let prof_secs: usize = std::env::var("SYSJAM_BENCH_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(600);
+        let mut probe = std::env::var("SYSJAM_BENCH_PROBE").ok().and_then(|p| std::fs::File::create(p).ok()).map(std::io::BufWriter::new);
+        let phases: Vec<(&str, usize, bool)> = match profile.as_deref() {
+            Some("idle") => vec![("idle profile", prof_secs, false)],
+            Some(_) => vec![("loaded profile", prof_secs, true)],
+            None => vec![("idle", 40usize * scale, false), ("busy", 80 * scale, true), ("idle again", 80 * scale, false)],
+        };
+        let mut nrng = dsp::Rng::seeded(seed ^ 0x1d1e);
+        let (mut acc, mut acc_lo, mut lp1, mut lp2, mut acc_n) = (0f64, 0f64, 0f32, 0f32, 0usize);
+        let lp_k = 1.0 - (-2.0 * std::f32::consts::PI * 90.0 / RATE as f32).exp();
+        for (phase, secs, busy) in phases {
             let t = std::time::Instant::now();
             let blocks = RATE as usize * secs / BLOCK;
             let t_base = en.time();
@@ -365,8 +380,32 @@ fn main() {
                     let mut c = Control::default();
                     ver += 1;
                     c.version = ver;
-                    if busy {
-                        c.sig = band::Signals { cpu: 0.85, cores: 0.8, net: 0.75, file: 0.75, fd: 0.5, screen_change: 0.0, input: busy_input, crowd: 0.0 };
+                    let ts = en.time();
+                    match profile.as_deref() {
+                        Some("idle") => {
+                            // an idle desktop: a few % cpu, the odd disk write / packet, no input
+                            let blip = |r: &mut dsp::Rng, p: f32, v: f32| if r.chance(p) { v * r.f() } else { 0.0 };
+                            c.sig = band::Signals { cpu: 0.02 + 0.03 * nrng.f() + blip(&mut nrng, 0.03, 0.15), cores: 0.03 + 0.03 * nrng.f(), net: 0.01 * nrng.f() + blip(&mut nrng, 0.02, 0.2), file: blip(&mut nrng, 0.05, 0.25), fd: 0.02, screen_change: blip(&mut nrng, 0.02, 0.1), input: 0.0, crowd: 0.0 };
+                        }
+                        Some(_) => {
+                            // a busy machine: heavy and varying (builds, downloads, typing bursts)
+                            let w = 0.5 + 0.5 * (ts / 47.0).sin();
+                            let w2 = 0.5 + 0.5 * (ts / 31.0 + 1.0).sin();
+                            c.sig = band::Signals { cpu: 0.45 + 0.45 * w, cores: 0.35 + 0.5 * w, net: 0.2 + 0.6 * w2, file: 0.25 + 0.6 * w2, fd: 0.4, screen_change: 0.1 * nrng.f(), input: if (ts / 20.0) as i32 % 3 == 0 { 0.3 + 0.4 * nrng.f() } else { 0.05 }, crowd: 0.0 };
+                        }
+                        None if busy => {
+                            c.sig = band::Signals { cpu: 0.85, cores: 0.8, net: 0.75, file: 0.75, fd: 0.5, screen_change: 0.0, input: busy_input, crowd: 0.0 };
+                        }
+                        None => {}
+                    }
+                    if let Some(w) = probe.as_mut() {
+                        use std::io::Write;
+                        let db = |p: f64| if p > 0.0 { 10.0 * p.log10() } else { -120.0 };
+                        let n = acc_n.max(1) as f64;
+                        let _ = writeln!(w, "{ts:.1}\t{}\t{:.1}\t{:.1}", en.probe(), db(acc / n), db(acc_lo / n));
+                        acc = 0.0;
+                        acc_lo = 0.0;
+                        acc_n = 0;
                     }
                     en.set_control(&c);
                     let now = en.time();
@@ -385,6 +424,16 @@ fn main() {
                     }
                 }
                 en.render(&mut b);
+                if probe.is_some() {
+                    for fr in b.chunks_exact(2) {
+                        let m = 0.5 * (fr[0] + fr[1]);
+                        lp1 += (m - lp1) * lp_k;
+                        lp2 += (lp1 - lp2) * lp_k;
+                        acc += (m * m) as f64;
+                        acc_lo += (lp2 * lp2) as f64;
+                    }
+                    acc_n += b.len() / 2;
+                }
                 if let Some(f) = raw.as_mut() {
                     use std::io::Write;
                     let bytes: Vec<u8> = b.iter().flat_map(|x| x.to_le_bytes()).collect();

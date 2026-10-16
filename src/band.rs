@@ -104,12 +104,40 @@ pub struct Leader {
     pub trade: bool,
     pub entry: Option<Entry>,
     started: bool,
+    /// the band's own musical drive: (low, high, cycle seconds) for the current style
+    pub drive: (f32, f32, f32),
+    /// where in its cycle the internal arc is (0..1), and its current value
+    pub arc_phase: f32,
+    pub arc: f32,
+    /// the machine's own push (load, input), smoothed: a modulator on top of the arc
+    pub sys: f32,
+}
+
+/// the internal arc's shape over one cycle: a valley (breathe), the rise (build), a long
+/// peak with a ripple (the band in full flight), then the fall (wind down)
+pub fn arc_shape(ph: f32) -> f32 {
+    let ss = |x: f32| {
+        let x = x.clamp(0.0, 1.0);
+        x * x * (3.0 - 2.0 * x)
+    };
+    let ph = ph.rem_euclid(1.0);
+    if ph < 0.12 {
+        0.0
+    } else if ph < 0.32 {
+        ss((ph - 0.12) / 0.20)
+    } else if ph < 0.78 {
+        // the peak breathes: a dip in the middle (a breakdown / a solo space)
+        1.0 - 0.22 * (((ph - 0.32) / 0.46) * std::f32::consts::PI * 2.0).sin().max(0.0).powi(2)
+    } else {
+        1.0 - ss((ph - 0.78) / 0.22)
+    }
 }
 
 impl Leader {
     pub fn new(seed: u64) -> Self {
         let mut rng = Rng::seeded(seed ^ 0x4c454144);
-        let dwell = 3 + rng.below(2) as u32;
+        let _ = rng.below(2);
+        let dwell = 1;
         Leader {
             quiet: false,
             rng,
@@ -139,6 +167,11 @@ impl Leader {
             trade: false,
             entry: None,
             started: false,
+            drive: (0.3, 0.8, 270.0),
+            // start just before the rise: the band warms up, then takes off in ~30-60 s
+            arc_phase: 0.16,
+            arc: 0.0,
+            sys: 0.0,
         }
     }
 
@@ -154,12 +187,19 @@ impl Leader {
             inst += 0.12 * (n_hi - 1) as f32;
         }
         let inst = inst.clamp(0.0, 1.0);
+        // the internal drive: the band's own arc, whatever the machine does. Load and
+        // input don't unlock anything, they push the arc higher and run its clock faster
+        let (lo, hi, period) = self.drive;
+        self.sys += (inst - self.sys) * (1.0 - (-dt / 8.0).exp());
+        self.arc_phase = (self.arc_phase + dt * (1.0 + 0.8 * self.sys) / period.max(30.0)).rem_euclid(1.0);
+        self.arc = lo + (hi - lo) * arc_shape(self.arc_phase);
+        let target = (self.arc + 0.65 * inst * (1.0 - self.arc)).clamp(0.0, 1.0);
         if !self.started {
-            self.energy = inst * 0.5;
+            self.energy = target * 0.5;
             self.agitation = inst;
             self.started = true;
         }
-        self.energy += (inst - self.energy) * (1.0 - (-dt / 15.0).exp());
+        self.energy += (target - self.energy) * (1.0 - (-dt / 12.0).exp());
         self.agitation += (inst - self.agitation) * (1.0 - (-dt / 3.0).exp());
         self.tension_cd -= dt;
         self.mod_cd -= dt;
@@ -176,7 +216,7 @@ impl Leader {
             self.mod_cd = 90.0;
             msgs.push("~ big I/O burst -> modulation".into());
         }
-        if self.energy > 0.4 {
+        if self.sys > 0.4 {
             self.peaked = true;
         }
         if self.agitation > 0.68 { self.chaos_t = (self.chaos_t + dt).min(10.0) } else { self.chaos_t = (self.chaos_t - 2.0 * dt).max(0.0) }
@@ -221,7 +261,9 @@ impl Leader {
         self.phrases_in_state += 1;
         self.entry = None;
         let e = self.energy;
+        // the very first chill is a short warm-up (1 phrase), later ones dwell 3-4 phrases
         let dwell_ok = self.phrases_in_state >= self.dwell;
+        let quick = self.phrases_in_state >= 2 && e > 0.45;
         // the longer we've been past the dwell, the more decisive the leader gets
         let over = self.phrases_in_state.saturating_sub(self.dwell) as f32;
         let mut p = (0.5 + 0.2 * over).min(0.95);
@@ -237,7 +279,7 @@ impl Leader {
                     self.go(State::Awaken, msgs)
                 }
             }
-            State::Awaken if (dwell_ok && e > 0.42 && r < p) || (e > 0.35 && self.agitation > 0.55) => self.go(State::Alive, msgs),
+            State::Awaken if (dwell_ok && e > 0.42 && r < p) || quick || (e > 0.35 && self.agitation > 0.55) => self.go(State::Alive, msgs),
             State::Awaken if dwell_ok && e < 0.15 && r < p => {
                 self.go(State::Subside, msgs);
                 req.resolve = true;
