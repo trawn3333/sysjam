@@ -223,6 +223,65 @@ pub fn last_hit(p: usize, s: f64) -> Option<(f64, i32, i32, u64)> {
     best
 }
 
+/// player `p`'s hits heard by sample `s` within `max_age` samples, newest first:
+/// (age in samples, key, velocity, hit count)
+pub fn recent_hits(p: usize, s: f64, max_age: f64) -> Vec<(f64, i32, i32, u64)> {
+    let mut v = Vec::new();
+    if p >= PLAYERS {
+        return v;
+    }
+    let h = HHEAD[p].load(Acquire) as usize;
+    for k in 1..=H.min(h) {
+        let e = &HITS[p][(h - k) % H];
+        let at = e.at.load(Acquire);
+        if at == 0 {
+            continue;
+        }
+        let info = e.info.load(Relaxed);
+        let age = s - at as f64;
+        if age >= 0.0 && age <= max_age {
+            v.push((age, (info >> 8) as i32, (info & 0xff) as i32, (h - k) as u64));
+        }
+    }
+    v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    v
+}
+
+/// samples from `s` until the next note anyone plays (notes are scheduled ahead), so the UI
+/// can put a frame exactly on it
+pub fn next_hit(s: f64) -> Option<f64> {
+    let mut best: Option<f64> = None;
+    for p in 0..PLAYERS {
+        let h = HHEAD[p].load(Acquire) as usize;
+        for k in 1..=H.min(h) {
+            let at = HITS[p][(h - k) % H].at.load(Acquire);
+            if at == 0 {
+                continue;
+            }
+            let d = at as f64 - s;
+            if d > 0.0 && best.map_or(true, |b| d < b) {
+                best = Some(d);
+            }
+        }
+    }
+    best
+}
+
+/// the sample of the newest note anyone has sounded by sample `s` (0 when none)
+pub fn latest_heard(s: f64) -> f64 {
+    let mut best = 0.0f64;
+    for p in 0..PLAYERS {
+        let h = HHEAD[p].load(Acquire) as usize;
+        for k in 1..=H.min(h) {
+            let at = HITS[p][(h - k) % H].at.load(Acquire) as f64;
+            if at > best && at <= s {
+                best = at;
+            }
+        }
+    }
+    best
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

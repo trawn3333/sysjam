@@ -250,8 +250,19 @@ band plays **on a stage** instead of the list:
   a gong, a synth rig with a patch wall, a modular for the drone, DJ decks in Techno and a
   vocalist's mic (the Biker frontman). Big instruments get wide slots; when the stage is tight
   the amps go first, then synth rigs and then the others fall back to the small figures, the
-  drums last. Frame 2 is the hit, from the same heard-note clock as everything else: keys go down,
-  cymbals shake, the bow moves, harp strings shimmer, the tuba puffs a `♪`. A new instrument is
+  drums last. **Every move comes from the notes the player actually sounds**, read from the
+  heard-note clock (each note is logged with the sample at which it reaches the speakers). The
+  drummer has a limb per voice: right stick on the hi-hat (`==` closed, `~~` open), left stick on
+  the snare, right foot on the kick, left foot on the hat pedal, both sticks sweeping the toms in
+  a fill, an arm up for a crash or ride; the sticks stay still between hits. Guitars, banjo and
+  bass strum or pluck per note with the picking hand alternating, the fret hand moves along the
+  neck with the pitch, and Metal gets palm-muted chugs (`_=`). Keyboards press the key under the
+  pitch: the left hand for low notes, the right for high, both for chords. Horns, voice and
+  harmonica open the mouth and puff the cheeks while sounding and breathe between phrases; bows
+  change direction on each note and mallets strike. Silence is a relaxed pose. The UI puts a
+  frame on each note as it sounds (at most ~30 a second, otherwise ~15 fps), so a hit is on
+  screen a median 1.5 ms and at worst 35 ms after it is heard, inside one 66 ms frame (measured
+  with `SYSJAM_HITLOG=path`, which logs each note's sound-to-screen offset). A new instrument is
   carried off to the right and the new one wheeled on (1 s). A soloist steps forward a row.
 - **One-line captions** (`keys·grand·E`, the addressed player highlighted), the **stage lip**,
   and a slim apron with the frontman's yells in a bubble and wedge monitors (the conductor
@@ -259,9 +270,9 @@ band plays **on a stage** instead of the list:
 - Under the stage, **one condensed "thinking" line per player** (`bassist ↳ locked to the kick`).
 - Small terminals keep the old list view with the little figures. `SYSJAM_STAGE=0` forces it.
 
-All prop art is static text built once (two frames per prop), only from the same width-safe glyph
+All prop art is static text built once (two frames per prop, patched per limb from the notes), only from the same width-safe glyph
 set as the figures; a unit test checks every frame for width and glyphs and that it has exactly
-one face. The stage is redrawn in the in-between frames like the figures and crowd, and only the
+one face (also for every note-driven pose). The stage is redrawn in the in-between frames like the figures and crowd, and only the
 runs of cells that changed are written.
 
 ### In time with the audio

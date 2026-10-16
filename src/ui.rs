@@ -218,6 +218,7 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
     let mut paused = false;
     let mut quitting = false;
     let mut last = Instant::now() - slow;
+    let mut last_reg = Instant::now() - slow;
     let mut last_beat = i64::MIN;
     // held arrows auto-repeat fast: accept one tempo nudge per 160 ms, one style step per 300 ms
     let mut last_t = Instant::now() - Duration::from_secs(1);
@@ -235,6 +236,10 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
     let mut last_cells: Vec<(u16, u16, String, usize, Style)> = Vec::new();
     // stage/crowd runs written since the last full frame
     let mut touched: Vec<(u16, u16, String, usize, Style)> = Vec::new();
+    let mut last_hit_seen = 0.0f64;
+    // SYSJAM_HITLOG: per note heard, how long after it sounded its frame reached the terminal
+    let mut hit_log = std::env::var_os("SYSJAM_HITLOG").and_then(|p| std::fs::File::create(p).ok()).map(std::io::BufWriter::new);
+    let mut hit_n = [u64::MAX; 7];
     let mut sync_log = std::env::var_os("SYSJAM_SYNCLOG").and_then(|p| std::fs::File::create(p).ok()).map(std::io::BufWriter::new);
     while !stop.load(Ordering::Relaxed) {
         // time to the next beat, as heard
@@ -244,9 +249,24 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
             let beat_s = p.len * 4.0 / crate::clock::rate().max(1.0);
             Duration::from_secs_f64(((1.0 - p.beats().fract()) * beat_s).max(0.0))
         });
-        let mut wait = frame_dt.saturating_sub(last.elapsed());
+        let mut wait = frame_dt.saturating_sub(last_reg.elapsed());
         if let Some(tb) = to_beat {
             wait = wait.min(tb + Duration::from_micros(300));
+        }
+        // and a frame on every note as it sounds (and when its flash ends), so the
+        // musicians move with what they play; at most ~30 a second
+        if let (Some(h), false) = (heard, paused) {
+            let rate = crate::clock::rate().max(1.0);
+            // (a note scheduled after we went to sleep is caught by the 40 ms poll cap)
+            wait = wait.min(Duration::from_millis(40));
+            // a note already heard but not drawn yet (it came inside the minimum gap)
+            if crate::clock::latest_heard(h) != last_hit_seen {
+                wait = wait.min(Duration::from_millis(33).saturating_sub(last.elapsed()) + Duration::from_micros(300));
+            }
+            if let Some(d) = crate::clock::next_hit(h) {
+                let hw = Duration::from_secs_f64(d / rate) + Duration::from_micros(300);
+                wait = wait.min(hw.max(Duration::from_millis(33).saturating_sub(last.elapsed())));
+            }
         }
         if event::poll(wait.min(Duration::from_millis(100))).unwrap_or(false) {
             match event::read() {
@@ -266,18 +286,21 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
                     KeyCode::Char(' ') => {
                         paused = !paused;
                         last = Instant::now() - slow;
+                        last_reg = last;
                         force_full = true;
                     }
                     KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Enter if last_l.elapsed() >= Duration::from_millis(400) => {
                         last_l = Instant::now();
                         crate::shared::KEY_LIKE.fetch_add(1, Ordering::Relaxed);
                         last = Instant::now() - slow;
+                        last_reg = last;
                         force_full = true;
                     }
                     KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Tab if last_n.elapsed() >= Duration::from_millis(350) => {
                         last_n = Instant::now();
                         crate::shared::KEY_NEXT.fetch_add(1, Ordering::Relaxed);
                         last = Instant::now() - slow;
+                        last_reg = last;
                         force_full = true;
                     }
                     KeyCode::Char('a') | KeyCode::Char('A') if crate::audience::ENABLED.load(Ordering::Relaxed) => {
@@ -285,12 +308,14 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
                         let on = crate::audience::SHOWN.load(Ordering::Relaxed);
                         crate::audience::FORCE.store(if on { 2 } else { 1 }, Ordering::Relaxed);
                         last = Instant::now() - slow;
+                        last_reg = last;
                         force_full = true;
                     }
                     KeyCode::Up | KeyCode::Down if last_t.elapsed() >= Duration::from_millis(160) => {
                         last_t = Instant::now();
                         crate::shared::KEY_TEMPO.fetch_add(if k.code == KeyCode::Up { 1 } else { -1 }, Ordering::Relaxed);
                         last = Instant::now() - slow;
+                        last_reg = last;
                         force_full = true;
                     }
                     KeyCode::Left | KeyCode::Right if last_s.elapsed() >= Duration::from_millis(300) => {
@@ -298,12 +323,14 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
                         crate::shared::KEY_STYLE.fetch_add(if k.code == KeyCode::Right { 1 } else { -1 }, Ordering::Relaxed);
                         crate::theme::fast_next();
                         last = Instant::now() - slow;
+                        last_reg = last;
                         force_full = true;
                     }
                     _ => {}
                 },
                 Ok(Event::Resize(..)) => {
                     last = Instant::now() - slow;
+                    last_reg = last;
                     force_full = true;
                 }
                 _ => {}
@@ -314,16 +341,25 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
         let pos = heard.and_then(crate::clock::pos_at);
         let beat_i = pos.map(|p| p.beats().floor() as i64).unwrap_or(last_beat);
         let on_beat = beat_i != last_beat;
-        if last.elapsed() < frame_dt && !(on_beat && !paused) {
+        let lh = heard.map_or(0.0, crate::clock::latest_heard);
+        let on_hit = !paused && last.elapsed() >= Duration::from_millis(32) && lh != last_hit_seen;
+        let regular = last_reg.elapsed() >= frame_dt || (on_beat && !paused);
+        if !regular && !on_hit {
             continue;
         }
+        // a frame for a note only: just the stage (everything else as it was)
+        anim.hit_only = !regular;
+        if regular {
+            last_reg = Instant::now();
+        }
+        last_hit_seen = lh;
         last = Instant::now();
         last_beat = beat_i;
         // the full UI refreshes at 2 fps (or at once after a key); in between only the
         // little people are redrawn over the cached frame
         // (a big terminal refreshes its panels a little less often: the cost grows with its area)
-        let full_ms = cache.as_ref().map_or(500, |c| (500.0 * (c.area.width as f32 * c.area.height as f32 / 9520.0).max(1.0)).min(1000.0) as u64);
-        let full = force_full || last_full.elapsed() >= Duration::from_millis(full_ms) || cache.is_none();
+        let full_ms = cache.as_ref().map_or(700, |c| (700.0 * (c.area.width as f32 * c.area.height as f32 / 9520.0).max(1.0)).min(1200.0) as u64);
+        let full = (!anim.hit_only && (force_full || last_full.elapsed() >= Duration::from_millis(full_ms))) || cache.is_none();
         if full && !paused {
             if let Ok(b) = ui.band.lock() {
                 if b.version != band.version {
@@ -409,6 +445,26 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
         prof.0 += tw;
         prof.1 += tp.elapsed() - tw;
         prof.2 += 1;
+        if let (Some(w), Some(h)) = (hit_log.as_mut(), ctx.heard) {
+            let rate = crate::clock::rate().max(1.0);
+            let shown = crate::clock::ns();
+            for (p, seen) in hit_n.iter_mut().enumerate() {
+                for &(age, key, _, n) in crate::clock::recent_hits(p, h, rate).iter().rev() {
+                    if *seen != u64::MAX && n <= *seen {
+                        continue;
+                    }
+                    if *seen != u64::MAX {
+                        // sounded at now_ns - age; on screen at `shown`
+                        let off = (shown as f64 - now_ns as f64) / 1e6 + age / rate * 1e3;
+                        let _ = writeln!(w, "{p} {key} {off:.2}");
+                    }
+                    *seen = n;
+                }
+                if *seen == u64::MAX {
+                    *seen = crate::clock::last_hit(p, h).map_or(0, |x| x.3);
+                }
+            }
+        }
         if let (Some(w), Some(p), Some(h)) = (sync_log.as_mut(), ctx.pos, ctx.heard) {
             // frame shown at (now): wall ns, heard sample, beat position, and when the drawn frame hit the terminal
             let _ = writeln!(w, "{now_ns} {:.1} {:.4} {} {}", h, p.beats(), crate::clock::ns(), crate::clock::SINK_T0.load(Ordering::Relaxed));
@@ -830,6 +886,9 @@ pub struct Anim {
     crowd_beat: i64,
     stage_rows: Vec<Vec<Cell>>,
     stage_t: Instant,
+    stage_hit: (f64, bool),
+    hit_only: bool,
+    out_cache: Vec<(u16, u16, String, usize, Style)>,
     stage_beat: i64,
     /// the stage: each player's prop, swaps in progress, the stage rect
     prop: [Option<crate::stage::Prop>; 7],
@@ -841,7 +900,7 @@ pub struct Anim {
 
 impl Anim {
     pub fn new() -> Anim {
-        Anim { t0: Instant::now(), fam: [None; 7], swap: [None; 7], present: [false; 7], walk: [None; 7], hush: [None; 7], col: [Color::Gray; 7], cond: None, said: (String::new(), Instant::now()), band: None, dots: None, crowd: Default::default(), floor: crate::audience::Floor::new(), aud: None, crowd_rows: Vec::new(), crowd_t: Instant::now(), crowd_beat: 0, stage_rows: Vec::new(), stage_t: Instant::now(), stage_beat: 0, prop: [None; 7], pswap: [None; 7], stage: None, solo: None }
+        Anim { t0: Instant::now(), fam: [None; 7], swap: [None; 7], present: [false; 7], walk: [None; 7], hush: [None; 7], col: [Color::Gray; 7], cond: None, said: (String::new(), Instant::now()), band: None, dots: None, crowd: Default::default(), floor: crate::audience::Floor::new(), aud: None, crowd_rows: Vec::new(), crowd_t: Instant::now(), crowd_beat: 0, stage_rows: Vec::new(), stage_t: Instant::now(), stage_hit: (0.0, true), hit_only: false, out_cache: Vec::new(), stage_beat: 0, prop: [None; 7], pswap: [None; 7], stage: None, solo: None }
     }
 }
 
@@ -1144,6 +1203,9 @@ fn anim_cells(b: &BandSnap, anim: &mut Anim, ctx: &Ctx) -> (Vec<(u16, u16, Strin
     use crate::figure::PW;
     let mut out = Vec::new();
     let mut delta = Vec::new();
+    if anim.hit_only && !anim.out_cache.is_empty() {
+        out = anim.out_cache.clone();
+    } else {
     if let (Some((x, y, st)), Some(p)) = (anim.dots, ctx.pos) {
         out.push((x, y, crate::theme::asciify(&beat_dots(p.in_bar() as u32)), 4, st));
     }
@@ -1172,12 +1234,19 @@ fn anim_cells(b: &BandSnap, anim: &mut Anim, ctx: &Ctx) -> (Vec<(u16, u16, Strin
             }
         }
     }
+    anim.out_cache = out.clone();
+    }
     // the stage moves at ~7 fps (the crowd ~8) plus a frame on every beat (the lights
     // and the baton change on the beat)
     if let Some(r) = anim.stage {
         let beat = ctx.pos.map(|p| p.beats().floor() as i64).unwrap_or(0);
         let stale = anim.stage_rows.len() != r.height as usize || anim.stage_rows.first().map_or(true, |x| x.len() != r.width as usize);
-        if stale || anim.stage_t.elapsed() >= Duration::from_millis(150) || beat != anim.stage_beat {
+        // ...and on every note heard, and when its flash ends
+        let lh = ctx.heard.map_or(0.0, crate::clock::latest_heard);
+        let flash = ctx.heard.is_some_and(|h| h >= lh + crate::stage::FLASH as f64 * crate::clock::rate().max(1.0));
+        let note = lh != anim.stage_hit.0 || (flash && !anim.stage_hit.1);
+        if stale || note || anim.stage_t.elapsed() >= Duration::from_millis(300) || beat != anim.stage_beat {
+            anim.stage_hit = (lh, flash);
             let g = stage_grid(b, anim, ctx, r.width as usize, r.height as usize).unwrap_or_default();
             // only the cells that changed since the grid on screen go out
             grid_delta(&anim.stage_rows, &g, r.x, r.y, crate::theme::ascii(), &mut delta);
@@ -1249,6 +1318,48 @@ fn grid_delta(old: &[Vec<Cell>], new: &[Vec<Cell>], x0: u16, y0: u16, ascii: boo
             i = e;
         }
     }
+}
+
+/// what player `pi`'s notes are doing as heard right now (drives the stage props)
+fn live_of(pi: usize, heard: Option<f64>, rate: f64) -> crate::stage::Live {
+    let mut l = crate::stage::Live { age: 99.0, ..Default::default() };
+    let Some(h) = heard else { return l };
+    let hits = crate::clock::recent_hits(pi, h, 2.0 * rate);
+    let Some(&(a0, k0, _, n0)) = hits.first() else {
+        if let Some((age, key, _, n)) = crate::clock::last_hit(pi, h) {
+            l.age = (age / rate) as f32;
+            l.n = n;
+            l.key = key;
+        }
+        return l;
+    };
+    l.age = (a0 / rate) as f32;
+    l.n = n0;
+    l.key = k0;
+    let (lo, hi) = match pi {
+        1 => (28.0, 60.0),
+        3 => (36.0, 96.0),
+        _ => (40.0, 92.0),
+    };
+    let fr = |k: i32| ((k as f32 - lo) / (hi - lo)).clamp(0.0, 1.0);
+    l.frac = fr(k0);
+    if pi == 2 {
+        for &(a, k, _, _) in &hits {
+            let s = (a / rate) as f32;
+            if s < 0.3 {
+                l.drums.add(k, s);
+            }
+        }
+    }
+    // a chord: notes struck together with the newest one
+    let together: Vec<i32> = hits.iter().filter(|x| (x.0 - a0) / rate < 0.03).map(|x| x.1).collect();
+    if together.len() >= 2 {
+        l.chord = true;
+        l.lo = fr(*together.iter().min().unwrap_or(&k0));
+        l.hi = fr(*together.iter().max().unwrap_or(&k0));
+    }
+    l.chug = hits.len() >= 3 && hits[..3].iter().all(|x| x.1 == k0) && k0 < 60;
+    l
 }
 
 /// the stage scene, `w` x `h` cells, or None when it doesn't fit (list mode then):
@@ -1421,15 +1532,20 @@ fn stage_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> 
         let colr = if mi.playing { status_color(mi.status) } else { th(Color::DarkGray) };
         anim.col[pi] = colr;
         let hit = ctx.heard.and_then(|hd| crate::clock::last_hit(pi, hd)).map(|(age, ..)| (age / rate) as f32);
-        let hitting = hit.map_or(false, |a| a < 0.16);
+        let _ = hit;
         let fwd = matches!(anim.solo, Some((p, _)) if p == pi);
         let y0 = TOP + fwd as usize;
         match (s.prop, s.big) {
             (Some(p), true) => {
-                let moving = p.moving() && mi.playing && ((beats * 2.0).floor() as i64) % 2 == 0;
-                let frame = (hitting || moving) as usize;
-                let face = if !mi.playing {
+                // drawn from the notes as heard: each hit lands on the frame it sounds
+                let lv = live_of(pi, ctx.heard, rate);
+                let (live_rows, live_hit) = stage::live(p, &lv, matches!(st, "metal" | "biker" | "industrial"));
+                let hitting = live_hit;
+                let blow = matches!(p, stage::Prop::Sax | stage::Prop::Trumpet | stage::Prop::Flute | stage::Prop::Harmonica | stage::Prop::Mic | stage::Prop::Tuba | stage::Prop::Bagpipe);
+                let face = if !mi.playing && lv.age > 1.5 {
                     '-'
+                } else if blow {
+                    stage::blow_face(&lv)
                 } else if mi.hushed < 0.99 {
                     '-'
                 } else if mi.hushed < 0.99 {
@@ -1458,7 +1574,8 @@ fn stage_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> 
                     }
                 }
                 if let Some(dp) = draw_p {
-                    for (r, row) in stage::art(dp, frame).iter().enumerate() {
+                    let rows: &[String] = if dp == p { &live_rows } else { stage::art(dp, 0) };
+                    for (r, row) in rows.iter().enumerate() {
                         let y = y0 + r;
                         if y >= LIP {
                             continue;
