@@ -232,6 +232,7 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
     let mut last_full = Instant::now() - slow;
     let mut force_full = true;
     let mut dirty = false;
+    UIPROF_ON.store(std::env::var_os("SYSJAM_UIPROF").is_some(), Ordering::Relaxed);
     let mut prof = (Duration::ZERO, Duration::ZERO, 0u64, Instant::now(), 0u64);
     let mut prof_full = Duration::ZERO;
     let mut prof_term_full = Duration::ZERO;
@@ -410,7 +411,7 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
         } else {
             let t = Instant::now();
             let (cells, delta) = anim_cells(&band, &mut anim, &ctx);
-            let td = Instant::now();
+            let td = uiprof().then(Instant::now);
             // compare by position: a run that splits or merges doesn't resend the rest
             // (last_cells is in position order: a binary search, no map built per frame)
             let mut prev_ix: Vec<(u16, u16, usize)> = last_cells.iter().enumerate().map(|(i, c)| (c.1, c.0, i)).collect();
@@ -426,7 +427,9 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
                 })
                 .collect();
             let same = !fresh.iter().any(|&f| f) && cells.len() == last_cells.len() && delta.is_empty();
-            PROF_DIFF.fetch_add(td.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            if let Some(td) = td {
+                PROF_DIFF.fetch_add(td.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            }
             tw = t.elapsed();
             if !same {
                 // straight to the terminal, only the lines that changed; ratatui's own idea of
@@ -434,12 +437,16 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
                 if let Some(c) = cache.as_ref() {
                     for (i, cell) in cells.iter().enumerate() {
                         if fresh[i] {
-                            PROF_EMIT.fetch_add(cell.3 as u64, Ordering::Relaxed);
+                            if uiprof() {
+                                PROF_EMIT.fetch_add(cell.3 as u64, Ordering::Relaxed);
+                            }
                             emit(&mut term.backend_mut().esc, c, cell.0, cell.1, Some((&cell.2, cell.4)), cell.3);
                         }
                     }
                     for cell in &delta {
-                        PROF_EMIT.fetch_add(cell.3 as u64, Ordering::Relaxed);
+                        if uiprof() {
+                            PROF_EMIT.fetch_add(cell.3 as u64, Ordering::Relaxed);
+                        }
                         emit(&mut term.backend_mut().esc, c, cell.0, cell.1, Some((&cell.2, cell.4)), cell.3);
                     }
                     term.backend_mut().esc.flush();
@@ -879,12 +886,36 @@ impl Esc {
         }
     }
     fn style(&mut self, st: (Color, Color, bool)) {
-        if self.cur != Some(st) {
-            self.buf.extend_from_slice(if st.2 { b"\x1b[1" } else { b"\x1b[22" });
-            self.color(st.0, 38);
-            self.color(st.1, 48);
-            self.buf.push(b'm');
-            self.cur = Some(st);
+        match self.cur {
+            Some(c) if c == st => {}
+            // only the parts that changed (most changes are the foreground alone)
+            Some(c) => {
+                self.buf.extend_from_slice(b"\x1b[");
+                let mark = self.buf.len();
+                let bold = c.2 != st.2;
+                if bold {
+                    self.buf.extend_from_slice(if st.2 { b"1" } else { b"22" });
+                }
+                if c.0 != st.0 {
+                    self.color(st.0, 38);
+                }
+                if c.1 != st.1 {
+                    self.color(st.1, 48);
+                }
+                // color() writes a leading ';': drop it when it came first
+                if !bold {
+                    self.buf.remove(mark);
+                }
+                self.buf.push(b'm');
+                self.cur = Some(st);
+            }
+            None => {
+                self.buf.extend_from_slice(if st.2 { b"\x1b[1" } else { b"\x1b[22" });
+                self.color(st.0, 38);
+                self.color(st.1, 48);
+                self.buf.push(b'm');
+                self.cur = Some(st);
+            }
         }
     }
     /// reset the attributes and send it all
@@ -935,7 +966,20 @@ impl ratatui::backend::Backend for Fast {
             }
             last = Some((x, y));
             let st = (cell.fg, cell.bg, cell.modifier);
-            if cur != Some(st) {
+            if let Some(c) = cur.filter(|c| c.2 == st.2 && c != &st) {
+                // same attributes: only the colour that changed
+                e.buf.extend_from_slice(b"\x1b[");
+                let mark = e.buf.len();
+                if c.0 != st.0 {
+                    e.color(st.0, 38);
+                }
+                if c.1 != st.1 {
+                    e.color(st.1, 48);
+                }
+                e.buf.remove(mark); // the leading ';'
+                e.buf.push(b'm');
+                cur = Some(st);
+            } else if cur != Some(st) {
                 // one SGR: reset, the attributes, both colours
                 e.buf.extend_from_slice(b"\x1b[0");
                 for (m, code) in [(Modifier::BOLD, b'1'), (Modifier::DIM, b'2'), (Modifier::ITALIC, b'3'), (Modifier::UNDERLINED, b'4'), (Modifier::SLOW_BLINK, b'5'), (Modifier::RAPID_BLINK, b'6'), (Modifier::REVERSED, b'7'), (Modifier::HIDDEN, b'8'), (Modifier::CROSSED_OUT, b'9')] {
@@ -1512,7 +1556,9 @@ fn anim_cells(b: &BandSnap, anim: &mut Anim, ctx: &Ctx) -> (Vec<(u16, u16, Strin
             let g = crowd_grid(b, anim, ctx, fw);
             let n0 = delta.len();
             grid_delta(&anim.crowd_rows, &g, r.x, r.y, false, &mut delta);
-            PROF_CROWD_CELLS.fetch_add(delta[n0..].iter().map(|c| c.3 as u64).sum::<u64>(), Ordering::Relaxed);
+            if uiprof() {
+                PROF_CROWD_CELLS.fetch_add(delta[n0..].iter().map(|c| c.3 as u64).sum::<u64>(), Ordering::Relaxed);
+            }
             anim.crowd_rows = g;
             anim.crowd_t = Instant::now();
             anim.crowd_beat = beat;
@@ -1618,10 +1664,17 @@ fn live_of(pi: usize, heard: Option<f64>, rate: f64) -> crate::stage::Live {
 /// wedge monitors) and one condensed "thinking" line per player underneath.
 #[allow(non_snake_case)]
 static PROF_STAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// SYSJAM_UIPROF set: the per-panel timers run (no clock reads otherwise)
+static UIPROF_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn uiprof() -> bool {
+    UIPROF_ON.load(Ordering::Relaxed)
+}
 fn stage_grid(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, w: usize, h: usize) -> Option<Vec<Vec<Cell>>> {
-    let t = Instant::now();
+    let t = uiprof().then(Instant::now);
     let r = stage_grid_(b, anim, ctx, w, h);
-    PROF_STAGE.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    if let Some(t) = t {
+        PROF_STAGE.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    }
     r
 }
 #[allow(non_snake_case)]
@@ -2046,9 +2099,11 @@ static PROF_CROWD_CELLS: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomi
 static PROF_DIFF: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static PROF_EMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 fn crowd_grid(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<Cell>> {
-    let t = Instant::now();
+    let t = uiprof().then(Instant::now);
     let r = crowd_grid_(b, anim, ctx, fw);
-    PROF_CROWD.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    if let Some(t) = t {
+        PROF_CROWD.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    }
     r
 }
 fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<Cell>> {
