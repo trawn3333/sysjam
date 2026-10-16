@@ -423,6 +423,10 @@ pub struct Look<'a> {
     pub phase: f32,
     /// just got back up after passing out: seeing stars
     pub dizzy: bool,
+    /// in the mosh / circle pit (Metal, Biker; a small one in Industrial)
+    pub pit: bool,
+    /// dancing the style's own dance in step with everyone else (line dance, jig, swing...)
+    pub line: bool,
 }
 
 /// FNV-1a of the exe name
@@ -515,7 +519,8 @@ fn mv(lg: [&'static str; 2]) -> Mv {
     Mv { lg, lift: false, dx: 0, hips: 0, head: 0, arms: None, nod: false }
 }
 
-/// the style's own dance for the followers when the band is hot (legs and steps only)
+/// the style's own dance, the same for everyone dancing it (so a line dance is in step):
+/// legs, steps and arms, all on the beat
 fn style_steps(l: &Look, p: &Persona) -> Option<Mv> {
     use legs::*;
     let b = l.beats;
@@ -523,48 +528,113 @@ fn style_steps(l: &Look, p: &Persona) -> Option<Mv> {
     let frac = b.fract() as f32;
     let half = (b * 2.0).floor() as i64;
     let on = frac < 0.22;
-    let m = |lg, lift, dx| Some(Mv { lift, dx, ..mv(lg) });
+    let m = |lg, lift, dx, arms: (char, char)| Some(Mv { lift, dx, arms: Some(arms), ..mv(lg) });
     match l.style {
-        // line-dance grapevine (step, cross behind, step, touch; and back) + heel-toe
-        "country" => match beat.rem_euclid(8) {
-            0 => m(STEP_R, false, 1),
-            1 => m(CROSS, false, 1),
-            2 => m(STEP_R, false, 2),
-            3 => m(if on { TAP_L } else { STAND }, false, 2),
-            4 => m(HEEL_R, false, 1),
-            5 => m(TAP_R, false, 1),
-            6 => m(STEP_L, false, 0),
-            _ => m(if on { TAP_R } else { STAND }, false, 0),
-        },
-        // shuffle (heels in/out on the eighths) and the running man (knees up)
-        "techno" | "house" => {
-            if p.dance % 2 == 0 {
-                m(if half.rem_euclid(2) == 0 { SHUF_A } else { SHUF_B }, false, 0)
+        // line dance: grapevine right (step, cross behind, step, touch + clap), heel-toe and a
+        // kick, back left; every 16 beats the whole line turns and goes the other way
+        "country" => {
+            let dir = if (beat / 16).rem_euclid(2) == 0 { 1 } else { -1 };
+            let thumbs = ('<', '>');
+            let clap = if on { ('>', '<') } else { thumbs };
+            let mut x = match beat.rem_euclid(8) {
+                0 => m(STEP_R, false, 1, thumbs),
+                1 => m(CROSS, false, 1, thumbs),
+                2 => m(STEP_R, false, 2, thumbs),
+                3 => m(if on { TAP_L } else { STAND }, false, 2, clap),
+                4 => m(HEEL_R, false, 1, thumbs),
+                5 => m(if on { KICK_R } else { TAP_R }, false, 1, ('-', '-')),
+                6 => m(STEP_L, false, 0, thumbs),
+                _ => m(if on { TAP_R } else { STAND }, false, 0, clap),
+            };
+            if let Some(v) = x.as_mut() {
+                v.dx *= dir;
+                // the turn: heads go round on the last beat before the wall changes
+                if beat.rem_euclid(16) == 15 {
+                    v.head = dir;
+                    v.lg = CROSS;
+                }
+            }
+            x
+        }
+        // step-dancing: stiff arms at the sides, fast feet on the eighths (kicks, toes,
+        // hops); a third of them swing their partner round instead (arms linked)
+        "celtic" => {
+            if p.dance % 3 == 0 {
+                let k = beat.rem_euclid(4) as usize;
+                m([STEP_R, PASS, STEP_L, PASS][k], false, [0, 1, 1, 0][k], [('-', '-'), ('-', '/'), ('-', '-'), ('\\', '-')][k])
             } else {
-                m(match half.rem_euclid(4) { 0 => KNEE_R, 1 => PASS, 2 => KNEE_L, _ => PASS }, false, 0)
+                let k = half.rem_euclid(8);
+                let lg = [KICK_R, TOES, KICK_L, TOES, HEEL_R, TUCK, STEP_R, TOES][k as usize];
+                m(lg, k == 5, 0, ('|', '|'))
             }
         }
-        // swing step on the shuffle: step, kick on the swung "and", step back
-        "blues" | "jazz" => {
-            let b4 = beat.rem_euclid(4) as usize;
-            m(if frac < 0.66 { [STEP_R, PASS, STEP_L, PASS][b4] } else { [KICK_L, TAP_R, KICK_R, TAP_L][b4] }, false, [0, 1, 0, -1][b4])
+        // raving: arms up pumping on the beat, shuffle or running man below
+        "techno" => {
+            let lg = if p.dance % 2 == 0 { if half.rem_euclid(2) == 0 { SHUF_A } else { SHUF_B } } else { [KNEE_R, PASS, KNEE_L, PASS][half.rem_euclid(4) as usize] };
+            m(lg, false, 0, if on { ('|', '|') } else { ('\\', '/') })
         }
-        // minuet: point the toe, rise on the toes, a small step
-        "baroque" => match beat.rem_euclid(6) {
-            0 | 3 => m(POINT, false, 0),
-            1 | 4 => m(TOES, false, 0),
-            2 => m(STEP_R, false, 1),
-            _ => m(STEP_L, false, 0),
-        },
-        // jig: hop-kicks on the eighths, little hops off the ground
-        "celtic" => match half.rem_euclid(4) {
-            0 => m(KICK_R, false, 0),
-            1 => m(TUCK, frac.fract() < 0.5, 0),
-            2 => m(KICK_L, false, 0),
-            _ => m(TUCK, true, 0),
-        },
+        // house: a loose groove, hips rolling, the shuffle
+        "house" => {
+            let a = half.rem_euclid(2) == 0;
+            Some(Mv { hips: if beat.rem_euclid(2) == 0 { 1 } else { -1 }, arms: Some(if a { ('/', '-') } else { ('-', '\\') }), ..mv(if a { SHUF_A } else { SHUF_B }) })
+        }
+        // swing partners: step, kick on the swung "and", step back, arms linked/out
+        "blues" => {
+            let b4 = beat.rem_euclid(4) as usize;
+            m(if frac < 0.66 { [STEP_R, PASS, STEP_L, PASS][b4] } else { [KICK_L, TAP_R, KICK_R, TAP_L][b4] }, false, [0, 1, 0, -1][b4], [('-', '/'), ('-', '-'), ('\\', '-'), ('-', '-')][b4])
+        }
+        // jazz: finger snaps on 2 and 4, a slow sway
+        "jazz" => {
+            let snap = beat.rem_euclid(2) == 1 && on;
+            Some(Mv { hips: if (beat / 2).rem_euclid(2) == 0 { 1 } else { -1 }, arms: Some(if snap { ('/', '*') } else { ('/', '\\') }), ..mv(if beat.rem_euclid(2) == 1 { TAP_R } else { STAND }) })
+        }
+        // minuet: point the toe, rise on the toes, a small step; a bow at the top of the phrase
+        "baroque" => {
+            let k = beat.rem_euclid(6);
+            let mut x = match k {
+                0 | 3 => m(POINT, false, 0, ('-', '\\')),
+                1 | 4 => m(TOES, false, 0, ('/', '\\')),
+                2 => m(STEP_R, false, 1, ('-', '\\')),
+                _ => m(STEP_L, false, 0, ('/', '-')),
+            };
+            if beat.rem_euclid(12) == 0 {
+                if let Some(v) = x.as_mut() {
+                    v.nod = true; // the bow
+                    v.arms = Some(('-', '_'));
+                }
+            }
+            x
+        }
+        // gamelan / tribal: graceful flowing hands, small steps
+        "tribal" => {
+            let k = half.rem_euclid(4) as usize;
+            Some(Mv { hips: [0, 1, 0, -1][k], arms: Some([('~', '-'), ('-', '~'), ('/', '~'), ('~', '\\')][k]), ..mv(if beat.rem_euclid(2) == 0 { TAP_R } else { TAP_L }) })
+        }
+        // zero-g: floating up every other beat, limbs drifting
+        "space" => {
+            let k = beat.rem_euclid(4);
+            Some(Mv { lift: k == 1 || k == 2, head: if k == 2 { 1 } else { 0 }, arms: Some(if k < 2 { ('-', '-') } else { ('\\', '/') }), ..mv(if k == 1 || k == 2 { TUCK } else { SPLIT }) })
+        }
+        // monk: a gentle sway, hands folded
+        "monk" => Some(Mv { hips: if (beat / 2).rem_euclid(2) == 0 { 1 } else { 0 }, arms: Some(('/', '\\')), ..mv(STAND) }),
+        // industrial: stomp and pogo, fists pumping
+        "industrial" => {
+            if p.dance % 2 == 0 {
+                m(if on { TUCK } else { BOUNCE }, on, 0, if beat.rem_euclid(2) == 0 { ('|', '/') } else { ('\\', '|') })
+            } else {
+                m(if on { if beat.rem_euclid(2) == 0 { STOMP_R } else { STOMP_L } } else { BOUNCE }, false, 0, if on { ('\\', '|') } else { ('|', '|') })
+            }
+        }
         _ => None,
     }
+}
+
+/// the pit: jumping, flailing, shoving on the eighths
+fn pit_moves(l: &Look) -> Mv {
+    use legs::*;
+    let half = (l.beats * 2.0).floor() as i64;
+    let k = (half + (l.id % 3) as i64).rem_euclid(4);
+    Mv { lift: k == 0, hips: if k % 2 == 0 { 1 } else { -1 }, arms: Some([('\\', '/'), ('/', '-'), ('|', '\\'), ('-', '/')][k as usize]), ..mv([TUCK, KICK_R, BOUNCE, KICK_L][k as usize]) }
 }
 
 /// someone's own dance, locked to the beat (twice as fast when the band is hot)
@@ -576,7 +646,7 @@ fn moves(l: &Look, p: &Persona, hype: bool) -> Mv {
     let half = (b * 2.0).floor() as i64;
     let on = frac < 0.25;
     let alt = beat.rem_euclid(2) == 0;
-    if l.surge {
+    if l.surge && !l.line && !l.pit {
         // surge: jumps with both feet off the ground, kicks, stomps, knee bounces
         let lb = l.beats;
         let (bt, fr) = (lb.floor() as i64, lb.fract());
@@ -591,9 +661,11 @@ fn moves(l: &Look, p: &Persona, hype: bool) -> Mv {
         m.arms = Some(if bt % 2 == 0 { ('\\', '/') } else { ('|', '|') });
         return m;
     }
-    if hype && p.follower {
-        if let Some(mut m) = style_steps(l, p) {
-            m.arms = None;
+    if l.pit {
+        return pit_moves(l);
+    }
+    if l.line {
+        if let Some(m) = style_steps(&Look { beats: l.beats, ..*l }, p) {
             return m;
         }
     }
@@ -793,7 +865,13 @@ pub fn fig(l: &Look) -> ([String; FH], bool, i32) {
                 eye = '-';
             }
             let (la, ra) = m.arms.unwrap_or(('/', '\\'));
+            if l.pit {
+                hair = if (l.beats * 2.0).floor() as i64 % 2 == 0 { "  \\\\\\  ".into() } else { "  ///  ".into() };
+                eye = if odd { '>' } else { 'x' };
+                mouth = 'O';
+            }
             body = match l.vibe {
+                _ if l.pit || l.line => arms(la, ra),
                 Vibe::Applause => if (l.t * 6.0) as i32 % 2 == 0 { arms('>', '<') } else { arms('-', '-') },
                 Vibe::Hype => match st {
                     // moshing: headbang (hair flips on the beat), flailing fists, shoved about
@@ -1298,7 +1376,7 @@ mod tests {
                 for &act in &acts {
                     for &vibe in &vibes {
                         for k in 0..32 {
-                            let l = Look { style: st.id, act, vibe, beats: k as f64 * 0.37, t: k as f32 * 0.29, cpu: (k % 4) as f32 * 0.25, disk: k % 5 == 0, chat: k % 3 == 0, idle: (k * 5) as f32, step: k as i32, beer: k % 2 == 0, id, surge: k % 7 == 0, chorus: k % 5 == 0, phase: k as f32 * 0.2, dizzy: k % 6 == 0 };
+                            let l = Look { style: st.id, act, vibe, beats: k as f64 * 0.37, t: k as f32 * 0.29, cpu: (k % 4) as f32 * 0.25, disk: k % 5 == 0, chat: k % 3 == 0, idle: (k * 5) as f32, step: k as i32, beer: k % 2 == 0, id, surge: k % 7 == 0, chorus: k % 5 == 0, phase: k as f32 * 0.2, dizzy: k % 6 == 0, pit: k % 4 == 1, line: k % 3 == 1 };
                             let (rows, _, dx) = fig(&l);
                             assert!(dx.abs() <= 3);
                             for r in rows.iter() {

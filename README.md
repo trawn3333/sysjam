@@ -480,13 +480,30 @@ how many kernel threads stay backstage.
 - **What they do with the music:** when the band is alive and hot, in a surge, or the crowd is
   roaring, everyone puts their hands up and jumps on the beat (from the same beat clock as the
   conductor). When it's chilling they mingle and nod. A like gets a round of applause. By style:
-  a third of the crowd (the followers) picks up the style's own dance when the band is hot:
-  cowboy hats and a grapevine in Country, glowsticks and the running man in Techno, a swing step
-  with lighters in Blues, wigs, minuets and a polite golf clap in Baroque, a jig in Celtic; the
-  rest keep dancing their own way. After `n` they cheer briefly.
-  Industrial's wall of sound starts a mosh pit (headbanging hair flips, flailing fists, people
-  shoved sideways, stomps); in Biker everyone throws the horns `\m/` and puts their fists up to
-  sing along in the chorus; in Blues they swing-step on the shuffle and cheer the solos.
+  the hotter it gets, the more of the crowd joins the **style's own dance, everyone in step**
+  (the same beat, eighth-note resolution, even in the back rows):
+  - **Country:** a **line dance**. The whole floor does the grapevine right (step, cross behind,
+    step, touch and clap), heel-toe and a kick, then back left, thumbs in belt loops; every 16
+    beats the line turns and goes the other way.
+  - **Celtic:** **step-dancing** with stiff arms at the sides and fast feet on the eighths
+    (kicks, toes, hops); a third swing their partner round with linked arms.
+  - **Metal and Biker:** a **circle pit** in the middle of the front rows when it's really
+    going (energy above 0.62 in a RAGE, blast, breakdown or chorus): the people in it run round
+    a lap a bar, jumping, flailing and headbanging. Now and then someone **stage-dives**, leaping
+    off the lip (`\(O)/`) and **crowd-surfing** over the front row on a sea of hands. Around the
+    pit they headbang and throw the horns `\m/`, and Biker's chorus gets fists up for the
+    sing-along.
+  - **Industrial:** stomping, pogo jumps and fist pumps, with a small pit in the wall of sound.
+  - **Blues:** swing partners with arms linked. **Jazz:** finger snaps on 2 and 4 and a slow
+    sway. **Techno:** raving with arms pumping overhead. **House:** a loose groove with rolling
+    hips and the shuffle. **Baroque:** a minuet with a bow at the top of each phrase.
+    **Tribal / Gamelan:** graceful flowing hands. **Space:** zero-g floating every other beat.
+    **Monk:** a gentle sway with folded hands.
+
+  The rest keep dancing their own way; Country and Celtic pull in everyone once the band is hot.
+  After `n` they cheer briefly. For demos and tests, `SYSJAM_PIT=1` forces the pit (Metal,
+  Biker, Industrial), `SYSJAM_DIVE=1` forces a stage dive every 10 s, and `SYSJAM_LINE=1`
+  forces everyone into the style's dance.
 - **Depth:** each row stands 3 rows behind the one in front of it, so the legs of the back rows
   are hidden behind the heads in front (painted back to front: whoever is in front hides who is
   behind), and alternate rows are staggered by half a slot so faces peek through the gaps.

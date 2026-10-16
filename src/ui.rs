@@ -887,6 +887,8 @@ pub struct Anim {
     stage_rows: Vec<Vec<Cell>>,
     stage_t: Instant,
     stage_hit: (f64, bool),
+    dive: Option<(f32, i32, u32)>,
+    dive_t: f32,
     hit_only: bool,
     out_cache: Vec<(u16, u16, String, usize, Style)>,
     stage_beat: i64,
@@ -900,7 +902,7 @@ pub struct Anim {
 
 impl Anim {
     pub fn new() -> Anim {
-        Anim { t0: Instant::now(), fam: [None; 7], swap: [None; 7], present: [false; 7], walk: [None; 7], hush: [None; 7], col: [Color::Gray; 7], cond: None, said: (String::new(), Instant::now()), band: None, dots: None, crowd: Default::default(), floor: crate::audience::Floor::new(), aud: None, crowd_rows: Vec::new(), crowd_t: Instant::now(), crowd_beat: 0, stage_rows: Vec::new(), stage_t: Instant::now(), stage_hit: (0.0, true), hit_only: false, out_cache: Vec::new(), stage_beat: 0, prop: [None; 7], pswap: [None; 7], stage: None, solo: None }
+        Anim { t0: Instant::now(), fam: [None; 7], swap: [None; 7], present: [false; 7], walk: [None; 7], hush: [None; 7], col: [Color::Gray; 7], cond: None, said: (String::new(), Instant::now()), band: None, dots: None, crowd: Default::default(), floor: crate::audience::Floor::new(), aud: None, crowd_rows: Vec::new(), crowd_t: Instant::now(), crowd_beat: 0, stage_rows: Vec::new(), stage_t: Instant::now(), stage_hit: (0.0, true), dive: None, dive_t: -100.0, hit_only: false, out_cache: Vec::new(), stage_beat: 0, prop: [None; 7], pswap: [None; 7], stage: None, solo: None }
     }
 }
 
@@ -1714,6 +1716,7 @@ type Cell = (char, Color, Color);
 /// the floor as rows of cells, `fw` cells wide (the bar is drawn separately). Stacked rows of
 /// full-size people drawn back to front (painter's algorithm); depth is colour only (back rows
 /// dimmer, greyer, blended toward the floor); a floor gradient and a little haze behind.
+static DANCE_FORCE: std::sync::OnceLock<(bool, bool, bool)> = std::sync::OnceLock::new();
 static PROF_CROWD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static PROF_CROWD_CELLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static PROF_DIFF: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1751,6 +1754,34 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
     let chorus = b.feel.starts_with("CHORUS");
     let beats = ctx.pos.map(|p| p.beats()).unwrap_or(ctx.t as f64 * 1.5);
     let t = anim.floor.t;
+    // the style's crowd dances: a pit when it's really going (Metal/Biker, a small one in
+    // Industrial), a line dance / step dance / swing / rave... that more people join the
+    // hotter it gets, everyone in step. SYSJAM_PIT=1, SYSJAM_DIVE=1 and SYSJAM_LINE=1 force them.
+    let st = b.style_id;
+    let (f_pit, f_dive, f_line) = *DANCE_FORCE.get_or_init(|| {
+        let on = |k: &str| std::env::var(k).is_ok_and(|v| v != "0");
+        (on("SYSJAM_PIT"), on("SYSJAM_DIVE"), on("SYSJAM_LINE"))
+    });
+    let loud = b.feel.starts_with("RAGE") || b.feel.starts_with("CHORUS") || b.feel.starts_with("BLAST") || b.feel.contains("breakdown") || b.feel.contains("blast");
+    let pit_on = f_pit && matches!(st, "metal" | "biker" | "industrial")
+        || (matches!(st, "metal" | "biker") && v == Vibe::Hype && b.energy > 0.62 && loud)
+        || (st == "industrial" && b.energy > 0.7 && b.feel.starts_with("RAGE"));
+    let pit_hw = fw as f32 * if st == "industrial" { 0.12 } else { 0.22 };
+    let pit_cx = fw as f32 * 0.5;
+    let hot = v == Vibe::Hype || b.energy > 0.55;
+    // a stage dive now and then while the pit is going (every ~10 s when forced)
+    if anim.dive.is_some_and(|d| t - d.0 > 5.5) {
+        anim.dive = None;
+    }
+    if anim.dive.is_none() && pit_on && t - anim.dive_t > if f_dive { 10.0 } else { 24.0 } {
+        let seed = (t * 1000.0) as u32;
+        anim.dive = Some((t, if seed % 2 == 0 { 1 } else { -1 }, crate::audience::name_id(&seed.to_string())));
+        anim.dive_t = t;
+    }
+    if f_dive && !pit_on && anim.dive.is_none() && t - anim.dive_t > 10.0 && matches!(st, "metal" | "biker") {
+        anim.dive = Some((t, 1, 7));
+        anim.dive_t = t;
+    }
     let mut tags: Vec<(bool, i32, String, Color)> = Vec::new();
     // back to front; walkers on top within a layer
     let mut order: Vec<usize> = (0..anim.floor.people.len()).collect();
@@ -1770,8 +1801,17 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
         let star = p.act == Act::Star;
         // far back moves every other beat, the middle on the beat, the front on the eighths:
         // still locked to the beat, but a deep crowd repaints far fewer cells
+        let in_pit = pit_on && p.act == Act::Here && depth <= 1 && (p.x - pit_cx).abs() < pit_hw;
+        let line = !in_pit && p.act == Act::Here && (f_line || hot) && match st {
+            "country" | "celtic" => true,
+            "metal" | "biker" => false,
+            _ => f_line || ((p.seed >> 21) % 100) as f32 / 100.0 < b.energy * 1.3 - 0.25,
+        };
         let (lb, lt) = if star {
             (beats, t)
+        } else if line || in_pit {
+            // in step with everyone else: the same beat, eighth-note resolution
+            ((beats * 2.0).floor() * 0.5, t)
         } else if depth >= 2 {
             ((beats * 0.5).floor(), (t * 2.0).floor() * 0.5) // half-time dancing
         } else if depth == 1 && layers >= 4 {
@@ -1781,7 +1821,7 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
         } else {
             (beats, t)
         };
-        let look = Look { style: b.style_id, act: p.act, vibe: v, beats: lb, t: lt + (p.seed % 1000) as f32 * 0.013, cpu: m.cpu, disk: m.disk > 2e5, chat: m.chat > 2e4, idle: m.idle, step: p.step, beer: p.beer, id: p.seed, surge, chorus, phase: p.t_act, dizzy: p.dizzy > 0.0 };
+        let look = Look { style: b.style_id, act: p.act, vibe: v, beats: lb, t: lt + (p.seed % 1000) as f32 * 0.013, cpu: m.cpu, disk: m.disk > 2e5, chat: m.chat > 2e4, idle: m.idle, step: p.step, beer: p.beer, id: p.seed, surge, chorus, phase: p.t_act, dizzy: p.dizzy > 0.0, pit: in_pit, line };
         let base = if star {
             Color::White
         } else if matches!(p.act, Act::Wave | Act::Leave | Act::Out | Act::Carried) {
@@ -1807,7 +1847,12 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
         let col = crate::theme::dim(base, lvl.min(3) as u8);
         let (rows, lift, dx) = fig(&look);
         let y0: i32 = 1 + 3 * z as i32 - lift as i32;
-        let x0 = p.x.round() as i32 + if matches!(p.act, Act::Here | Act::Star) { dx - 1 } else { 0 };
+        let mut x0 = p.x.round() as i32 + if matches!(p.act, Act::Here | Act::Star) { dx - 1 } else { 0 };
+        if in_pit {
+            // the circle pit: everyone in it runs round the middle, a bar per lap
+            let th = (lb * std::f64::consts::PI / 2.0) as f32 + (p.seed % 628) as f32 * 0.01;
+            x0 += ((pit_hw * 0.35).min(5.0) * th.sin()).round() as i32;
+        }
         let top_row = rows.iter().position(|r| r.trim() != "").unwrap_or(0) as i32;
         for (r, row) in rows.iter().enumerate() {
             let y = y0 + r as i32;
@@ -1866,6 +1911,33 @@ fn crowd_grid_(b: &BandSnap, anim: &mut Anim, ctx: &Ctx, fw: usize) -> Vec<Vec<C
         tags.push((matches!(p.act, Act::Here | Act::Bar | Act::Out), lx, label, tcol));
     }
     let _ = FH;
+    // the stage diver: a leap off the stage lip, then crowd-surfed over the front row
+    if let Some((t0, dir, seed)) = anim.dive {
+        let k = t - t0;
+        let front = 1 + 3 * (layers as i32 - 1);
+        let cx = pit_cx as i32 - 3;
+        let dc = Color::White;
+        let (rows, y, x): ([&str; 2], i32, i32) = if k < 0.7 {
+            ([" \\(O)/ ", "   / \\ "], 0, cx)
+        } else {
+            let bob = (beats.floor() as i64 % 2) as i32;
+            let hands = if bob == 0 { " ^ ^ ^ ^ " } else { "^ ^ ^ ^ ^" };
+            let face = if seed % 2 == 0 { "_\\(^O^)/_" } else { "_\\(>O<)/_" };
+            ([face, hands], front - 1 - bob, cx + (dir as f32 * (k - 0.7) * 6.0) as i32)
+        };
+        for (r, row) in rows.iter().enumerate() {
+            let yy = y + r as i32;
+            if yy < 0 || yy as usize >= tag_row {
+                continue;
+            }
+            for (c, ch) in row.chars().enumerate() {
+                let xx = x + c as i32;
+                if ch != ' ' && xx >= 0 && (xx as usize) < fw {
+                    g[yy as usize][xx as usize] = (ch, if r == 1 && k >= 0.7 { crate::theme::dim(Color::Gray, 1) } else { dc }, bgs[yy as usize]);
+                }
+            }
+        }
+    }
     tags.sort_by_key(|t| !t.0);
     let mut taken = vec![false; fw];
     for (still, lx, label, tcol) in tags {
