@@ -363,6 +363,8 @@ pub struct Harmony {
     phrases: VecDeque<PastPhrase>,
     cadences: VecDeque<Goal>,
     tension_hist: VecDeque<f32>,
+    /// cadences landed so far (the conductor is pleased by a good one)
+    pub n_cad: u64,
     phrase_no: u32,
     style_tpl: VecDeque<usize>,
     /// where the band is heading, for the UI ("cadence home to C in C major: Am → F → G7 → C")
@@ -401,11 +403,16 @@ impl Harmony {
             phrases: VecDeque::new(),
             cadences: VecDeque::new(),
             tension_hist: VecDeque::new(),
+            n_cad: 0,
             phrase_no: 0,
             style_tpl: VecDeque::new(),
             plan_desc: String::new(),
             plans: Vec::new(),
         }
+    }
+
+    pub fn tension_now(&self) -> f32 {
+        self.tension_hist.back().copied().unwrap_or(0.3)
     }
 
     pub fn request_tension(&mut self) {
@@ -507,7 +514,8 @@ impl Harmony {
             self.queue.push_back((dom, Some("cadence V7".into())));
             self.queue.push_back((tonic, Some("resolves to tonic".into())));
             self.plan_desc = format!("resolving home: {} → {}", dom.name(), tonic.name());
-            self.cadences.push_back(Goal::Authentic);
+            self.n_cad += 1;
+        self.cadences.push_back(Goal::Authentic);
             return;
         }
         // a key that has lasted a few phrases may become the new home
@@ -723,6 +731,7 @@ impl Harmony {
         path.push(new_dom.name());
         path.push(new_tonic.name());
         self.plan_desc = format!("heading to {}: {}", to.name(), path.join(" → "));
+        self.n_cad += 1;
         self.cadences.push_back(Goal::Authentic);
         self.queue.push_back((new_dom, None));
         self.queue.push_back((new_tonic, Some(format!("{why}: {} -> {}", from.name(), to.name()))));
@@ -1138,7 +1147,8 @@ impl Harmony {
             self.queue.push_back((*c, if i == 0 { note.clone() } else { None }));
         }
         if goal != Goal::Drift {
-            self.cadences.push_back(goal);
+            self.n_cad += 1;
+        self.cadences.push_back(goal);
             while self.cadences.len() > 8 {
                 self.cadences.pop_front();
             }

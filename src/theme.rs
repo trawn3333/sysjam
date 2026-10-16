@@ -53,10 +53,8 @@ pub struct Theme {
     pub meter: (char, char),
     /// meters pulse with the kick
     pub pulse: bool,
-    /// conductor: outfit sides around the face, robe/body fill, baton props per beat
+    /// outfit sides around the conductor's face
     pub sides: (&'static str, &'static str),
-    pub robe: char,
-    pub props: &'static [&'static str],
     /// speech marks
     pub marks: (&'static str, &'static str),
     /// header badge icon (unicode, ascii)
@@ -79,20 +77,18 @@ const HOUSE_PAL: Pal = Pal {
 };
 
 pub const THEMES: &[Theme] = &[
-    Theme { id: "house", pal: None, brd: Brd::Plain, deco: ("", ""), deco_ascii: ("", ""), meter: ('█', ' '), pulse: false, sides: ("", ""), robe: '▒', props: &["•"], marks: ("“", "”"), icon: ("♫", "#") },
+    Theme { id: "house", pal: None, brd: Brd::Plain, deco: ("", ""), deco_ascii: ("", ""), meter: ('█', ' '), pulse: false, sides: ("", ""), marks: ("“", "”"), icon: ("♫", "#") },
     Theme {
         id: "monk",
         pal: Some(Pal { bg: (30, 26, 40), fg: (234, 226, 248), text: (196, 186, 216), dim: (112, 102, 134), acc: (204, 176, 244), acc2: (176, 194, 242), hot: (232, 164, 204), good: (184, 222, 204), mag: (212, 172, 232), cool: (164, 174, 232), border: (92, 82, 118), ink: (30, 26, 40) }),
         brd: Brd::Minimal,
-        deco: ("☸ ", ""),
+        deco: ("~ ", ""),
         deco_ascii: ("o ", ""),
         meter: ('━', '┄'),
         pulse: false,
         sides: ("", ""),
-        robe: '░',
-        props: &["·", "˚", "·", " "],
         marks: ("〜 ", " 〜"),
-        icon: ("☸", "o"),
+        icon: ("~", "o"),
     },
     Theme {
         id: "jazz",
@@ -103,8 +99,6 @@ pub const THEMES: &[Theme] = &[
         meter: ('█', '░'),
         pulse: false,
         sides: ("", ""),
-        robe: '▒',
-        props: &["♪", "♫", "♪", "♬"],
         marks: ("“", "” ♪"),
         icon: ("🎷", "~"),
     },
@@ -117,8 +111,6 @@ pub const THEMES: &[Theme] = &[
         meter: ('▓', '░'),
         pulse: false,
         sides: ("", ""),
-        robe: '▓',
-        props: &["♪", " ", "♪", "♩"],
         marks: ("“", "…”"),
         icon: ("♪", "~"),
     },
@@ -131,8 +123,6 @@ pub const THEMES: &[Theme] = &[
         meter: ('▬', '·'),
         pulse: false,
         sides: ("", ""),
-        robe: '▒',
-        props: &["○", "◯", "○", "◌"],
         marks: ("★ “", "”"),
         icon: ("🐎", "*"),
     },
@@ -145,8 +135,6 @@ pub const THEMES: &[Theme] = &[
         meter: ('▲', '_'),
         pulse: false,
         sides: ("", ""),
-        robe: '▓',
-        props: &["•", "✶", "•", "✶"],
         marks: ("“", "!”"),
         icon: ("🔥", "^"),
     },
@@ -154,85 +142,73 @@ pub const THEMES: &[Theme] = &[
         id: "baroque",
         pal: Some(Pal { bg: (250, 243, 224), fg: (62, 42, 20), text: (102, 76, 42), dim: (168, 142, 102), acc: (192, 142, 30), acc2: (152, 102, 42), hot: (162, 52, 42), good: (112, 122, 42), mag: (142, 72, 92), cool: (92, 92, 132), border: (192, 152, 62), ink: (250, 243, 224) }),
         brd: Brd::Double,
-        deco: ("❦ ", " ❦"),
+        deco: ("♪ ", " ♪"),
         deco_ascii: ("% ", " %"),
         meter: ('█', '·'),
         pulse: false,
         sides: ("§", "§"),
-        robe: '▒',
-        props: &["♩", "•", "♩", "•"],
         marks: ("« ", " »"),
-        icon: ("♛", "%"),
+        icon: ("♫", "%"),
     },
     Theme {
         id: "celtic",
         pal: Some(Pal { bg: (10, 32, 18), fg: (226, 246, 226), text: (172, 212, 176), dim: (82, 122, 92), acc: (122, 222, 122), acc2: (202, 222, 122), hot: (232, 152, 62), good: (92, 202, 112), mag: (162, 202, 142), cool: (112, 182, 162), border: (62, 152, 82), ink: (10, 32, 18) }),
         brd: Brd::Knot,
-        deco: ("☘ ", " ☘"),
+        deco: ("* ", " *"),
         deco_ascii: ("& ", " &"),
         meter: ('■', '·'),
         pulse: false,
         sides: ("", ""),
-        robe: '▒',
-        props: &["☘", "•", "☘", "•"],
         marks: ("“", "”"),
-        icon: ("☘", "&"),
+        icon: ("*", "&"),
     },
     Theme {
         id: "industrial",
         pal: Some(Pal { bg: (32, 30, 28), fg: (216, 210, 200), text: (172, 162, 152), dim: (102, 96, 90), acc: (202, 112, 52), acc2: (232, 202, 42), hot: (212, 72, 42), good: (162, 162, 122), mag: (172, 122, 102), cool: (132, 142, 152), border: (232, 202, 42), ink: (32, 30, 28) }),
         brd: Brd::Hazard,
-        deco: ("⚙ ", " ⚙"),
+        deco: ("# ", " #"),
         deco_ascii: ("# ", " #"),
         meter: ('█', '▚'),
         pulse: false,
         sides: ("[", "]"),
-        robe: '▓',
-        props: &["⚙", "✲", "⚙", "✲"],
         marks: ("> ", ""),
-        icon: ("⚙", "#"),
+        icon: ("#", "#"),
     },
     Theme {
         id: "techno",
         pal: Some(Pal { bg: (5, 5, 12), fg: (232, 242, 255), text: (152, 172, 202), dim: (72, 72, 102), acc: (0, 255, 242), acc2: (255, 0, 202), hot: (255, 42, 142), good: (0, 255, 162), mag: (222, 62, 255), cool: (62, 142, 255), border: (0, 202, 222), ink: (5, 5, 12) }),
         brd: Brd::Thick,
-        deco: ("◉ ", " ◉"),
+        deco: ("♫ ", " ♫"),
         deco_ascii: ("o ", " o"),
         meter: ('▮', '▯'),
         pulse: true,
         sides: ("◖", "◗"),
-        robe: '▒',
-        props: &["◐", "◓", "◑", "◒"],
         marks: ("» ", " «"),
-        icon: ("◉", "o"),
+        icon: ("♫", "o"),
     },
     Theme {
         id: "space",
         pal: Some(Pal { bg: (4, 6, 22), fg: (222, 232, 255), text: (162, 172, 222), dim: (72, 82, 132), acc: (182, 142, 255), acc2: (112, 202, 255), hot: (255, 122, 182), good: (142, 255, 212), mag: (202, 122, 255), cool: (102, 142, 255), border: (82, 92, 172), ink: (4, 6, 22) }),
         brd: Brd::Rounded,
-        deco: ("✦ ", " ✧"),
+        deco: ("* ", " *"),
         deco_ascii: ("+ ", " +"),
         meter: ('•', '·'),
         pulse: false,
         sides: ("│", "│"),
-        robe: '▒',
-        props: &["✦", "✧", "✦", "·"],
-        marks: ("⟨ ", " ⟩"),
+        marks: ("< ", " >"),
         icon: ("🚀", "+"),
     },
     Theme {
         id: "tribal",
         pal: Some(Pal { bg: (42, 25, 12), fg: (247, 227, 182), text: (217, 182, 122), dim: (132, 97, 62), acc: (227, 172, 52), acc2: (192, 112, 52), hot: (202, 82, 42), good: (182, 162, 72), mag: (172, 92, 62), cool: (152, 122, 82), border: (172, 122, 52), ink: (42, 25, 12) }),
         brd: Brd::Double,
-        deco: ("◈ ", " ◈"),
+        deco: ("<> ", " <>"),
         deco_ascii: ("<> ", " <>"),
         meter: ('◆', '◇'),
         pulse: false,
         sides: ("", ""),
-        robe: '▒',
-        props: &["◈", "◇", "◈", "◆"],
         marks: ("“", "”"),
-        icon: ("◈", "<>"),
+        icon: ("<>", "<>"),
     },
 ];
 
@@ -486,73 +462,11 @@ pub fn asciify(s: &str) -> String {
             '♯' => '#',
             '♭' => 'b',
             '⚙' | '☸' | '◈' | '◆' | '◇' => '*',
-            '▏' | '▎' | '▍' | '▌' | '▋' | '▊' | '▉' => '|',
-            '▯' | '▱' | '┄' => '.',
+            '▏' | '▎' | '▍' | '▋' | '▊' | '▉' => '|',
+            '▯' | '▱' => '.',
             _ => '.',
         })
         .collect()
-}
-
-/// dress the conductor for the style: hat, outfit sides, robe, a style face and a
-/// prop on the baton tip (animated on the beat). Techno swaps the baton for a DJ deck.
-pub fn conductor(art: [&'static str; 5], pose: crate::conductor::Pose, beat: u32, hat: &str, face: Option<&str>, style_id: &str) -> Vec<String> {
-    use crate::conductor::Pose;
-    let th = &THEMES[by_id(style_id)];
-    if style_id == "techno" && !matches!(pose, Pose::Rest) {
-        let plat = ["◐", "◓", "◑", "◒"][beat as usize % 4];
-        let arms = if beat % 2 == 0 { " ╭┤▒▒├╯    " } else { " ╰┤▒▒├╮    " };
-        let rows = vec![
-            "  ╭───╮    ".to_string(),
-            format!(" ◖{}◗   ", face.unwrap_or("(•‿•)")),
-            arms.to_string(),
-            format!(" ▄{plat}▄▄{}▄  ", ["◑", "◒", "◐", "◓"][beat as usize % 4]),
-            " ▀▀▀▀▀▀▀   ".to_string(),
-        ];
-        return rows.into_iter().map(|r| asciify(&r)).collect();
-    }
-    let mut rows: Vec<Vec<char>> = art.iter().map(|r| r.chars().collect()).collect();
-    let fx = rows[1].iter().position(|&ch| ch == '(').unwrap_or(2);
-    if let (Some(fc), Pose::Calm | Pose::Point) = (face, pose) {
-        for (k, ch) in fc.chars().enumerate() {
-            if fx + k < rows[1].len() {
-                rows[1][fx + k] = ch;
-            }
-        }
-    }
-    // outfit sides (wig curls, helmet, headphones…)
-    let (l, r) = th.sides;
-    if let Some(lc) = l.chars().next() {
-        if fx > 0 && rows[1][fx - 1] == ' ' {
-            rows[1][fx - 1] = lc;
-        }
-    }
-    if let Some(rc) = r.chars().next() {
-        if fx + 5 < rows[1].len() && rows[1][fx + 5] == ' ' {
-            rows[1][fx + 5] = rc;
-        }
-    }
-    for (k, ch) in hat.chars().enumerate() {
-        if ch != ' ' && fx + k < rows[0].len() {
-            rows[0][fx + k] = ch;
-        }
-    }
-    for row in rows.iter_mut().skip(2) {
-        for ch in row.iter_mut() {
-            if *ch == '▒' {
-                *ch = th.robe;
-            }
-        }
-    }
-    // the prop rides on the baton tip
-    let prop = th.props[beat as usize % th.props.len()];
-    for row in rows.iter_mut() {
-        for ch in row.iter_mut() {
-            if *ch == '•' || *ch == '▶' {
-                *ch = prop.chars().next().unwrap_or('•');
-            }
-        }
-    }
-    rows.into_iter().map(|r| asciify(&r.into_iter().collect::<String>())).collect()
 }
 
 pub fn icon() -> &'static str {

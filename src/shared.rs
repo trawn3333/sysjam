@@ -68,3 +68,4 @@ pub fn dlopen_sys(soname: &str) -> *mut std::ffi::c_void {
 /// Steering from the keyboard (TUI arrows / SYSJAM_KEYS): net presses, drained by the engine.
 pub static KEY_TEMPO: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 pub static KEY_STYLE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+pub static KEY_LIKE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);

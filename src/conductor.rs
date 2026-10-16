@@ -77,33 +77,3 @@ impl Conductor {
         self.n_hush + self.n_lay + self.n_cue + self.n_invite
     }
 }
-
-/// Five-line animation frame for a pose; `beat` (0-3) picks the frame.
-/// All glyphs are single-width so the figure never shears.
-pub fn frame(pose: Pose, beat: u32) -> [&'static str; 5] {
-    match pose {
-        Pose::Calm => match beat % 4 {
-            // a 4/4 pattern: down, in, out, up
-            0 => ["           ", "  (•‿•)    ", " ╭┤▒├─╮    ", "  │▒│  ╲   ", "  ╯ ╰   •  "],
-            1 => ["           ", "  (•‿•)    ", "•─┤▒├─╮    ", "  │▒│ ╰╮   ", "  ╯ ╰      "],
-            2 => ["           ", "  (•‿•)    ", " ╭┤▒├─────•", "  │▒│      ", "  ╯ ╰      "],
-            _ => ["        •  ", "  (•‿•) │  ", " ╭┤▒├──╯  ", "  │▒│      ", "  ╯ ╰      "],
-        },
-        Pose::Shh => match beat % 2 {
-            0 => ["       shh…", "  (ᵕ_ᵕ)╻   ", " ╭┤▒├─╯    ", "  │▒│      ", "  ╯ ╰      "],
-            _ => ["      shh… ", "  (-_-)╻   ", " ╭┤▒├─╯    ", "  │▒│      ", "  ╯ ╰      "],
-        },
-        Pose::Point => match beat % 2 {
-            0 => ["           ", "  (°ᴗ°)    ", " ╭┤▒├━━━━▶ ", "  │▒│      ", "  ╯ ╰      "],
-            _ => ["           ", "  (°ᴗ°)    ", " ╭┤▒├━━━━━▶", "  │▒│      ", "  ╯ ╰      "],
-        },
-        Pose::Surge => match beat % 2 {
-            0 => [" •       • ", "  ╲(^O^)╱  ", "   ┤▒▒├    ", "   │▒▒│    ", "   ╯  ╰    "],
-            _ => ["  •     •  ", "   │(^O^)│ ", "   ┤▒▒├    ", "  ╱│▒▒│╲   ", "   ╯  ╰    "],
-        },
-        Pose::Rest => match beat % 4 {
-            0 | 1 => ["        z  ", "  (-.-)    ", " ╭┤▒├╮     ", " ╰┴──┴╯    ", "   ╨  ╨    "],
-            _ => ["      z Z  ", "  (-.-)    ", " ╭┤▒├╮     ", " ╰┴──┴╯    ", "   ╨  ╨    "],
-        },
-    }
-}

@@ -5,7 +5,6 @@ import os, re, sys, unicodedata
 from PIL import Image, ImageDraw, ImageFont
 from fontTools.ttLib import TTFont
 
-src, out = sys.argv[1], sys.argv[2]
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
 SIZE = 15
@@ -38,67 +37,76 @@ def c256(n):
         return (v[n // 36], v[n // 6 % 6], v[n % 6])
     g = 8 + 10 * (n - 232); return (g, g, g)
 
-lines = open(src, encoding="utf-8", errors="replace").read().split("\n")
-while lines and not lines[-1].strip(): lines.pop()
-cols = int(sys.argv[3]) if len(sys.argv) > 3 else max(len(re.sub(r"\x1b\[[0-9;]*m", "", l)) for l in lines)
-rows = int(sys.argv[4]) if len(sys.argv) > 4 else len(lines)
-pad = 12
-img = Image.new("RGB", (cols * cw + 2 * pad, rows * ch + 2 * pad), BG)
-d = ImageDraw.Draw(img)
-tok = re.compile(r"\x1b\[([0-9;:]*)m")
-fg, bg, b, dim, rev = FG, None, False, False, False
-for y, line in enumerate(lines[:rows]):
-    # tmux carries SGR state across lines
-    x, pos = 0, 0
-    for m in list(tok.finditer(line)) + [None]:
-        text = line[pos:m.start()] if m else line[pos:]
-        for c in text:
-            f, g = (bg or BG, fg) if rev else (fg, bg)
-            if dim: f = tuple(int(v * 0.6 + BG[i] * 0.4) for i, v in enumerate(f))
-            px, py = pad + x * cw, pad + y * ch
-            if g: d.rectangle([px, py, px + cw - 1, py + ch - 1], fill=g)
-            if c in "▁▂▃▄▅▆▇█":            # draw block elements as exact rectangles
-                h = ("▁▂▃▄▅▆▇█".index(c) + 1) / 8
-                d.rectangle([px, py + int(ch * (1 - h)), px + cw - 1, py + ch - 1], fill=f)
-            elif c in "▏▎▍▌▋▊▉":
-                w = ("▏▎▍▌▋▊▉".index(c) + 1) / 8
-                d.rectangle([px, py, px + max(1, int(cw * w)) - 1, py + ch - 1], fill=f)
-            elif c in "─│┌┐└┘":
-                mx, my = px + cw // 2, py + ch // 2
-                if c in "─┌└┐┘":
-                    x0 = mx if c in "┌└" else px; x1 = mx if c in "┐┘" else px + cw - 1
-                    d.line([x0, my, x1, my], fill=f)
-                if c in "│┌┐└┘":
-                    y0 = my if c in "┌┐" else py; y1 = my if c in "└┘" else py + ch - 1
-                    d.line([mx, y0, mx, y1], fill=f)
-            elif c != " ":
-                if wide(c) and g: d.rectangle([px + cw, py, px + 2 * cw - 1, py + ch - 1], fill=g)
-                d.text((px, py + 1), c, font=font_for(c, b), fill=f)
-            x += 2 if wide(c) else 1
-        if not m: break
-        pos = m.end()
-        p = [int(v) if v else 0 for v in re.split("[;:]", m.group(1))] if m.group(1) else [0]
-        i = 0
-        while i < len(p):
-            v = p[i]
-            if v == 0: fg, bg, b, dim, rev = FG, None, False, False, False
-            elif v == 1: b = True
-            elif v == 2: dim = True
-            elif v == 7: rev = True
-            elif v == 22: b = dim = False
-            elif v == 27: rev = False
-            elif 30 <= v <= 37: fg = base16[v - 30]
-            elif 90 <= v <= 97: fg = base16[v - 82]
-            elif 40 <= v <= 47: bg = base16[v - 40]
-            elif 100 <= v <= 107: bg = base16[v - 92]
-            elif v == 39: fg = FG
-            elif v == 49: bg = None
-            elif v in (38, 48):
-                if p[i + 1] == 5: col = c256(p[i + 2]); i += 2
-                elif ":2::" in m.group(1): col = tuple(p[i + 3:i + 6]); i += 5
-                else: col = tuple(p[i + 2:i + 5]); i += 4
-                if v == 38: fg = col
-                else: bg = col
-            i += 1
-img.save(out)
-print(f"{out}: {img.size[0]}x{img.size[1]}")
+def render(text, cols=None, rows=None):
+    """ANSI text (tmux capture-pane -p -e) -> PIL image"""
+    lines = text.split("\n")
+    while lines and not lines[-1].strip(): lines.pop()
+    cols = cols or max(len(re.sub(r"\x1b\[[0-9;]*m", "", l)) for l in lines)
+    rows = rows or len(lines)
+    pad = 12
+    img = Image.new("RGB", (cols * cw + 2 * pad, rows * ch + 2 * pad), BG)
+    d = ImageDraw.Draw(img)
+    tok = re.compile(r"\x1b\[([0-9;:]*)m")
+    fg, bg, b, dim, rev = FG, None, False, False, False
+    for y, line in enumerate(lines[:rows]):
+        # tmux carries SGR state across lines
+        x, pos = 0, 0
+        for m in list(tok.finditer(line)) + [None]:
+            text = line[pos:m.start()] if m else line[pos:]
+            for c in text:
+                f, g = (bg or BG, fg) if rev else (fg, bg)
+                if dim: f = tuple(int(v * 0.6 + BG[i] * 0.4) for i, v in enumerate(f))
+                px, py = pad + x * cw, pad + y * ch
+                if g: d.rectangle([px, py, px + cw - 1, py + ch - 1], fill=g)
+                if c in "▁▂▃▄▅▆▇█":            # draw block elements as exact rectangles
+                    h = ("▁▂▃▄▅▆▇█".index(c) + 1) / 8
+                    d.rectangle([px, py + int(ch * (1 - h)), px + cw - 1, py + ch - 1], fill=f)
+                elif c in "▏▎▍▌▋▊▉":
+                    w = ("▏▎▍▌▋▊▉".index(c) + 1) / 8
+                    d.rectangle([px, py, px + max(1, int(cw * w)) - 1, py + ch - 1], fill=f)
+                elif c in "─│┌┐└┘":
+                    mx, my = px + cw // 2, py + ch // 2
+                    if c in "─┌└┐┘":
+                        x0 = mx if c in "┌└" else px; x1 = mx if c in "┐┘" else px + cw - 1
+                        d.line([x0, my, x1, my], fill=f)
+                    if c in "│┌┐└┘":
+                        y0 = my if c in "┌┐" else py; y1 = my if c in "└┘" else py + ch - 1
+                        d.line([mx, y0, mx, y1], fill=f)
+                elif c != " ":
+                    if wide(c) and g: d.rectangle([px + cw, py, px + 2 * cw - 1, py + ch - 1], fill=g)
+                    d.text((px, py + 1), c, font=font_for(c, b), fill=f)
+                x += 2 if wide(c) else 1
+            if not m: break
+            pos = m.end()
+            p = [int(v) if v else 0 for v in re.split("[;:]", m.group(1))] if m.group(1) else [0]
+            i = 0
+            while i < len(p):
+                v = p[i]
+                if v == 0: fg, bg, b, dim, rev = FG, None, False, False, False
+                elif v == 1: b = True
+                elif v == 2: dim = True
+                elif v == 7: rev = True
+                elif v == 22: b = dim = False
+                elif v == 27: rev = False
+                elif 30 <= v <= 37: fg = base16[v - 30]
+                elif 90 <= v <= 97: fg = base16[v - 82]
+                elif 40 <= v <= 47: bg = base16[v - 40]
+                elif 100 <= v <= 107: bg = base16[v - 92]
+                elif v == 39: fg = FG
+                elif v == 49: bg = None
+                elif v in (38, 48):
+                    if p[i + 1] == 5: col = c256(p[i + 2]); i += 2
+                    elif ":2::" in m.group(1): col = tuple(p[i + 3:i + 6]); i += 5
+                    else: col = tuple(p[i + 2:i + 5]); i += 4
+                    if v == 38: fg = col
+                    else: bg = col
+                i += 1
+    return img
+
+
+if __name__ == "__main__":
+    src, out = sys.argv[1], sys.argv[2]
+    text = open(src, encoding="utf-8", errors="replace").read()
+    img = render(text, int(sys.argv[3]) if len(sys.argv) > 3 else None, int(sys.argv[4]) if len(sys.argv) > 4 else None)
+    img.save(out)
+    print(f"{out}: {img.size[0]}x{img.size[1]}")

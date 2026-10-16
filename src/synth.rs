@@ -275,6 +275,9 @@ pub struct Engine {
     lp: [f32; 3],
     last_pub: u64,
     pub_now: bool,
+    /// the next heard() is a note `hit_delay` steps ahead with this key (for the UI animations)
+    hit_delay: f32,
+    hit_key: i32,
     pub_ver: u64,
     // living tempo
     bpm_lock: bool,
@@ -305,6 +308,33 @@ pub struct Engine {
     n_nudge: u32,
     // style feels: techno section (0 groove, 1 breakdown, 2 build, 3 drop), acid line, train/two-step
     tsec: u8,
+    // the conductor's feelings, his little brain and what the listener liked
+    mood: crate::mood::MoodState,
+    brain: Option<crate::brain::Brain>,
+    brain_line: String,
+    brain_act: usize,
+    brain_intent: usize,
+    /// total ns spent in the brain, calls
+    pub brain_cost: (u64, u64),
+    pub likes: crate::likes::Likes,
+    like_lvl: f32,
+    like_t: f32,
+    prev_ag: f32,
+    prev_cpu: f32,
+    stub_lvl: f32,
+    seen_grumble: u32,
+    seen_cad: u64,
+    last_iv: u64,
+    mood_talk: u64,
+    react_dom: usize,
+    react_bar: u64,
+    pub mood_log: Option<Vec<String>>,
+    /// engine sample of every synth kick (SYSJAM_KICKLOG, sync measurement)
+    pub kick_log: Option<Vec<u64>>,
+    /// seconds per style, GM picks per instrument family, tempo samples (bench / like test)
+    pub style_secs: Vec<f32>,
+    pub fam_picks: std::collections::BTreeMap<&'static str, u32>,
+    pub bpm_secs: Vec<f32>,
     tsec_left: u32,
     tsec_ph: u32,
     tsec_len: u32,
@@ -625,6 +655,8 @@ impl Engine {
             lp: [0.0; 3],
             last_pub: 0,
             pub_now: false,
+            hit_delay: 0.0,
+            hit_key: 0,
             pub_ver: 0,
             bpm_lock: c.bpm_lock,
             lock_bpm: c.bpm - c.tempo_bias,
@@ -649,6 +681,29 @@ impl Engine {
             n_style: 0,
             n_nudge: 0,
             tsec: 0,
+            mood: Default::default(),
+            brain: if std::env::var_os("SYSJAM_NO_BRAIN").is_some() { None } else { crate::brain::Brain::load() },
+            brain_line: String::new(),
+            brain_act: 0,
+            brain_intent: 0,
+            brain_cost: (0, 0),
+            likes: if std::env::var_os("SYSJAM_NO_LIKES").is_some() { Default::default() } else { crate::likes::Likes::load() },
+            like_lvl: 0.0,
+            like_t: -99.0,
+            prev_ag: 0.0,
+            prev_cpu: 0.0,
+            stub_lvl: 0.0,
+            seen_grumble: 0,
+            seen_cad: 0,
+            last_iv: 0,
+            mood_talk: 0,
+            react_dom: 99,
+            react_bar: 0,
+            mood_log: std::env::var_os("SYSJAM_BENCH").map(|_| Vec::new()),
+            kick_log: std::env::var_os("SYSJAM_KICKLOG").map(|_| Vec::new()),
+            style_secs: vec![0.0; STYLES.len()],
+            fam_picks: Default::default(),
+            bpm_secs: vec![0.0; 5],
             tsec_left: 0,
             tsec_ph: 0,
             tsec_len: 1,
@@ -770,6 +825,29 @@ impl Engine {
     /// distinct GM programs used, GM picks, synth patches designed
     /// repetition measures over the free (non-form) chords: A-B-A-B loop rate and
     /// distinct chord bigrams per 5 minutes
+    pub fn mood_report(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        let (ns, n) = self.brain_cost;
+        let per = if n > 0 { ns as f64 / n as f64 } else { 0.0 };
+        let bar_s = 4.0 * 60.0 / self.bpm.max(30.0) as f64;
+        v.push(format!(
+            "brain: {} ({} bytes of weights), {n} calls, {per:.0} ns/call = {:.5}% of one core at one call per bar",
+            if self.brain.is_some() { "MLP 32-32-16-30" } else { "off (rules)" },
+            crate::brain::Brain::size_bytes(),
+            per / 1e9 / bar_s * 100.0
+        ));
+        let tot: f32 = self.style_secs.iter().sum::<f32>().max(1.0);
+        let st: Vec<String> = STYLES.iter().zip(&self.style_secs).filter(|(_, &t)| t > 0.5).map(|(s, &t)| format!("{} {:.0}%", s.id, t / tot * 100.0)).collect();
+        v.push(format!("style time: {}", st.join(", ")));
+        let bt: f32 = self.bpm_secs.iter().sum::<f32>().max(1.0);
+        let b: Vec<String> = ["<70", "70-89", "90-109", "110-129", "130+"].iter().zip(&self.bpm_secs).map(|(n, &t)| format!("{n} {:.0}%", t / bt * 100.0)).collect();
+        v.push(format!("tempo time: {}", b.join(", ")));
+        let fp: Vec<String> = self.fam_picks.iter().map(|(k, n)| format!("{k} {n}")).collect();
+        v.push(format!("GM picks by family: {}", fp.join(", ")));
+        v.push(format!("likes: {} stored, speech bank {} distinct lines", self.likes.likes.len(), crate::speech::variety()));
+        v
+    }
+
     pub fn chord_report(&self) -> String {
         let Some(l) = self.chord_log.as_ref() else { return String::new() };
         let free: Vec<&(f32, Chord, bool)> = l.iter().filter(|x| !x.2).collect();
@@ -1035,6 +1113,7 @@ impl Engine {
         Some((vel, steps))
     }
     fn heard(&mut self, i: usize, label: String, vel: f32) {
+        self.mark_hit(i, vel);
         self.count(i);
         if self.ui.is_none() {
             return;
@@ -1048,12 +1127,21 @@ impl Engine {
     }
     fn heard_semi(&mut self, i: usize, semi: i32, vel: f32) {
         self.track(i, semi);
+        self.hit_key = self.midi_root + semi;
         if self.ui.is_some() {
             let n = self.note_name(semi);
             self.heard(i, n, vel);
         } else {
+            self.mark_hit(i, vel);
             self.count(i);
         }
+    }
+    /// publish a note-on for the animations, at the time it will sound
+    fn mark_hit(&mut self, i: usize, vel: f32) {
+        let at = self.now + (self.hit_delay.max(0.0) * self.step_len) as u64;
+        crate::clock::hit(i, at, self.hit_key, (vel.clamp(0.0, 1.0) * 127.0) as i32);
+        self.hit_delay = 0.0;
+        self.hit_key = 0;
     }
 
     /// notes per minute per player in each arrangement state (bench / measurement)
@@ -1137,6 +1225,11 @@ impl Engine {
             }
             let now = self.now;
             self.minds[i].addressed = self.cond.target == Some(i) && now.saturating_sub(self.cond.target_t) < (self.sr * 4.0) as u64;
+            self.minds[i].fam = self.player_fam(i);
+            self.minds[i].playing = self.playing(i);
+            self.minds[i].hushed = if i >= 3 && i < 6 { self.cond.hushv[i] } else { 1.0 };
+            self.minds[i].quoting = self.quote.as_ref().map_or(false, |q| q.player == i && q.start <= self.step);
+            self.minds[i].present = i != 6 || self.guest_on;
             self.minds[i].notes = self.heard_notes[i].iter().filter(|(t, _)| now.saturating_sub(*t) < recent).map(|x| x.1.clone()).collect();
         }
         self.pub_ver += 1;
@@ -1182,6 +1275,12 @@ impl Engine {
             face: self.sty().face,
             style_id: self.sty().id,
             plan: self.harm.plan_desc.clone(),
+            mood: self.mood.dom().0.idx(),
+            mood_w: self.mood.dom().1,
+            mood_e: self.mood.energy(),
+            brain: self.brain_line.clone(),
+            liked: self.time() - self.like_t,
+            likes_n: self.likes.likes.len(),
         };
     }
 
@@ -1219,7 +1318,7 @@ impl Engine {
             Harm::Loop => Some(7),
         };
         self.harm.sevenths = st.harm == Harm::Jazz;
-        self.harm.major_bias = st.major;
+        self.harm.major_bias = st.major + 0.25 * (self.likes.b("mode", "major") - self.likes.b("mode", "minor")).clamp(-1.0, 1.0);
         self.harm.mod_rate = st.mod_rate;
     }
 
@@ -1233,7 +1332,86 @@ impl Engine {
         if k != 0 {
             self.cycle_style(k);
         }
+        if crate::shared::KEY_LIKE.swap(0, Relaxed) > 0 {
+            self.like_now();
+        }
     }
+
+    /// the instrument family a player is holding right now
+    fn player_fam(&self, i: usize) -> crate::figure::Fam {
+        use crate::figure::{fam_of_gm, Fam};
+        let roles: &[Role] = match i {
+            0 => return Fam::Drone,
+            1 => return Fam::Bass,
+            2 => return Fam::Drums,
+            6 => return Fam::Guest,
+            3 => &[Role::Comp, Role::Pad],
+            4 => &[Role::Lead],
+            _ => &[Role::Colour],
+        };
+        for r in roles {
+            if let Some(sl) = self.slots.iter().find(|s| s.role == *r && s.on) {
+                if sl.synth.is_some() {
+                    return Fam::Synth;
+                }
+                if let Some(p) = sl.program {
+                    return fam_of_gm(p);
+                }
+            }
+        }
+        if i == 3 { Fam::Synth } else { Fam::Bells }
+    }
+
+    fn playing(&self, i: usize) -> bool {
+        if i >= 6 {
+            return self.guest_on;
+        }
+        (self.on[i] || (i > 0 && self.has_slot(i))) && (i < 3 || self.rmode[i] == RMode::Play)
+    }
+
+    /// what the listener liked: a snapshot of this moment
+    fn like_snapshot(&self) -> crate::likes::Snapshot {
+        let names = ["drone", "bass", "drums", "keys", "lead", "colour", "guest"];
+        let tgt = self.melodic_target().max(0.5);
+        let c = &self.cond;
+        crate::likes::Snapshot {
+            time: crate::likes::now_iso(),
+            style: STYLES[self.style].name.to_string(),
+            style_id: self.sty().id.to_string(),
+            tempo: self.bpm,
+            state: self.leader.state.name().to_string(),
+            key: self.key().name(),
+            minor: self.key().minor,
+            density: ((c.dens[3] + c.dens[4] + c.dens[5]) / (tgt * 1.6)).clamp(0.0, 1.0),
+            instruments: {
+                let mut v: Vec<String> = (3..6).filter(|&i| self.playing(i)).map(|i| self.player_fam(i).name().to_string()).collect();
+                v.dedup();
+                v
+            },
+            players: (0..7).filter(|&i| self.playing(i)).map(|i| names[i].to_string()).collect(),
+            quote: self.quote.as_ref().filter(|q| q.start <= self.step).map(|q| q.cite.clone()),
+        }
+    }
+
+    /// ♥ — the only thing sysjam learns from
+    fn like_now(&mut self) {
+        let snap = self.like_snapshot();
+        let desc = format!("{} · {:.0} bpm · {} · {} · {}", snap.style, snap.tempo, snap.state, snap.key, snap.instruments.join("+"));
+        self.likes.like(snap);
+        self.likes.save_async();
+        self.like_lvl = 1.0;
+        self.like_t = self.time();
+        self.mood.impulse(crate::mood::Mood::Delighted, 0.9);
+        let line = crate::speech::liked(&mut self.rng, STYLES[self.style].id);
+        let pose = if self.cond.pose == Pose::Rest { Pose::Rest } else { Pose::Calm };
+        self.cond.speech = line.clone();
+        self.cond.pose = pose;
+        self.cond.pose_until = self.now + (self.sr * 3.0) as u64;
+        self.say(format!("♩ conductor: {line}"));
+        self.say(format!("♥ liked: {desc} ({} likes)", self.likes.likes.len()));
+        self.pub_now = true;
+    }
+
 
     /// ↑/↓: ±7 bpm of user bias on the living tempo, ramped over a bar.
     fn nudge(&mut self, n: i32) {
@@ -1654,7 +1832,7 @@ impl Engine {
         self.techno_phrase();
         if self.style_auto && self.style_left == 0 && self.now >= self.auto_next && self.leader.breakdown == 0 {
             let cur = self.style;
-            let w: Vec<f32> = (0..STYLES.len()).map(|k| if k == cur { 0.0 } else if k == 0 { 1.5 } else { 1.0 }).collect();
+            let w: Vec<f32> = (0..STYLES.len()).map(|k| if k == cur { 0.0 } else { (if k == 0 { 1.5 } else { 1.0 }) * self.likes.b("style", STYLES[k].id).exp() }).collect();
             let to = self.rng.weighted(&w);
             self.auto_next = self.now + (self.sr * self.rng.range(300.0, 540.0)) as u64;
             self.switch_style(to, "auto: the conductor's mood wandered");
@@ -2324,6 +2502,12 @@ impl Engine {
         }
         let mood = (0.2 + 0.5 * self.leader.agitation + 0.3 * self.rng.f()).clamp(0.0, 1.0);
         let mut to = (lo + (hi - lo) * mood).round();
+        if !self.likes.likes.is_empty() {
+            // liked tempos pull the choice: three candidates, weighted by the like bias
+            let cands = [to, (lo + (hi - lo) * self.rng.f()).round(), (lo + (hi - lo) * self.rng.f()).round()];
+            let w: Vec<f32> = cands.iter().map(|&c| (1.5 * self.likes.b("tempo", crate::likes::tempo_bucket(c + bias))).exp()).collect();
+            to = cands[self.rng.weighted(&w)];
+        }
         // never more than ~24 bpm in one ramp
         to = to.clamp(cur - 24.0, cur + 24.0);
         to = (to + bias).clamp(50.0, 160.0).round();
@@ -2543,6 +2727,7 @@ impl Engine {
         } else {
             return;
         }
+        self.hit_delay = delay;
         self.heard_semi(who, semi, vel as f32 / 100.0);
     }
 
@@ -2678,6 +2863,11 @@ impl Engine {
     }
     fn drum(&mut self, key: i32, vel: i32, delay: f32) {
         self.last_drum = self.now.max(1);
+        self.hit_delay = delay;
+        self.hit_key = key;
+        if self.ui.is_none() {
+            self.mark_hit(2, vel as f32 / 110.0);
+        }
         if self.ui.is_none() {
             self.count(2);
         } else {
@@ -2729,6 +2919,20 @@ impl Engine {
         }
         let s = (self.step % 16) as usize;
         let bar = self.step / 16;
+        {
+            use crate::clock::{Feel as CF, Meta};
+            let feel = match self.feel {
+                Feel::Normal => CF::Normal,
+                Feel::Half => CF::Half,
+                Feel::Double => CF::Double,
+                Feel::Surge => CF::Surge,
+            };
+            crate::clock::step(self.step, self.now, self.step_len, Meta { feel, meter: 4, shuffle: self.sty().drum_feel == DrumFeel::Shuffle });
+        }
+        let dt = self.step_len as f32 / self.sr;
+        self.style_secs[self.style] += dt;
+        let tb = ["under 70", "70-89", "90-109", "110-129", "130 up"].iter().position(|b| *b == crate::likes::tempo_bucket(self.bpm)).unwrap_or(0);
+        self.bpm_secs[tb] += dt;
         self.step += 1;
         if s == 0 {
             if self.sf_clear > 0 && self.now >= self.sf_clear {
@@ -3043,6 +3247,7 @@ impl Engine {
         self.cond.pose_until = self.now + (self.sr * 3.5) as u64;
         self.cond.target = target;
         self.cond.target_t = self.now;
+        self.last_iv = self.step / 16;
         self.say(format!("♩ conductor: {speech}"));
     }
 
@@ -3151,6 +3356,10 @@ impl Engine {
             + 2.5 * (c.mh - 0.33).max(0.0)
             + 0.1 * (c.loud + 14.0).max(0.0);
         self.cond.clutter = clutter;
+        self.mood_bar(bar, clutter, m / target, stepping);
+        let strict = self.sty().strict * self.mood.strictness();
+        let gen = self.mood.generosity();
+        let act = self.brain_act;
         if self.cond_log && bar % 4 == 0 {
             let c = &self.cond;
             let msg = format!("cond {:.0}s {} m {:.1}/{:.0} ov {:.1} step {:.1} mh {:.2} loud {:.1} → clutter {:.2} | modes {:?}", self.time(), st.name(), m, target, c.overlap, stepping, c.mh, c.loud, clutter, &self.rmode[3..6]);
@@ -3167,7 +3376,8 @@ impl Engine {
             };
             if base != self.cond.pose {
                 self.cond.pose = base;
-                self.cond.speech = match base {
+                let said = if base == Pose::Calm && self.brain_intent != 0 && self.rng.chance(0.6) { crate::speech::line(&mut self.rng, self.brain_intent, STYLES[self.style].id) } else { String::new() };
+                self.cond.speech = if !said.is_empty() { said } else { match base {
                     Pose::Surge => "open it up!".into(),
                     Pose::Rest => "the drone has it — I'll sit this one out".into(),
                     _ => match st {
@@ -3175,8 +3385,16 @@ impl Engine {
                         State::Subside => "let it breathe… easing down".into(),
                         _ => "nice and easy".into(),
                     },
-                };
+                } };
                 self.cond.target = None;
+            } else if bar % 4 == 0 && bar >= self.mood_talk && self.brain_intent != 0 && self.rng.chance(0.4) {
+                // he talks about how he feels, in the style's voice
+                let line = crate::speech::line(&mut self.rng, self.brain_intent, STYLES[self.style].id);
+                if !line.is_empty() {
+                    self.cond.speech = line.clone();
+                    self.say(format!("♩ conductor: {line}"));
+                    self.mood_talk = bar + 8;
+                }
             }
         }
         if now < self.cond.cool {
@@ -3217,7 +3435,7 @@ impl Engine {
             return;
         }
         // drums laid out: invite the synth in to stretch
-        if phrase && !surge && st != State::Chill && (self.rmode[2] != RMode::Play || !self.on[2]) && !drums_on && self.rng.chance(0.6) {
+        if phrase && !surge && st != State::Chill && (self.rmode[2] != RMode::Play || !self.on[2]) && !drums_on && self.rng.chance((0.6 * gen).min(0.95)) {
             let cand: Vec<usize> = (3..6).filter(|&i| self.on[i] && self.has_synth(i) && self.rmode[i] != RMode::Play && self.cond.lay[i] == 0 && self.front_of(i).is_none()).collect();
             if !cand.is_empty() {
                 let i = cand[self.rng.below(cand.len())];
@@ -3235,7 +3453,7 @@ impl Engine {
                 return;
             }
         }
-        if clutter > 1.3 / self.sty().strict && phrase {
+        if clutter > (if act == 3 { 1.1 } else { 1.3 }) / strict && phrase {
             // way too much: a cue to the whole band
             self.cond.n_cue += 1;
             self.cond.cool = now + (self.sr * 25.0) as u64;
@@ -3261,7 +3479,7 @@ impl Engine {
             }
             return;
         }
-        if clutter > 0.45 / self.sty().strict {
+        if clutter > (if act == 1 || act == 2 { 0.36 } else { 0.45 }) / strict {
             // pick the player doing the most damage
             let mut best: Option<(usize, f32)> = None;
             for i in 3..6 {
@@ -3284,7 +3502,7 @@ impl Engine {
             }
             return;
         }
-        if clutter < 0.12 / self.sty().strict && phrase && st != State::Chill && !surge && self.rng.chance(0.5) {
+        if clutter < (if act == 4 { 0.18 } else { 0.12 }) / strict && phrase && st != State::Chill && !surge && self.rng.chance((0.5 * gen).min(0.95)) {
             // space opened up: invite someone back
             let cand: Vec<usize> = (3..6).filter(|&i| self.on[i] && self.rest_run[i] >= 2 && self.cond.lay[i] == 0).collect();
             if !cand.is_empty() {
@@ -3302,8 +3520,135 @@ impl Engine {
                 self.cond.cool = now + (self.sr * 12.0) as u64;
             }
         }
+        // the brain wants a build: ask the harmony for tension and lift the band
+        if act == 5 && phrase && st == State::Alive && !surge && now >= self.cond.cool && self.rng.chance(0.35) {
+            self.harm.request_tension();
+            let line = crate::speech::line(&mut self.rng, 6, STYLES[self.style].id);
+            self.cond_say(line, Pose::Surge, None);
+            self.cond.cool = now + (self.sr * 16.0) as u64;
+        }
     }
 
+    /// once a bar: features → rules + the tiny brain → blended mood with inertia
+    fn mood_bar(&mut self, bar: u64, clutter: f32, dens: f32, stepping: f32) {
+        use crate::mood::{f, Mood, ACTIONS, INTENTS, N, NF};
+        let mut x = [0f32; NF];
+        let st = self.leader.state;
+        let sig = self.ctl.sig;
+        let ag = self.leader.agitation;
+        {
+            let c = &self.cond;
+            x[f::ENERGY] = self.leader.energy.clamp(0.0, 1.0);
+            x[f::AGIT] = ag.clamp(0.0, 1.0);
+            x[f::CLUTTER] = (clutter / 1.5).clamp(0.0, 1.0);
+            x[f::DENS] = (dens / 2.0).clamp(0.0, 1.0);
+            x[f::OVERLAP] = (c.overlap / 4.0).clamp(0.0, 1.0);
+            x[f::STEP] = (stepping / 2.0).clamp(0.0, 1.0);
+            x[f::LOUD] = ((c.loud + 40.0) / 40.0).clamp(0.0, 1.0);
+        }
+        x[f::CHILL + st as usize] = 1.0;
+        x[f::CHAOS] = (ag > 0.85) as i32 as f32;
+        x[f::BREAK] = (self.leader.breakdown > 0 || (self.sty().id == "techno" && self.tsec == 1)) as i32 as f32;
+        x[f::QUOTE] = self.quote.as_ref().map_or(false, |q| q.start <= self.step) as i32 as f32;
+        x[f::MINOR] = self.key().minor as i32 as f32;
+        x[f::TEMPO] = ((self.bpm - 50.0) / 110.0).clamp(0.0, 1.0);
+        x[f::CPU] = sig.cpu.clamp(0.0, 1.0);
+        x[f::INPUT] = sig.input.clamp(0.0, 1.0);
+        x[f::NET] = sig.net.clamp(0.0, 1.0);
+        x[f::DISK] = sig.file.clamp(0.0, 1.0);
+        let spike = ((ag - self.prev_ag) * 3.0 + (sig.cpu - self.prev_cpu) * 2.0).clamp(0.0, 1.0);
+        let spike = if spike < 0.3 { 0.0 } else { spike };
+        self.prev_ag = ag;
+        self.prev_cpu = sig.cpu;
+        x[f::SPIKE] = spike;
+        let gr = self.cond.n_grumble;
+        self.stub_lvl = (self.stub_lvl * 0.85 + 0.6 * gr.saturating_sub(self.seen_grumble) as f32).min(1.0);
+        self.seen_grumble = gr;
+        x[f::STUBBORN] = self.stub_lvl;
+        x[f::SINCE] = (bar.saturating_sub(self.last_iv) as f32 / 20.0).min(1.0);
+        x[f::ACTIVE] = (1..6).filter(|&i| self.playing(i)).count() as f32 / 5.0;
+        x[f::SURGE] = (self.feel == Feel::Surge) as i32 as f32;
+        x[f::BUILD] = (self.sty().id == "techno" && self.tsec == 2) as i32 as f32;
+        x[f::LIKE] = self.like_lvl;
+        self.like_lvl *= 0.7;
+        x[f::RELAX] = (self.sty().id == "techno") as i32 as f32;
+        x[f::STRICT] = (self.sty().strict - 1.0).clamp(-0.3, 0.6);
+        x[f::CADENCE] = (self.harm.n_cad != self.seen_cad) as i32 as f32;
+        self.seen_cad = self.harm.n_cad;
+        x[f::TENSION] = self.harm.tension_now().clamp(0.0, 1.0);
+        x[f::ONE] = 1.0;
+        let rules = crate::mood::softmax(&crate::mood::rule_scores(&x), 4.0);
+        let (target, act, intent) = match &self.brain {
+            Some(b) => {
+                let t0 = std::time::Instant::now();
+                let o = b.forward(&x);
+                self.brain_cost.0 += t0.elapsed().as_nanos() as u64;
+                self.brain_cost.1 += 1;
+                let pm = crate::mood::softmax(&o.mood, 1.0);
+                let mut t = [0f32; N];
+                for i in 0..N {
+                    t[i] = 0.7 * pm[i] + 0.3 * rules[i];
+                }
+                let am = |v: &[f32]| v.iter().enumerate().fold((0, f32::MIN), |b, (i, &x)| if x > b.1 { (i, x) } else { b }).0;
+                (t, am(&o.action), Some(am(&o.intent)))
+            }
+            None => (rules, crate::mood::rule_action(&x), None),
+        };
+        // sharpen the blend so one or two feelings lead (he's a person, not an average)
+        let mut target = target;
+        let sum: f32 = target.iter().map(|x| x.powf(2.5)).sum::<f32>().max(1e-9);
+        for x in target.iter_mut() {
+            *x = x.powf(2.5) / sum;
+        }
+        self.mood.toward(&target, 0.3);
+        if spike > 0.5 {
+            self.mood.impulse(Mood::Surprised, 0.5);
+        }
+        let (dom, w) = self.mood.dom();
+        let intent = intent.unwrap_or_else(|| crate::mood::rule_intent(dom.idx()));
+        self.brain_act = act;
+        self.brain_intent = intent;
+        // "🧠 frustrated 0.62 → hush keys"
+        let names = ["drone", "bass", "drums", "keys", "lead", "colour", "guest"];
+        let worst = (3..6).filter(|&i| self.playing(i)).max_by(|&a, &b| self.cond.dens[a].partial_cmp(&self.cond.dens[b]).unwrap());
+        let resting = (3..6).find(|&i| self.on[i] && !self.playing(i));
+        let what = match act {
+            1 | 2 => format!("{} {}", ACTIONS[act], worst.map(|i| names[i]).unwrap_or("someone")),
+            3 => "cue the band down".to_string(),
+            4 => format!("invite {}", resting.map(|i| names[i]).unwrap_or("someone")),
+            5 => "build it up".to_string(),
+            _ if intent != 0 => INTENTS[intent].to_string(),
+            _ => "keep time".to_string(),
+        };
+        let src = if self.brain.is_some() { "" } else { " (rules)" };
+        self.brain_line = format!("{} {w:.2} → {what}{src}", dom.name());
+        if self.mood_log.is_some() && bar % 4 == 0 {
+            let e = format!("{:>4.0}s {:<11} {} {w:.2} v{:+.2} a{:+.2} → {what}", self.time(), self.sty().id, dom.name(), self.mood.v, self.mood.a);
+            self.mood_log.as_mut().unwrap().push(e);
+        }
+        // the players notice his face
+        let di = dom.idx();
+        if di != self.react_dom && bar >= self.react_bar && w > 0.3 {
+            self.react_dom = di;
+            let line = match dom {
+                Mood::Frustrated | Mood::Annoyed => Some("uh oh, he's frowning — playing it safe"),
+                Mood::Delighted | Mood::Inspired => Some("he's beaming — let's give him more"),
+                Mood::Sleepy | Mood::Bored => Some("he's nodding off… someone do something"),
+                Mood::Anxious => Some("he looks nervous — steady now"),
+                Mood::Nostalgic => Some("he's misty-eyed at that old tune"),
+                _ => None,
+            };
+            if let Some(line) = line {
+                let cand: Vec<usize> = (1..6).filter(|&i| self.playing(i) && self.now >= self.hold[i]).collect();
+                if !cand.is_empty() {
+                    let i = cand[self.rng.below(cand.len())];
+                    let st = self.minds[i].status;
+                    self.think(i, st, line);
+                    self.react_bar = bar + 8;
+                }
+            }
+        }
+    }
     /// RMS per source (dBFS, post master gain, pre limiter), drums playing vs resting
     pub fn rms_report(&self) -> String {
         let Some(m) = self.meter.as_ref() else { return String::new() };
@@ -3976,6 +4321,9 @@ impl Engine {
     }
 
     fn kick(&mut self, v: f32) {
+        if let Some(k) = self.kick_log.as_mut() {
+            k.push(self.now);
+        }
         self.kick_on = true;
         self.kick_t = 0.0;
         self.kick_ph = 0.0;
@@ -4229,7 +4577,7 @@ impl Engine {
                     State::Subside => 0.035,
                 }
         };
-        if !self.rng.chance(p) {
+        if !self.rng.chance(p * self.likes.b("quote", "yes").exp().min(3.0)) {
             return;
         }
         // who: lead, keys, colour (if playing), or the bassist
@@ -4525,13 +4873,16 @@ impl Engine {
                 if self.slots[si].recent.contains(&p) || self.recent_global.contains(&p) {
                     w *= 0.05;
                 }
+                w *= self.likes.b("instruments", crate::figure::fam_of_gm(p).name()).exp();
                 if self.slots.iter().any(|s| s.role != role && s.on && s.synth.is_none() && s.program == Some(p)) {
                     w = 0.0;
                 }
                 w
             })
             .collect();
-        (self.rng.weighted(&w) as u8, wild)
+        let p = self.rng.weighted(&w) as u8;
+        *self.fam_picks.entry(crate::figure::fam_of_gm(p).name()).or_insert(0) += 1;
+        (p, wild)
     }
 
     /// level of a player's tied machine signal (0..1)

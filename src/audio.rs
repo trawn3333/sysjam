@@ -12,6 +12,7 @@ type Writei = unsafe extern "C" fn(*mut c_void, *const c_void, c_ulong) -> c_lon
 type Recover = unsafe extern "C" fn(*mut c_void, c_int, c_int) -> c_int;
 type Simple = unsafe extern "C" fn(*mut c_void) -> c_int;
 type StrErr = unsafe extern "C" fn(c_int) -> *const c_char;
+type Delay = unsafe extern "C" fn(*mut c_void, *mut c_long) -> c_int;
 
 pub struct Alsa {
     pcm: *mut c_void,
@@ -19,6 +20,8 @@ pub struct Alsa {
     recover: Recover,
     drain: Simple,
     close: Simple,
+    delay: Option<Delay>,
+    rate: u32,
 }
 
 unsafe fn sym<T: Copy>(h: *mut c_void, name: &str) -> Result<T, String> {
@@ -54,7 +57,7 @@ impl Alsa {
                 close(pcm);
                 return Err(format!("cannot configure ALSA device '{device}': {}", err(e)));
             }
-            Ok(Alsa { pcm, writei: sym(h, "snd_pcm_writei")?, recover: sym(h, "snd_pcm_recover")?, drain: sym(h, "snd_pcm_drain")?, close })
+            Ok(Alsa { pcm, writei: sym(h, "snd_pcm_writei")?, recover: sym(h, "snd_pcm_recover")?, drain: sym(h, "snd_pcm_drain")?, close, delay: sym(h, "snd_pcm_delay").ok(), rate })
         }
     }
 }
@@ -75,6 +78,20 @@ impl Sink {
         let mut f = File::create(path).map_err(|e| format!("{path}: {e}"))?;
         f.write_all(&[0u8; 44]).map_err(|e| e.to_string())?;
         Ok(Sink::Wav { f, start: Instant::now(), frames: 0, rate })
+    }
+
+    /// seconds until the last written frame is heard (output latency right now)
+    pub fn delay_s(&self) -> f64 {
+        match self {
+            Sink::Alsa(a) => {
+                let mut d: c_long = 0;
+                match a.delay {
+                    Some(f) if unsafe { f(a.pcm, &mut d) } == 0 => d.max(0) as f64 / a.rate as f64,
+                    _ => 0.12,
+                }
+            }
+            Sink::Null { start, frames, rate } | Sink::Wav { start, frames, rate, .. } => *frames as f64 / *rate as f64 - start.elapsed().as_secs_f64(),
+        }
     }
 
     pub fn write(&mut self, pcm: &[i16]) -> Result<(), String> {

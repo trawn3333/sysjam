@@ -39,6 +39,14 @@ pub struct Mind {
     pub tied: String,
     /// the conductor is talking to this player right now
     pub addressed: bool,
+    /// instrument family (drives the little character)
+    pub fam: crate::figure::Fam,
+    pub playing: bool,
+    /// conductor's hush level (1 = none)
+    pub hushed: f32,
+    pub quoting: bool,
+    /// on stage (the guest comes and goes)
+    pub present: bool,
 }
 
 /// What the conductor is doing (pose drives the little figure).
@@ -91,6 +99,14 @@ pub struct BandSnap {
     pub style_id: &'static str,
     /// where the harmony is heading
     pub plan: String,
+    /// conductor mood (index into mood::ALL), its weight, baton energy, brain line
+    pub mood: usize,
+    pub mood_w: f32,
+    pub mood_e: f32,
+    pub brain: String,
+    /// seconds since the last ♥, and how many likes are stored
+    pub liked: f32,
+    pub likes_n: usize,
 }
 
 pub const HIST: usize = 120;
@@ -178,17 +194,41 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
             return;
         }
     };
-    let frame_dt = Duration::from_millis(200); // 5 fps
+    // ~15 fps while the little people are moving, 5 fps when the display is paused;
+    // every beat also gets a frame exactly on it, so the baton's ictus lands on time
+    let fast = Duration::from_millis(66);
+    let slow = Duration::from_millis(200);
+    let mut frame_dt = fast;
     let mut paused = false;
     let mut quitting = false;
-    let mut last = Instant::now() - frame_dt;
+    let mut last = Instant::now() - slow;
+    let mut last_beat = i64::MIN;
     // held arrows auto-repeat fast: accept one tempo nudge per 160 ms, one style step per 300 ms
     let mut last_t = Instant::now() - Duration::from_secs(1);
     let mut last_s = Instant::now() - Duration::from_secs(1);
+    let mut last_l = Instant::now() - Duration::from_secs(1);
     let (mut band, mut mon) = (BandSnap::default(), MonSnap::default());
+    let mut anim = Anim::new();
+    let mut cache: Option<ratatui::buffer::Buffer> = None;
+    let mut last_full = Instant::now() - slow;
+    let mut force_full = true;
+    let mut dirty = false;
+    let mut prof = (Duration::ZERO, Duration::ZERO, 0u64, Instant::now(), 0u64);
+    let mut last_cells: Vec<(u16, u16, String, usize, Style)> = Vec::new();
+    let mut sync_log = std::env::var_os("SYSJAM_SYNCLOG").and_then(|p| std::fs::File::create(p).ok()).map(std::io::BufWriter::new);
     while !stop.load(Ordering::Relaxed) {
-        let wait = frame_dt.saturating_sub(last.elapsed()).min(Duration::from_millis(100));
-        if event::poll(wait).unwrap_or(false) {
+        // time to the next beat, as heard
+        let heard = crate::clock::heard_at(crate::clock::ns());
+        let pos = heard.and_then(crate::clock::pos_at);
+        let to_beat = pos.map(|p| {
+            let beat_s = p.len * 4.0 / crate::clock::rate().max(1.0);
+            Duration::from_secs_f64(((1.0 - p.beats().fract()) * beat_s).max(0.0))
+        });
+        let mut wait = frame_dt.saturating_sub(last.elapsed());
+        if let Some(tb) = to_beat {
+            wait = wait.min(tb + Duration::from_micros(300));
+        }
+        if event::poll(wait.min(Duration::from_millis(100))).unwrap_or(false) {
             match event::read() {
                 Ok(Event::Key(k)) if k.kind != KeyEventKind::Release => match k.code {
                     KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
@@ -205,39 +245,122 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
                     }
                     KeyCode::Char(' ') => {
                         paused = !paused;
-                        last = Instant::now() - frame_dt;
+                        last = Instant::now() - slow;
+                        force_full = true;
+                    }
+                    KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Enter if last_l.elapsed() >= Duration::from_millis(400) => {
+                        last_l = Instant::now();
+                        crate::shared::KEY_LIKE.fetch_add(1, Ordering::Relaxed);
+                        last = Instant::now() - slow;
+                        force_full = true;
                     }
                     KeyCode::Up | KeyCode::Down if last_t.elapsed() >= Duration::from_millis(160) => {
                         last_t = Instant::now();
                         crate::shared::KEY_TEMPO.fetch_add(if k.code == KeyCode::Up { 1 } else { -1 }, Ordering::Relaxed);
-                        last = Instant::now() - frame_dt;
+                        last = Instant::now() - slow;
+                        force_full = true;
                     }
                     KeyCode::Left | KeyCode::Right if last_s.elapsed() >= Duration::from_millis(300) => {
                         last_s = Instant::now();
                         crate::shared::KEY_STYLE.fetch_add(if k.code == KeyCode::Right { 1 } else { -1 }, Ordering::Relaxed);
                         crate::theme::fast_next();
-                        last = Instant::now() - frame_dt;
+                        last = Instant::now() - slow;
+                        force_full = true;
                     }
                     _ => {}
                 },
-                Ok(Event::Resize(..)) => last = Instant::now() - frame_dt,
+                Ok(Event::Resize(..)) => {
+                    last = Instant::now() - slow;
+                    force_full = true;
+                }
                 _ => {}
             }
         }
-        if last.elapsed() < frame_dt {
+        let now_ns = crate::clock::ns();
+        let heard = crate::clock::heard_at(now_ns);
+        let pos = heard.and_then(crate::clock::pos_at);
+        let beat_i = pos.map(|p| p.beats().floor() as i64).unwrap_or(last_beat);
+        let on_beat = beat_i != last_beat;
+        if last.elapsed() < frame_dt && !(on_beat && !paused) {
             continue;
         }
         last = Instant::now();
-        if !paused {
+        last_beat = beat_i;
+        // the full UI refreshes at 5 fps (or at once after a key); in between only the
+        // little people are redrawn over the cached frame
+        let full = force_full || last_full.elapsed() >= Duration::from_millis(300) || cache.is_none();
+        if full && !paused {
             if let Ok(b) = ui.band.lock() {
-                band = b.clone();
+                if b.version != band.version {
+                    band = b.clone();
+                }
             }
             if let Ok(m) = ui.mon.lock() {
                 mon = m.clone();
             }
         }
-        let log: Vec<String> = LOG.lock().map(|l| l.iter().rev().take(40).map(|x| x.1.clone()).collect()).unwrap_or_default();
-        let _ = term.draw(|f| draw(f, &band, &mon, &log, paused, quitting));
+        // idle (display paused, or no audio yet): slow down
+        frame_dt = if paused || pos.is_none() { slow } else { fast };
+        let ctx = Ctx { heard: if paused { None } else { heard }, pos: if paused { None } else { pos }, t: anim.t0.elapsed().as_secs_f32() };
+        let tp = Instant::now();
+        let mut tw = Duration::ZERO;
+        if full {
+            if dirty {
+                if let Some(c) = cache.as_ref() {
+                    let mut out = std::io::stdout().lock();
+                    for cell in &last_cells {
+                        emit(&mut out, c, cell.0, cell.1, None, cell.3);
+                    }
+                    let _ = crossterm::queue!(out, crossterm::style::SetAttribute(crossterm::style::Attribute::Reset), crossterm::style::ResetColor);
+                    let _ = out.flush();
+                }
+                dirty = false;
+            }
+            let log: Vec<String> = LOG.lock().map(|l| l.iter().rev().take(40).map(|x| x.1.clone()).collect()).unwrap_or_default();
+            let _ = term.draw(|f| {
+                let t = Instant::now();
+                draw(f, &band, &mon, &log, paused, quitting, &mut anim, &ctx);
+                cache = Some(f.buffer_mut().clone());
+                tw = t.elapsed();
+            });
+            last_full = Instant::now();
+            force_full = false;
+            last_cells.clear();
+        } else {
+            let t = Instant::now();
+            let cells = anim_cells(&band, &mut anim, &ctx);
+            let same = cells.len() == last_cells.len() && cells.iter().zip(&last_cells).all(|(a, b)| a.2 == b.2 && a.4 == b.4);
+            tw = t.elapsed();
+            if !same {
+                // straight to the terminal, only the lines that changed; ratatui's own idea of
+                // the screen (the cached full frame) is restored before its next full draw
+                if let Some(c) = cache.as_ref() {
+                    let mut out = std::io::stdout().lock();
+                    for (i, cell) in cells.iter().enumerate() {
+                        if last_cells.get(i).map_or(true, |l| l.2 != cell.2 || l.4 != cell.4 || l.0 != cell.0 || l.1 != cell.1) {
+                            emit(&mut out, c, cell.0, cell.1, Some((&cell.2, cell.4)), cell.3);
+                        }
+                    }
+                    let _ = crossterm::queue!(out, crossterm::style::SetAttribute(crossterm::style::Attribute::Reset), crossterm::style::ResetColor);
+                    let _ = out.flush();
+                    dirty = true;
+                }
+                last_cells = cells;
+            } else {
+                prof.4 += 1;
+            }
+        }
+        prof.0 += tw;
+        prof.1 += tp.elapsed() - tw;
+        prof.2 += 1;
+        if let (Some(w), Some(p), Some(h)) = (sync_log.as_mut(), ctx.pos, ctx.heard) {
+            // frame shown at (now): wall ns, heard sample, beat position, and when the drawn frame hit the terminal
+            let _ = writeln!(w, "{now_ns} {:.1} {:.4} {} {}", h, p.beats(), crate::clock::ns(), crate::clock::SINK_T0.load(Ordering::Relaxed));
+        }
+    }
+    if let Some(p) = std::env::var_os("SYSJAM_UIPROF") {
+        let el = prof.3.elapsed().as_secs_f64();
+        let _ = std::fs::write(p, format!("frames {} ({} unchanged, skipped) in {el:.1}s; widgets {:.3}% core, terminal diff+write {:.3}% core\n", prof.2, prof.4, prof.0.as_secs_f64() / el * 100.0, prof.1.as_secs_f64() / el * 100.0));
     }
     TUI_ON.store(false, Ordering::SeqCst);
     restore();
@@ -325,7 +448,7 @@ fn status_color(s: &str) -> Color {
     }
 }
 
-fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, quitting: bool) {
+fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, quitting: bool, anim: &mut Anim, ctx: &Ctx) {
     let area = f.area();
     crate::theme::frame(b.style_id, b.beat);
     f.render_widget(Block::default().style(Style::default().bg(crate::theme::bg()).fg(th(Color::Gray))), area);
@@ -333,17 +456,17 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(5), Constraint::Min(10), Constraint::Length(7)])
         .split(area);
-    draw_header(f, rows[0], b, m, paused, quitting);
+    draw_header(f, rows[0], b, m, paused, quitting, anim, ctx);
     let mid = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(rows[1]);
-    draw_band(f, mid[0], b);
+    draw_band(f, mid[0], b, anim, ctx);
     let right = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(7), Constraint::Length(5), Constraint::Min(8), Constraint::Length(6)])
+        .constraints([Constraint::Length(8), Constraint::Length(5), Constraint::Min(8), Constraint::Length(6)])
         .split(mid[1]);
-    draw_conductor(f, right[0], b);
+    draw_conductor(f, right[0], b, anim, ctx);
     draw_cites(f, right[1], b);
     draw_machine(f, right[2], m);
     draw_levels(f, right[3], b);
@@ -359,7 +482,7 @@ fn draw(f: &mut Frame, b: &BandSnap, m: &MonSnap, log: &[String], paused: bool, 
     }
 }
 
-fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, quitting: bool) {
+fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, quitting: bool, anim: &mut Anim, ctx: &Ctx) {
     let dim = Style::default().fg(th(Color::DarkGray));
     let mut prog = vec![Span::styled(format!(" {} ", b.key), Style::default().fg(th(Color::White)).add_modifier(Modifier::BOLD))];
     if let Some(h) = &b.home {
@@ -380,7 +503,7 @@ fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, 
     if !b.plan.is_empty() {
         prog.push(Span::styled(crate::theme::asciify(&format!("   ⟶ {}", b.plan)), Style::default().fg(th(Color::LightCyan))));
     }
-    let beat: String = (0..4).map(|i| if i == b.beat { '●' } else { '○' }).collect();
+    let beat = beat_dots(ctx.pos.map(|p| p.in_bar() as u32).unwrap_or(b.beat));
     let line2 = vec![
         match b.bpm_to {
             Some(t) => Span::styled(format!(" {:.0}→{:.0} bpm ", b.bpm, t), Style::default().fg(th(Color::LightYellow)).add_modifier(Modifier::BOLD)),
@@ -402,6 +525,9 @@ fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, 
         Span::styled(meter(b.agitation, 14), Style::default().fg(th(Color::LightRed))),
         Span::styled(format!(" {:.2}", b.agitation), dim),
     ];
+    // the beat dots follow the heard beat between full refreshes too
+    let off: usize = line2[..4].iter().map(|s| s.width()).sum();
+    anim.dots = Some((r.x + 1 + off as u16, r.y + 2, Style::default().fg(th(Color::LightYellow))));
     let mut tail = format!("  seed {}  {:>4.0}s", b.seed, b.time);
     if paused {
         tail.push_str("  [display paused]");
@@ -436,10 +562,59 @@ fn draw_header(f: &mut Frame, r: Rect, b: &BandSnap, m: &MonSnap, paused: bool, 
             .borders(Borders::ALL).border_set(crate::theme::border_set()).border_style(Style::default().fg(crate::theme::border_color()))
             .title(Span::styled(crate::theme::title(" sysjam "), Style::default().fg(th(Color::LightYellow)).add_modifier(Modifier::BOLD)))
             .title(style_title(b))
+            .title(heart(b))
             .title(Line::from(inp).right_aligned())
-            .title_bottom(Span::styled(crate::theme::asciify(" ↑↓ tempo  ←→ style  space pause  q quit "), dim)),
+            .title_bottom(Span::styled(crate::theme::asciify(" ↑↓ tempo  ←→ style  l like  space pause  q quit "), dim)),
     );
     f.render_widget(p, r);
+}
+
+/// write one run of cells straight to the terminal: `text` over the cached frame's cells
+/// (keeping their background), or the cached cells themselves when `text` is None
+fn emit(out: &mut impl Write, cache: &ratatui::buffer::Buffer, x: u16, y: u16, text: Option<(&String, Style)>, w: usize) {
+    use crossterm::style::{Attribute, Color as CC, Print, SetAttribute, SetBackgroundColor, SetForegroundColor};
+    let a = cache.area;
+    if y >= a.y + a.height {
+        return;
+    }
+    let _ = crossterm::queue!(out, cursor::MoveTo(x, y));
+    let mut chars = text.map(|t| t.0.chars());
+    for k in 0..w as u16 {
+        if x + k >= a.x + a.width {
+            break;
+        }
+        let base = &cache[(x + k, y)];
+        let (sym, fg, bold): (String, Color, bool) = match (&mut chars, text) {
+            (Some(it), Some((_, st))) => (it.next().unwrap_or(' ').to_string(), st.fg.unwrap_or(base.fg), st.add_modifier.contains(Modifier::BOLD)),
+            _ => (base.symbol().to_string(), base.fg, base.modifier.contains(Modifier::BOLD)),
+        };
+        let _ = crossterm::queue!(
+            out,
+            SetAttribute(if bold { Attribute::Bold } else { Attribute::NormalIntensity }),
+            SetForegroundColor(CC::from(fg)),
+            SetBackgroundColor(CC::from(base.bg)),
+            Print(sym)
+        );
+    }
+}
+
+fn beat_dots(beat: u32) -> String {
+    (0..4).map(|i| if i == beat % 4 { '●' } else { '○' }).collect()
+}
+
+/// ♥ flashes for a couple of seconds after a like
+fn heart(b: &BandSnap) -> Line<'static> {
+    if b.liked >= 0.0 && b.liked < 2.5 {
+        let on = ((b.liked * 4.0) as i32) % 2 == 0;
+        let h = if crate::theme::ascii() { "<3" } else { "♥" };
+        let st = if on { Style::default().fg(th(Color::Black)).bg(th(Color::LightRed)).add_modifier(Modifier::BOLD) } else { Style::default().fg(th(Color::LightRed)).add_modifier(Modifier::BOLD) };
+        Line::from(Span::styled(format!(" {h} liked ({}) ", b.likes_n), st))
+    } else if b.likes_n > 0 {
+        let h = if crate::theme::ascii() { "<3" } else { "♥" };
+        Line::from(Span::styled(format!(" {h} {} ", b.likes_n), Style::default().fg(th(Color::DarkGray))))
+    } else {
+        Line::from("")
+    }
 }
 
 fn style_title(b: &BandSnap) -> Line<'static> {
@@ -472,11 +647,39 @@ fn draw_cites(f: &mut Frame, r: Rect, b: &BandSnap) {
     f.render_widget(Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: true }), inner);
 }
 
-fn draw_conductor(f: &mut Frame, r: Rect, b: &BandSnap) {
-    use crate::conductor::{frame, Pose};
+/// per-frame animation context: where the music is, as heard right now
+pub struct Ctx {
+    pub heard: Option<f64>,
+    pub pos: Option<crate::clock::Pos>,
+    pub t: f32,
+}
+
+/// UI-side memory for the little people (instrument swaps, the guest's walk, hush timing)
+pub struct Anim {
+    t0: Instant,
+    fam: [Option<crate::figure::Fam>; 7],
+    swap: [Option<(crate::figure::Fam, Instant)>; 7],
+    present: [bool; 7],
+    walk: [Option<(Instant, bool)>; 7],
+    hush: [Option<Instant>; 7],
+    col: [Color; 7],
+    cond: Option<(Rect, Color)>,
+    band: Option<(Rect, usize, bool)>,
+    dots: Option<(u16, u16, Style)>,
+}
+
+impl Anim {
+    pub fn new() -> Anim {
+        Anim { t0: Instant::now(), fam: [None; 7], swap: [None; 7], present: [false; 7], walk: [None; 7], hush: [None; 7], col: [Color::Gray; 7], cond: None, band: None, dots: None }
+    }
+}
+
+fn draw_conductor(f: &mut Frame, r: Rect, b: &BandSnap, anim: &mut Anim, ctx: &Ctx) {
+    use crate::conductor::Pose;
     let c = &b.cond;
+    let mood = crate::mood::ALL[b.mood.min(crate::mood::N - 1)];
     let sn = b.style.rsplit(" · ").next().unwrap_or("");
-    let title = format!(" conductor · {sn} · {} cue{} ", c.count, if c.count == 1 { "" } else { "s" });
+    let title = format!(" conductor · {sn} · {} · {} cue{} ", mood.name(), c.count, if c.count == 1 { "" } else { "s" });
     let block = Block::default().borders(Borders::ALL).border_set(crate::theme::border_set()).border_style(Style::default().fg(crate::theme::border_color())).title(crate::theme::title(&title));
     let inner = block.inner(r);
     f.render_widget(block, r);
@@ -487,9 +690,10 @@ fn draw_conductor(f: &mut Frame, r: Rect, b: &BandSnap) {
         Pose::Surge => th(Color::LightRed),
         Pose::Rest => th(Color::DarkGray),
     };
-    let art = crate::theme::conductor(frame(c.pose, b.beat), c.pose, b.beat, b.hat, b.face, b.style_id);
+    let art = crate::figure::conductor(b.style_id, c.pose, mood, b.mood_e.max(0.4), ctx.pos, ctx.t);
+    anim.cond = Some((inner, col));
     let w = inner.width as usize;
-    let tw = w.saturating_sub(13).max(8);
+    let tw = w.saturating_sub(crate::figure::CW + 1).max(8);
     // speech, word-wrapped beside the figure
     let mut said: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -509,30 +713,39 @@ fn draw_conductor(f: &mut Frame, r: Rect, b: &BandSnap) {
     }
     let mut lines = Vec::new();
     for (k, a) in art.iter().enumerate() {
-        let mut sp = vec![Span::styled(format!("{a:<12} "), Style::default().fg(col).add_modifier(Modifier::BOLD))];
+        let mut sp = vec![Span::styled(format!("{} ", crate::theme::asciify(a)), Style::default().fg(col).add_modifier(Modifier::BOLD))];
         let row = k.checked_sub(1).and_then(|j| said.get(j));
         if let Some(t) = row {
             sp.push(Span::styled(t.clone(), Style::default().fg(th(Color::White))));
-        } else if k == 4 {
+        } else if k == 4 && said.len() < 4 {
             let tgt = c.target.map(|t| format!("→ {t}  ")).unwrap_or_default();
             sp.push(Span::styled(format!("{tgt}clutter {}", meter(c.clutter.min(1.5) / 1.5, 8)), Style::default().fg(th(Color::DarkGray))));
         }
         lines.push(Line::from(sp));
     }
+    // what the little brain thinks
+    if !b.brain.is_empty() {
+        let br = if crate::theme::ascii() { format!("brain: {}", b.brain) } else { format!("🧠 {}", b.brain) };
+        lines.push(Line::from(Span::styled(br, Style::default().fg(th(Color::LightMagenta)))));
+    }
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-fn draw_band(f: &mut Frame, r: Rect, b: &BandSnap) {
+fn draw_band(f: &mut Frame, r: Rect, b: &BandSnap, anim: &mut Anim, ctx: &Ctx) {
+    use crate::figure::PW;
     let block = Block::default().borders(Borders::ALL).border_set(crate::theme::border_set()).border_style(Style::default().fg(crate::theme::border_color())).title(crate::theme::title(" the band "));
     let inner = block.inner(r);
     f.render_widget(block, r);
     let n = b.minds.len().max(1);
-    let per = (inner.height as usize / n).clamp(1, 3);
+    let per = (inner.height as usize / n).clamp(1, 4);
     let dim = Style::default().fg(th(Color::DarkGray));
-    let w = inner.width as usize;
+    let sprites = per >= 3 && inner.width as usize >= 60;
+    let sw = if sprites { PW + 1 } else { 0 };
+    let w = (inner.width as usize).saturating_sub(sw);
     let mut lines = Vec::new();
-    for mi in &b.minds {
+    for (pi, mi) in b.minds.iter().enumerate() {
         let st = status_color(mi.status);
+        let mut block_lines: Vec<Vec<Span>> = Vec::new();
         let mut l1 = vec![
             Span::styled(
                 format!("{:<9}", mi.name),
@@ -550,34 +763,132 @@ fn draw_band(f: &mut Frame, r: Rect, b: &BandSnap) {
         let used = 9 + 11 + 8 + 1 + 15;
         let inst: String = mi.instrument.chars().take(w.saturating_sub(used)).collect();
         l1.push(Span::styled(inst, Style::default().fg(th(Color::LightBlue))));
-        lines.push(Line::from(l1));
+        block_lines.push(l1);
         if per >= 2 {
             let t: String = format!("  ↳ {}", mi.think).chars().take(w).collect();
             let ts = if mi.addressed { Style::default().fg(th(Color::LightYellow)).add_modifier(Modifier::ITALIC) } else { Style::default().fg(th(Color::Gray)).add_modifier(Modifier::ITALIC) };
-            lines.push(Line::from(Span::styled(t, ts)));
+            block_lines.push(vec![Span::styled(t, ts)]);
         }
         if per >= 3 {
             let notes = if mi.notes.is_empty() { "·".to_string() } else { mi.notes.join(" ") };
-            // right side: tied signal and traits
+            let left: String = format!("  ♪ {notes}").chars().take(w).collect();
+            block_lines.push(vec![Span::styled(left, dim)]);
+        }
+        if per >= 4 {
             let right = match (mi.tied.is_empty(), mi.traits.is_empty()) {
                 (true, true) => String::new(),
-                (false, true) => format!(" ⇢ {} ", mi.tied),
-                (true, false) => format!(" {} ", mi.traits),
-                _ => format!(" ⇢ {} · {} ", mi.tied, mi.traits),
+                (false, true) => format!("  ⇢ {}", mi.tied),
+                (true, false) => format!("  {}", mi.traits),
+                _ => format!("  ⇢ {} · {}", mi.tied, mi.traits),
             };
-            let rw = right.chars().count();
-            let left_w = w.saturating_sub(rw).max(8);
-            let mut left: String = format!("  ♪ {notes}").chars().take(left_w).collect();
-            let lw = left.chars().count();
-            if lw + rw <= w {
-                left.push_str(&" ".repeat(w - lw - rw));
-                lines.push(Line::from(vec![Span::styled(left, dim), Span::styled(right, Style::default().fg(th(Color::Cyan)).add_modifier(Modifier::DIM))]));
-            } else {
-                lines.push(Line::from(Span::styled(left, dim)));
+            block_lines.push(vec![Span::styled(right.chars().take(w).collect::<String>(), Style::default().fg(th(Color::Cyan)).add_modifier(Modifier::DIM))]);
+        }
+        // the little character on the left
+        let sprite: Vec<String> = if sprites { sprite_for(pi, mi, b, anim, ctx, per) } else { Vec::new() };
+        let scol = if mi.playing { st } else { th(Color::DarkGray) };
+        anim.col[pi] = scol;
+        for k in 0..per {
+            let mut sp = Vec::new();
+            if sprites {
+                let s = sprite.get(k).cloned().unwrap_or_else(|| " ".repeat(PW));
+                sp.push(Span::styled(format!("{} ", crate::theme::asciify(&s)), Style::default().fg(scol)));
+            }
+            if let Some(l) = block_lines.get(k) {
+                sp.extend(l.iter().cloned());
+            }
+            lines.push(Line::from(sp));
+        }
+    }
+    anim.band = Some((inner, per, sprites));
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// one musician's frame (also used for the in-between animation frames)
+fn sprite_for(pi: usize, mi: &Mind, b: &BandSnap, anim: &mut Anim, ctx: &Ctx, per: usize) -> Vec<String> {
+    use crate::figure::{player, Fam, PState, PlayerIn, PW};
+    let now = Instant::now();
+    let rate = crate::clock::rate().max(1.0);
+    let cond_mood = crate::mood::ALL[b.mood.min(crate::mood::N - 1)];
+    // remember instrument swaps, the guest's comings and goings, hush onsets
+    if anim.fam[pi].is_some() && anim.fam[pi] != Some(mi.fam) && mi.playing {
+        anim.swap[pi] = Some((anim.fam[pi].unwrap(), now));
+    }
+    anim.fam[pi] = Some(mi.fam);
+    if mi.present != anim.present[pi] {
+        anim.walk[pi] = Some((now, mi.present));
+        anim.present[pi] = mi.present;
+    }
+    if mi.hushed < 0.99 {
+        anim.hush[pi].get_or_insert(now);
+    } else {
+        anim.hush[pi] = None;
+    }
+    let walk = match anim.walk[pi] {
+        Some((t, entering)) => {
+            let k = (now.duration_since(t).as_secs_f32() / 1.5).min(1.0);
+            if entering { 1.0 - k } else { k }
+        }
+        None => if mi.present { 0.0 } else { 1.0 },
+    };
+    let swap = anim.swap[pi].and_then(|(old, t)| {
+        let s = now.duration_since(t).as_secs_f32();
+        (s < 1.0).then_some((old, s))
+    });
+    let beats = ctx.pos.map(|p| p.beats()).unwrap_or(ctx.t as f64 * 1.5);
+    let hit = ctx.heard.and_then(|h| crate::clock::last_hit(pi, h)).map(|(age, key, vel, n)| ((age / rate) as f32, key, vel, n));
+    let busy = mi.playing || hit.map_or(false, |h| h.0 < 2.0);
+    let state = if !busy && mi.present {
+        PState::Rest(((pi as u64 + b.bar / 16) % 3) as u8)
+    } else if let Some(t) = anim.hush[pi] {
+        PState::Hushed(now.duration_since(t).as_secs_f32())
+    } else {
+        PState::Play
+    };
+    if walk >= 1.0 {
+        vec![" ".repeat(PW); per.min(4)]
+    } else {
+        let pin = PlayerIn { style: b.style_id, fam: if pi == 6 { Fam::Guest } else { mi.fam }, state, hit, beats, swap, walk, quoting: mi.quoting, cond_mood, t: ctx.t };
+        let mut v = player(&pin, per.min(4));
+        v.truncate(per);
+        v
+    }
+}
+
+/// in-between frames: only the conductor and the musicians move, on top of the last full
+/// frame. Returns the cells to write; an unchanged frame is skipped altogether.
+fn anim_cells(b: &BandSnap, anim: &mut Anim, ctx: &Ctx) -> Vec<(u16, u16, String, usize, Style)> {
+    use crate::figure::PW;
+    let mut out = Vec::new();
+    if let (Some((x, y, st)), Some(p)) = (anim.dots, ctx.pos) {
+        out.push((x, y, crate::theme::asciify(&beat_dots(p.in_bar() as u32)), 4, st));
+    }
+    if let Some((r, col)) = anim.cond {
+        let c = &b.cond;
+        let mood = crate::mood::ALL[b.mood.min(crate::mood::N - 1)];
+        let art = crate::figure::conductor(b.style_id, c.pose, mood, b.mood_e.max(0.4), ctx.pos, ctx.t);
+        let st = Style::default().fg(col).add_modifier(Modifier::BOLD);
+        for (k, a) in art.iter().enumerate() {
+            if (k as u16) < r.height {
+                out.push((r.x, r.y + k as u16, crate::theme::asciify(a), crate::figure::CW.min(r.width as usize), st));
             }
         }
     }
-    f.render_widget(Paragraph::new(lines), inner);
+    if let Some((r, per, true)) = anim.band {
+        for (pi, mi) in b.minds.iter().enumerate() {
+            let y0 = r.y + (pi * per) as u16;
+            let sp = sprite_for(pi, mi, b, anim, ctx, per);
+            let st = Style::default().fg(anim.col[pi]);
+            for k in 0..per {
+                let y = y0 + k as u16;
+                if y >= r.y + r.height {
+                    break;
+                }
+                let line = sp.get(k).cloned().unwrap_or_else(|| " ".repeat(PW));
+                out.push((r.x, y, crate::theme::asciify(&line), PW, st));
+            }
+        }
+    }
+    out
 }
 
 fn draw_machine(f: &mut Frame, r: Rect, m: &MonSnap) {

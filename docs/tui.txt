@@ -1,46 +1,46 @@
-╭ ♪ sysjam ♪ ─ ♪ style Blues  ← Country, changing over… ─────────────────────────────────────────────────────────────────────── input none ╮
-│ E major │ I7 E7 → IV A → I E → V7 B7                                                                                                     │
-│ 122→109 bpm tempo bias +14 bar 17   ○●○○    alive   energy ▓▓▓▓▓▓▓▓▓▓▓░░░ 0.75  agitation ▓▓▓▓▓▓▓▓▓▓▓░░░ 0.80  seed 3    45s             │
+╭ ♪ sysjam ♪ ─ ♪ style Blues  ← Country, changing over… ─ ♥ 1 ───────────────────────────────────────────────────────────────── input none ╮
+│ E major │ V B → vi C#m → I7 E7 → I7 E7 → I7 E7 → I7 E7 → IV7 A7   ⟶ 12-bar in E major, turnaround B7 → back to E7                        │
+│ 109 bpm tempo bias +14 bar 17   ○○○●    alive   energy ▓▓▓▓▓▓▓▓▓▓▓▓░░ 0.89  agitation ▓▓▓▓▓▓▓▓▓▓▓▓▓░ 0.94  seed 3    46s                 │
 │ ♫ no theme quoted right now                                                                                                              │
-╰ ↑↓ tempo  ←→ style  space pause  q quit ─────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭ ♪ the band ♪ ────────────────────────────────────────────────────────────────────╮╭ ♪ conductor · Blues · 1 cue ♪ ───────────────────────╮
-│drone    stretching ▓░░░░░░░ E major        sub drone + detuned pad               ││  ▁███▁                                               │
-│  ↳ drums are out → letting the drone bloom a little                              ││  (-‿-)      “Lord have mercy… let's play the blues…” │
-│  ♪ E1 G#3 B3 B3 E4 E4             ⇢ screen warm · curious 0.8 eager 0.8 busy 0.6 ││ ╭┤▓├━━━━━                                            │
-│bassist  comping    ▓▓▓▓▓░░░ E major        synth warm saw bass + GM Fingered Bass││  │▓│                                                 │
-│  ↳ conductor went Blues → picking up a fingered bass                             ││  ╯ ╰        clutter ▓░░░░░░░                         │
-│  ♪ C#2 C#3 E1 E2 G#1 G#2       ⇢ disk/files 99% · curious 0.5 eager 0.0 busy 0.5 │╰──────────────────────────────────────────────────────╯
-│drummer  following  ░░░░░░░░ —              synth deep kick + GM Brush kit · trian│╭ ♪ quoted themes · public domain ♪ ───────────────────╮
-│  ↳ conductor went Blues → switching to the GM Brush kit with triangle & tambourin││none yet — themes come rarely                         │
-│  ♪ ·                                  ⇢ cpu 75% · curious 0.0 eager 0.5 busy 0.4 ││                                                      │
-│keys     comping    ▓▓▓▓░░░░ E Mixolydian   GM String Ensemble 1 (48) / GM Bird Tw││                                                      │
-│  ↳ conductor: keys → “ok, ok”, complying                                         │╰──────────────────────────────────────────────────────╯
-│  ♪ A4 C#5 E5 E3 G#3 B3               ⇢ input 0% · curious 0.4 eager 0.7 busy 0.6 │╭ ♪ machine ♪ ─────────────────────────────────────────╮
-│lead     comping    ▓▓░░░░░░ E major        GM Overdriven Guitar (29)             ││cpu            67% ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆    │
-│  ↳ inspired by the move to alive → picking up an overdriven guitar               ││cores          6/8 ▆▅▅▆▆▆▆▅▅▆▆▆▅▆▆▅▅▆▅▆▆▆▆▆▆▅▆▆▆▆▆    │
-│  ♪ E5                               ⇢ cores 74% · curious 0.7 eager 0.7 busy 0.3 ││net         2 kB/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│colour   holding    ░░░░░░░░ E Mixolydian   GM Recorder (74) + glass bells        ││disk     67.2 MB/s █████▁███████████████████▆█████    │
-│  ↳ conductor went Blues → picking up a recorder                                  ││files          0/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│  ♪ ·                                   ⇢ net 0% · curious 0.6 eager 0.5 busy 0.5 ││input         0.00 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
-│guest    soloing    ▓▓▓░░░░░ E major        saw/sine guest voice                  ││screen        hue 1° bri 0.78                         │
-│  ↳ thread sh at 100% cpu sits in → long D#4                                      ││top threads                                           │
-│  ♪ G#4 G#4 G#4 G#4 D#4                                         ⇢ its thread 100% ││  100% ▓▓▓▓▓▓ sh                                      │
-│                                                                                  ││  100% ▓▓▓▓▓▓ sh                                      │
-│                                                                                  ││  100% ▓▓▓▓▓▓ sh                                      │
-│                                                                                  ││  100% ▓▓▓▓▓▓ sh                                      │
-│                                                                                  ││                                                      │
-│                                                                                  ││                                                      │
-│                                                                                  │╰──────────────────────────────────────────────────────╯
-│                                                                                  │╭ ♪ levels ♪ ──────────────────────────────────────────╮
+╰ ↑↓ tempo  ←→ style  l like  space pause  q quit ─────────────────────────────────────────────────────────────────────────────────────────╯
+╭ ♪ the band ♪ ────────────────────────────────────────────────────────────────────╮╭ ♪ conductor · Blues · delighted · 0 cues ♪ ──────────╮
+│_▄█▄_      drone    following  ░░░░░░░░ E major        sub drone + detuned pad    ││  _▄█▄_                                               │
+│(-.-)~ ~ ~   ↳ voice-leading pad into E7, sub glides to E1 · 6 voices, smooth     ││  (▀o▀) *    “Lord have mercy… let's play the blues…” │
+│╱|#|╲        ♪ E1 G#3 B3 D4 E4 E4 E4                                              ││  ╭┤#├─────>                                          │
+│ ╯ ╰         ⇢ screen cool · curious 0.8 eager 0.8 busy 0.6                       ││   │#│                                                │
+│_▄█▄_      bassist  comping    ▓▓▓▓▓▓░░ E major        synth warm saw bass + GM Fi││   ╯ ╰       clutter ░░░░░░░░                         │
+│(▀_▀)  │     ↳ conductor went Blues → picking up a fingered bass                  ││🧠 delighted 0.63 → invite colour                     │
+│╱|#|╲ (│)    ♪ G#1 G#2 B1 B2 C#2 C#3                                              │╰──────────────────────────────────────────────────────╯
+│ ╯ ╰  (_)    ⇢ disk/files 95% · curious 0.5 eager 0.0 busy 0.5                    │╭ ♪ quoted themes · public domain ♪ ───────────────────╮
+│_▄█▄_      drummer  following  ▓▓▓▓▓▓░░ —              synth deep kick + GM Brush ││none yet — themes come rarely                         │
+│(▀_▀)  ─┬─   ↳ conductor went Blues → switching to the GM Brush kit with triangle ││                                                      │
+│╱|#|╲ (_)    ♪ ride ride kick ride ride snare                                     ││                                                      │
+│ ╯ ╰ [O]     ⇢ cpu 100% · curious 0.0 eager 0.5 busy 0.4                          │╰──────────────────────────────────────────────────────╯
+│_▄█▄_      keys     comping    ▓▓▓▓▓▓░░ E Mixolydian   GM Percussive Organ (17) / │╭ ♪ machine ♪ ─────────────────────────────────────────╮
+│(▀_▀)        ↳ conductor went Blues → picking up an overdriven guitar             ││cpu           100% ███████████████████████████████    │
+│╱|#|╲o──┤    ♪ B3 D4 E3 G#3 B3 D4                                                 ││cores          8/8 ███████████████████████████████    │
+│ ╯ ╰         ⇢ input 0% · curious 0.4 eager 0.7 busy 0.6                          ││net        274 B/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│_▄█▄_╲     lead     comping    ▓▓░░░░░░ A major        GM Harmonica (22)          ││disk     15.1 MB/s ███████████████████▆██████████▇    │
+│(▀_▀) │      ↳ conductor went Blues → picking up a harmonica                      ││files          0/s ▄▃▃▁▁▁▁▁▁▁▃▁▁▁▃▁▃▁▁▁▁▁▁▁▄▃▃▁▃▁▁    │
+│╱|#|─ ╰)     ♪ E5 E5                                                              ││input         0.00 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    │
+│ ╯ ╰         ⇢ cores 100% · curious 0.7 eager 0.7 busy 0.3                        ││screen        hue 1° bri 0.15                         │
+│_▄█▄_      colour   holding    ░░░░░░░░ C# minor       GM Jazz Guitar (26) + glass││top threads                                           │
+│(▀_▀)        ↳ conductor went Blues → picking up a jazz guitar                    ││   87% ▓▓▓▓▓░ sh                                      │
+│╭|#|╮c[_]    ♪ D#5                                                                ││   85% ▓▓▓▓▓░ sh                                      │
+│ └─┘         ⇢ net 0% · curious 0.6 eager 0.5 busy 0.5                            ││   80% ▓▓▓▓▓░ sh                                      │
+│_▄█▄_  ♪   guest    soloing    ▓▓░░░░░░ E major        saw/sine guest voice       ││   64% ▓▓▓▓░░ sh                                      │
+│(▀_▀)        ↳ thread sh at 57% cpu sits in → long D#4                            ││                                                      │
+│╲|#|╱        ♪ A#4 B4 B4 D#4 D#4                                                  │╰──────────────────────────────────────────────────────╯
+│ ╯ ╰         ⇢ its thread 57%                                                     │╭ ♪ levels ♪ ──────────────────────────────────────────╮
 │                                                                                  ││sub  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░   -21 dB  │
-│                                                                                  ││bass ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░   -24 dB  │
+│                                                                                  ││bass ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░   -22 dB  │
 │                                                                                  ││mid  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░   -21 dB  │
-│                                                                                  ││high ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░   -30 dB  │
+│                                                                                  ││high ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░   -35 dB  │
 ╰──────────────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────╯
 ╭ ♪ band events ♪ ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│♥ liked: Country · 121 bpm · alive · E major · guitar (1 likes)                                                                           │
+│♩ conductor: Lord have mercy… let's play the blues                                                                                        │
 │♫ style: Country → Blues (you asked) — 12-bar form with quick-change and turnarounds, dominant sevenths, blue notes bent, shuffle, boogie │
-│~ tempo 122 → 109 bpm over 5 bars (alive, Blues, bias +14)                                                                                │
-│~ keys drifts to E Mixolydian over E major                                                                                                │
-│drummer joins                                                                                                                             │
-│+ GM Overdriven Guitar (29)  − GM Clean Guitar (27) [Lead]                                                                                │
+│~ tempo 122 → 109 bpm within a beat (Blues)                                                                                               │
+│~ drums: conductor went Blues → switching to the GM Brush kit with triangle & tambourine                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

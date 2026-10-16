@@ -11,19 +11,25 @@ macro_rules! say {
 }
 
 mod audio;
+mod clock;
 mod band;
+mod brain;
 mod conductor;
 mod dbus;
 mod dsp;
+mod figure;
 mod gm;
 mod harmony;
 mod input;
 mod monitor;
+mod likes;
+mod mood;
 mod music;
 mod portal;
 mod pwcap;
 mod screen;
 mod shared;
+mod speech;
 mod style;
 mod theme;
 mod synth;
@@ -54,6 +60,7 @@ USAGE: sysjam [OPTIONS]
   --bpm N             lock the tempo (default: random start 60-100, then it follows the band)
   --style NAME        conductor style: auto (default: wanders, starts as House Band), house, monk,
                       jazz, biker, baroque, celtic, industrial, space, tribal (←/→ in the TUI)
+  --reset-likes       forget everything you liked (deletes ~/.config/sysjam/likes.yaml) and start fresh
   --ascii             plain ASCII glyphs in the TUI (no emoji / box drawing); automatic on TERM=linux
   --tempo-bias N      sticky bpm offset on the living tempo, e.g. 14 or -21 (↑/↓ nudge ±7 in the TUI)
   --chord-bars N      base bars per chord (default 2; chilling plays slower, peaks faster)
@@ -65,7 +72,7 @@ USAGE: sysjam [OPTIONS]
   --no-leads          never let a busy thread sit in as a guest musician
   --verbose           band events, chords, instruments, and metrics every 5 s (with --no-tui)
   --no-tui            plain log output instead of the live terminal UI
-                      (the UI is the default when stdout is a terminal; keys: ↑↓ tempo, ←→ style, space pause, q quit)
+                      (the UI is the default when stdout is a terminal; keys: ↑↓ tempo, ←→ style, l like, space pause, q quit)
   --device NAME       ALSA device (default \"default\"; e.g. pipewire, pulse, hw:0)
   --wav FILE          render to a WAV file instead of the sound card (real time)
   --null              run without any audio output (testing)
@@ -91,6 +98,7 @@ fn parse_keys() -> Vec<(f32, u8)> {
                 "down" => 2,
                 "left" => 3,
                 "right" => 4,
+                "like" => 5,
                 _ => return None,
             };
             Some((t, k))
@@ -104,6 +112,7 @@ fn press(k: u8) {
         1 => shared::KEY_TEMPO.fetch_add(1, Relaxed),
         2 => shared::KEY_TEMPO.fetch_add(-1, Relaxed),
         3 => shared::KEY_STYLE.fetch_add(-1, Relaxed),
+        5 => shared::KEY_LIKE.fetch_add(1, Relaxed),
         _ => shared::KEY_STYLE.fetch_add(1, Relaxed),
     };
 }
@@ -191,6 +200,11 @@ fn main() {
                 style = style::find(&v).unwrap_or_else(|e| die(&e))
             }
             "--ascii" => theme::set_ascii(true),
+            "--reset-likes" => match likes::Likes::reset() {
+                Ok(Some(p)) => eprintln!("sysjam: forgot every like ({} removed)", p.display()),
+                Ok(None) => eprintln!("sysjam: no likes stored yet ({})", likes::config_path().map(|p| p.display().to_string()).unwrap_or_default()),
+                Err(e) => die(&format!("could not reset likes: {e}")),
+            },
             "--tempo-bias" => tempo_bias = num(val(&mut i), "--tempo-bias").clamp(-70.0, 70.0).round(),
             "--clicks" => clicks = num(val(&mut i), "--clicks").clamp(0.0, 1.0),
             "--verbose" | "-v" => verbose = true,
@@ -344,7 +358,7 @@ fn main() {
                         if t > now {
                             return true;
                         }
-                        say!("  [{now:5.1}s] key: {}", ["", "up", "down", "left", "right"][k as usize]);
+                        say!("  [{now:5.1}s] key: {}", ["", "up", "down", "left", "right", "like"][k as usize]);
                         press(k);
                         false
                     });
@@ -381,6 +395,18 @@ fn main() {
         let (distinct, gm_picks, synth) = en.sound_stats();
         say!("bench sounds: {distinct} distinct GM programs, {gm_picks} GM picks, {synth} synth patches designed");
         say!("bench chords: {}", en.chord_report());
+        if en.likes.dirty {
+            en.likes.save();
+        }
+        for l in en.mood_report() {
+            say!("bench {l}");
+        }
+        if let Some(ml) = en.mood_log.as_ref() {
+            let every = if std::env::var_os("SYSJAM_BENCH_MOOD").is_some() { 1 } else { 6 };
+            for l in ml.iter().step_by(every) {
+                say!("bench mood {l}");
+            }
+        }
         return;
     }
     let mut sink = if let Some(p) = &wav {
@@ -401,6 +427,12 @@ fn main() {
             }
         }
     };
+    clock::SINK_T0.store(clock::ns(), std::sync::atomic::Ordering::Relaxed);
+    if let Some(p) = std::env::var_os("SYSJAM_T0FILE") {
+        // wall clock of the sink's sample 0 (for muxing a screen capture with the WAV)
+        let w = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let _ = std::fs::write(p, w.to_string());
+    }
 
     let stop = Arc::new(AtomicBool::new(false));
     let ctl = Arc::new(Mutex::new(Control::default()));
@@ -471,6 +503,7 @@ fn main() {
             }
         });
     }
+    clock::set_rate(RATE);
     let mut fbuf = vec![0f32; BLOCK * 2];
     let mut ibuf = vec![0i16; BLOCK * 2];
     let mut local = Control::default();
@@ -492,6 +525,7 @@ fn main() {
             break;
         }
         rendered += BLOCK as u64;
+        clock::anchor(rendered, sink.delay_s());
         let t = rendered as f32 / RATE as f32;
         if !fading {
             let timeup = duration.map(|d| t >= d - 2.0).unwrap_or(false);
@@ -505,6 +539,12 @@ fn main() {
         } else if synth.faded_out() {
             break;
         }
+    }
+    if synth.likes.dirty {
+        synth.likes.save();
+    }
+    if let (Some(k), Some(p)) = (synth.kick_log.as_ref(), std::env::var_os("SYSJAM_KICKLOG")) {
+        let _ = std::fs::write(p, k.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("\n"));
     }
     stop.store(true, Ordering::Relaxed);
     if let Some(t) = tui_t {
