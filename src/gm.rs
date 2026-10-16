@@ -260,6 +260,15 @@ impl Gm {
         c.target = target;
         c.rate = ((target - c.expr).abs() / secs.max(0.05)).max(1e-3);
     }
+    /// set the expression at once (a channel about to be reused after a hard reset)
+    pub fn snap(&mut self, ch: usize, v: f32) {
+        let c = &mut self.chans[ch];
+        c.expr = v;
+        c.target = v;
+        let s = (v.sqrt() * 127.0).round() as i32;
+        c.sent = s;
+        self.cc(ch as i32, 11, s);
+    }
     pub fn expr(&self, ch: usize) -> f32 {
         self.chans[ch].expr
     }

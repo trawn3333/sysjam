@@ -244,17 +244,29 @@ struct State {
     from: usize,
     to: usize,
     t0: Instant,
+    /// fade length in s (short right after a user key press)
+    dur: f32,
     beat: u32,
     truecolor: bool,
 }
 
 static ASCII: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// set by ←/→: the next theme change snaps over ~150 ms instead of fading over 1 s
+static FAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn fast_next() {
+    FAST.store(epoch_ms() + 3000, std::sync::atomic::Ordering::Relaxed);
+}
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
 
 thread_local! {
     static ST: RefCell<State> = RefCell::new(State {
         from: 0,
         to: 0,
         t0: Instant::now(),
+        dur: 1.0,
         beat: 0,
         truecolor: matches!(std::env::var("COLORTERM").as_deref(), Ok("truecolor") | Ok("24bit")),
     });
@@ -278,6 +290,7 @@ pub fn frame(style_id: &str, beat: u32) {
             s.from = s.to;
             s.to = k;
             s.t0 = Instant::now();
+            s.dur = if FAST.swap(0, std::sync::atomic::Ordering::Relaxed) > epoch_ms() { 0.15 } else { 1.0 };
         }
     });
 }
@@ -286,7 +299,7 @@ pub fn frame(style_id: &str, beat: u32) {
 pub fn fading() -> bool {
     ST.with(|s| {
         let s = s.borrow();
-        s.from != s.to && s.t0.elapsed().as_secs_f32() < 1.0
+        s.from != s.to && s.t0.elapsed().as_secs_f32() < s.dur
     })
 }
 
@@ -345,7 +358,7 @@ fn role(p: &Pal, c: Color) -> Option<Rgb> {
 pub fn th(c: Color) -> Color {
     let (from, to, t) = ST.with(|s| {
         let s = s.borrow();
-        (s.from, s.to, (s.t0.elapsed().as_secs_f32()).min(1.0))
+        (s.from, s.to, (s.t0.elapsed().as_secs_f32() / s.dur).min(1.0))
     });
     if THEMES[to].pal.is_none() && (t >= 1.0 || from == to) {
         return c;
@@ -367,7 +380,7 @@ pub fn th(c: Color) -> Color {
 pub fn bg() -> Color {
     let (from, to, t) = ST.with(|s| {
         let s = s.borrow();
-        (s.from, s.to, (s.t0.elapsed().as_secs_f32()).min(1.0))
+        (s.from, s.to, (s.t0.elapsed().as_secs_f32() / s.dur).min(1.0))
     });
     if THEMES[to].pal.is_none() && (t >= 1.0 || from == to) {
         return Color::Reset;
@@ -378,7 +391,7 @@ pub fn bg() -> Color {
 pub fn border_color() -> Color {
     let (from, to, t, beat) = ST.with(|s| {
         let s = s.borrow();
-        (s.from, s.to, (s.t0.elapsed().as_secs_f32()).min(1.0), s.beat)
+        (s.from, s.to, (s.t0.elapsed().as_secs_f32() / s.dur).min(1.0), s.beat)
     });
     if THEMES[to].pal.is_none() && (t >= 1.0 || from == to) {
         return Color::Reset;

@@ -213,6 +213,7 @@ pub fn run(ui: Ui, stop: Arc<AtomicBool>, quit: impl Fn() -> u32) {
                     KeyCode::Left | KeyCode::Right if last_s.elapsed() >= Duration::from_millis(300) => {
                         last_s = Instant::now();
                         crate::shared::KEY_STYLE.fetch_add(if k.code == KeyCode::Right { 1 } else { -1 }, Ordering::Relaxed);
+                        crate::theme::fast_next();
                         last = Instant::now() - frame_dt;
                     }
                     _ => {}

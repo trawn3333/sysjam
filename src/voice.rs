@@ -216,6 +216,21 @@ impl Pool {
         }
     }
 
+    /// Silence an owner within ~0.1 s (user style switch): fast release, and notes that
+    /// have not started yet are dropped.
+    pub fn cut_owner(&mut self, owner: usize, now: u64) {
+        for v in self.v.iter_mut() {
+            if v.on && v.owner == owner {
+                if v.start > now {
+                    v.on = false;
+                    continue;
+                }
+                v.off = now.max(v.start + 1);
+                v.p.r = v.p.r.min(0.04);
+            }
+        }
+    }
+
     pub fn render(&mut self, now: u64, n: usize, tbl: &[f32]) {
         for x in self.l[..n].iter_mut().chain(self.r[..n].iter_mut()) {
             *x = 0.0;

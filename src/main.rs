@@ -365,6 +365,9 @@ fn main() {
             say!("bench {phase} ({:.0}-{:.0}s): {secs} s audio in {e:.3} s = {:.2}% of one core", t_base, en.time(), e / secs as f64 * 100.0);
         }
         say!("bench steering: {}", en.steer_stats());
+        for (tag, t) in &en.sw_times {
+            say!("bench switch: {tag} fully switched {t:.2} s after the key press");
+        }
         for l in en.density_report().lines() {
             say!("bench {l}");
         }

@@ -138,6 +138,8 @@ struct Slot {
     on: bool,
     want: bool,
     recent: VecDeque<u8>,
+    /// when this slot last took a new sound
+    changed_at: u64,
     /// Some = this layer plays a self-designed synth patch instead of GM
     synth: Option<Patch>,
     desc: String,
@@ -272,6 +274,7 @@ pub struct Engine {
     lv_n: u32,
     lp: [f32; 3],
     last_pub: u64,
+    pub_now: bool,
     pub_ver: u64,
     // living tempo
     bpm_lock: bool,
@@ -284,6 +287,13 @@ pub struct Engine {
     style_from: Option<usize>,
     style_left: u32,
     swap_at: [u32; 6],
+    /// user style switch being measured: (start sample, from, to); finished times in s
+    sw_t0: Option<(u64, usize, usize)>,
+    /// fast (user) switch: short fades for layers coming and going until then; header clears then
+    fast_until: u64,
+    sw_ramp_end: u64,
+    sf_clear: u64,
+    pub sw_times: Vec<(String, f32)>,
     style_kit: bool,
     auto_next: u64,
     cli_bias: f32,
@@ -488,6 +498,7 @@ impl Engine {
                 on: false,
                 want: false,
                 recent: VecDeque::new(),
+                changed_at: 0,
                 synth: None,
                 desc: String::new(),
             })
@@ -611,6 +622,7 @@ impl Engine {
             lv_n: 0,
             lp: [0.0; 3],
             last_pub: 0,
+            pub_now: false,
             pub_ver: 0,
             bpm_lock: c.bpm_lock,
             lock_bpm: c.bpm - c.tempo_bias,
@@ -620,6 +632,11 @@ impl Engine {
             style_from: None,
             style_left: 0,
             swap_at: [0; 6],
+            sw_t0: None,
+            fast_until: 0,
+            sw_ramp_end: 0,
+            sf_clear: 0,
+            sw_times: Vec::new(),
             style_kit: false,
             auto_next: (c.sr * 360.0) as u64,
             cli_bias: c.tempo_bias,
@@ -1241,6 +1258,64 @@ impl Engine {
             return;
         }
         self.switch_style(to, "you asked");
+        self.sw_t0 = Some((self.now, self.style_from.unwrap_or(self.style), to));
+    }
+
+    /// measurement: a user switch is done when the tempo sits in the new style's range,
+    /// the kit and every playing layer were replaced after the press and the old sounds are gone
+    fn switch_settled(&self, t0: u64) -> Result<(), &'static str> {
+        let s = self.sty();
+        if self.step < self.sw_ramp_end {
+            return Err("tempo ramp");
+        }
+        if self.style_kit || self.swap_at.iter().any(|&x| x > 0) {
+            return Err("staggered swaps");
+        }
+        if self.harm.restarting() {
+            return Err("harmony");
+        }
+        if self.insp[1..6].iter().any(|w| w.as_deref().is_some_and(|w| w.starts_with("conductor went"))) {
+            return Err("inspiration pending");
+        }
+        if !self.bpm_lock && self.feel != Feel::Surge {
+            let cur = self.bpm - self.bias_applied;
+            if cur < s.tempo[0].0 - 1.0 || cur > s.tempo[2].1 + 1.0 {
+                return Err("tempo range");
+            }
+        }
+        if let Some(g) = self.gm.as_ref() {
+            if !s.kits.is_empty() && !s.kits.contains(&self.kit) {
+                return Err("kit");
+            }
+            for sl in self.slots.iter().filter(|sl| sl.on) {
+                if sl.changed_at < t0 {
+                    return Err("layer not swapped");
+                }
+                if sl.synth.is_none() && sl.program.is_some() && (g.expr(sl.chans[1 - sl.cur]) > 0.01 || g.expr(sl.chans[sl.cur]) < 0.99) {
+                    return Err("fade");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn switch_watch(&mut self) {
+        let Some((t0, from, to)) = self.sw_t0 else { return };
+        if self.style != to {
+            self.sw_t0 = None;
+            return;
+        }
+        let secs = (self.now - t0) as f32 / self.sr;
+        let r = self.switch_settled(t0);
+        if std::env::var_os("SYSJAM_SWDBG").is_some() && self.step % 16 == 0 {
+            eprintln!("switch {secs:.1}s: {r:?}");
+        }
+        if r.is_ok() || secs > 180.0 {
+            let tag = format!("{} → {}", STYLES[from].name, STYLES[to].name);
+            self.say(format!("~ switch {tag} fully done in {secs:.2} s"));
+            self.sw_times.push((tag, secs));
+            self.sw_t0 = None;
+        }
     }
 
     fn switch_style(&mut self, to: usize, why: &str) {
@@ -1254,6 +1329,11 @@ impl Engine {
         self.cond_say(s.hello.to_string(), Pose::Point, None);
         self.cond.pose_until = self.now + (self.sr * 6.0) as u64;
         self.say(format!("♫ style: {} → {} ({why}) — {}", STYLES[from].name, s.name, s.desc));
+        self.pub_now = true;
+        if why == "you asked" {
+            self.instant_switch();
+            return;
+        }
         // staggered handover: rhythm section at the next phrase, the rest over 1-2
         for i in 1..6 {
             self.swap_at[i] = if i <= 2 { 1 } else { 1 + self.rng.below(2) as u32 };
@@ -1262,6 +1342,208 @@ impl Engine {
             self.think(i, st, format!("conductor went {} → listening, changing over at the phrase", s.name));
             self.hold[i] = self.now + (self.sr * 5.0) as u64;
         }
+    }
+
+    /// A user-pressed switch happens now: harmony from the next beat, tempo within a beat,
+    /// drum feel + kit + pattern at once, every playing layer swapped with a ~0.1 s fade
+    /// (held notes re-struck on the new sound). No cooldowns, dwell or phrase waits.
+    fn instant_switch(&mut self) {
+        let s = self.sty();
+        let name = s.name;
+        self.style_left = 0;
+        self.swap_at = [0; 6];
+        self.sf_clear = self.now + (self.step_len * 16.0) as u64;
+        self.fast_until = self.now + (self.sr * 8.0) as u64;
+        self.harm.restart();
+        self.bars_since_change = self.cur_bpc;
+        if self.feel != Feel::Normal {
+            self.surge_left = 0;
+            self.feel = Feel::Normal;
+            self.feel_phrases = 0;
+        }
+        if !self.bpm_lock {
+            let t = s.tempo;
+            let (lo, hi) = match self.leader.state {
+                State::Chill => t[0],
+                State::Awaken => t[1],
+                State::Alive => t[2],
+                State::Subside => (t[0].0, t[1].0.max(t[0].1)),
+            };
+            let mood = (0.3 + 0.5 * self.leader.agitation).clamp(0.0, 1.0);
+            let to = ((lo + (hi - lo) * mood).round() + self.tempo_bias()).clamp(50.0, 160.0).round();
+            self.bias_applied = self.tempo_bias();
+            if (to - self.bpm).abs() >= 1.0 {
+                self.bpm_from = self.bpm;
+                self.bpm_to = to;
+                self.ramp_len = 4;
+                self.ramp_pos = 0;
+                self.sw_ramp_end = self.step + 4;
+                self.say(format!("~ tempo {:.0} → {to:.0} bpm within a beat ({name})", self.bpm));
+            }
+        }
+        // rhythm section
+        self.acid_sync();
+        if s.relax {
+            self.tsec = 0;
+            self.tsec_left = 4;
+            self.tsec_len = 4;
+            self.tsec_ph = 0;
+        }
+        let why = format!("conductor went {name}");
+        self.insp[2] = Some(why.clone());
+        self.instant_kit();
+        self.make_drum_pattern();
+        self.bass_gm_ok = s.gm_bass && self.gm.is_some();
+        if !self.acid_on && !self.slot_on(Role::Bass) {
+            let p = (self.bass_patch + 1 + self.rng.below(BASS_PATCHES.len() - 1)) % BASS_PATCHES.len();
+            self.bass_patch = p;
+            self.bass_saw_t = BASS_PATCHES[p].1;
+            self.bass_drive_t = BASS_PATCHES[p].2;
+            self.insp[1] = Some(why.clone());
+            self.changed_sound(1, format!("switching to a {} patch", BASS_PATCHES[p].0));
+        }
+        if !self.slot_on(Role::Colour) {
+            let p = (self.bell_patch + 1 + self.rng.below(BELL_PATCHES.len() - 1)) % BELL_PATCHES.len();
+            self.bell_patch = p;
+        }
+        // every playing layer at once
+        for i in 0..self.slots.len() {
+            if !self.slots[i].on {
+                continue;
+            }
+            let pl = Self::player_of(self.slots[i].role);
+            self.insp[pl] = Some(why.clone());
+            self.slot_instant(i);
+        }
+        for i in 1..6 {
+            if self.insp[i].as_deref() == Some(why.as_str()) {
+                self.insp[i] = None;
+            }
+        }
+    }
+
+    /// the drummer grabs one of the style's kits right now
+    fn instant_kit(&mut self) {
+        let s = self.sty();
+        if self.gm.is_none() || s.kits.is_empty() {
+            self.insp[2] = None;
+            return;
+        }
+        let pick: Vec<usize> = s.kits.iter().cloned().filter(|&k| k != self.kit || s.kits.len() == 1).collect();
+        self.kit = pick[self.rng.below(pick.len())];
+        let pf = s.perc;
+        self.perc_set = if !pf.is_empty() { pf[self.rng.below(pf.len())] } else { self.rng.below(PERC_SETS.len()) };
+        let (prog, name) = KITS[self.kit];
+        if let Some(g) = self.gm.as_mut() {
+            g.program(9, prog, 0.9);
+        }
+        self.gm_used_kits += 1;
+        self.style_kit = false;
+        let ps = PERC_SETS[self.perc_set].0;
+        self.changed_sound(2, format!("switching to the GM {name} kit with {ps}"));
+    }
+
+    /// swap one layer's sound now: ~0.1 s fades, held pad notes re-struck on the new sound
+    fn slot_instant(&mut self, i: usize) {
+        let role = self.slots[i].role;
+        let pl = Self::player_of(role);
+        let old = self.slots[i].desc.clone();
+        let what = if role != Role::Bass && self.want_synth(pl) {
+            self.slot_cut(i);
+            let d = self.slot_synth(i);
+            if role == Role::Pad {
+                let left = self.cur_bpc.saturating_sub(self.bars_since_change).max(1);
+                self.strike_synth_pad(i, left);
+            }
+            format!("designing {}", d.trim_start_matches("synth "))
+        } else {
+            match self.slot_gm_fast(i) {
+                Some((p, _)) => {
+                    let nm = GM_NAMES[p as usize].to_lowercase();
+                    let art = if nm.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
+                    format!("picking up {art} {nm}")
+                }
+                None => return,
+            }
+        };
+        let d = self.slots[i].desc.clone();
+        self.say(format!("+ {d}  \u{2212} {old} [{role:?}]"));
+        self.changed_sound(pl, what);
+    }
+
+    /// fade the slot's current sound out in ~0.1 s (GM: CC11 + note-offs, synth: fast release)
+    fn slot_cut(&mut self, i: usize) {
+        let now = self.now;
+        if self.slots[i].synth.is_some() {
+            self.pool.cut_owner(i, now);
+            self.slots[i].synth = None;
+            return;
+        }
+        if self.gm.is_none() || self.slots[i].program.is_none() {
+            return;
+        }
+        let chn = self.slots[i].chans[self.slots[i].cur];
+        self.cut_channel(chn);
+    }
+
+    fn cut_channel(&mut self, chn: usize) {
+        if let Some(g) = self.gm.as_mut() {
+            g.fade(chn, 0.0, 0.1);
+        }
+        let at = self.now + (self.sr * 0.13) as u64;
+        // everything still sounding on it stops once it is faded (all-notes-off event)
+        self.evs.push(Ev { at, ch: chn, key: -1, vel: 0 });
+        self.pad_held.retain(|h| h.0 != chn);
+    }
+
+    /// GM program onto the pair's other channel right now (hard reset), fading in over 80 ms
+    fn slot_gm_fast(&mut self, i: usize) -> Option<(u8, bool)> {
+        self.gm.as_ref()?;
+        let now = self.now;
+        let from_synth = self.slots[i].synth.is_some() || self.slots[i].program.is_none();
+        let s = &self.slots[i];
+        let old_ch = s.chans[s.cur];
+        let other = 1 - s.cur;
+        let och = s.chans[other];
+        let role = s.role;
+        let (p, wild) = self.pick_program(role);
+        let held: Vec<(usize, i32)> = if from_synth { Vec::new() } else { self.pad_held.iter().cloned().filter(|h| h.0 == old_ch).collect() };
+        if from_synth {
+            self.pool.cut_owner(i, now);
+            self.slots[i].synth = None;
+        }
+        // the old channel goes, even if it was still fading from an earlier change
+        if !from_synth || self.gm.as_ref().is_some_and(|g| g.expr(old_ch) > 0.0) {
+            self.cut_channel(old_ch);
+        }
+        // drop anything still queued for the channel we take over
+        self.evs.retain(|e| !(e.ch == och && e.vel > 0));
+        if let Some(g) = self.gm.as_mut() {
+            g.all_off(och);
+            g.snap(och, 0.0);
+            g.program(och, p, prog_gain(p));
+            g.fade(och, 1.0, 0.08);
+            for &(_, k) in &held {
+                g.note_on(och, self.midi_root + k, 44, now);
+            }
+        }
+        self.pad_held.extend(held.iter().map(|&(_, k)| (och, k)));
+        let sl = &mut self.slots[i];
+        sl.cur = other;
+        sl.program = Some(p);
+        sl.changed_at = now;
+        sl.synth = None;
+        sl.desc = format!("GM {} ({})", GM_NAMES[p as usize], p);
+        sl.recent.push_back(p);
+        if sl.recent.len() > 8 {
+            sl.recent.pop_front();
+        }
+        self.recent_global.push_back(p);
+        if self.recent_global.len() > 16 {
+            self.recent_global.pop_front();
+        }
+        self.gm_used[p as usize] += 1;
+        Some((p, wild))
     }
 
     fn has_slot(&self, pl: usize) -> bool {
@@ -1328,6 +1610,16 @@ impl Engine {
     /// Techno arrangement on phrase boundaries: 16/32-bar grooves, breakdowns, builds and
     /// drops, driven by the system's intensity. Also keeps the acid patch in place.
     fn techno_phrase(&mut self) {
+        self.acid_sync();
+        if !self.sty().relax {
+            self.tsec = 0;
+            self.tsec_left = 0;
+            return;
+        }
+        self.techno_sections();
+    }
+
+    fn acid_sync(&mut self) {
         let acid = self.sty().bass_feel == BassFeel::Acid;
         if acid != self.acid_on {
             self.acid_on = acid;
@@ -1340,11 +1632,9 @@ impl Engine {
                 self.bass_drive_t = BASS_PATCHES[self.bass_patch].2;
             }
         }
-        if !self.sty().relax {
-            self.tsec = 0;
-            self.tsec_left = 0;
-            return;
-        }
+    }
+
+    fn techno_sections(&mut self) {
         self.tsec_ph += 1;
         if self.tsec_left > 1 {
             self.tsec_left -= 1;
@@ -2373,6 +2663,7 @@ impl Engine {
 
     fn on_step(&mut self) {
         self.steer();
+        self.switch_watch();
         if self.ramp_pos < self.ramp_len {
             // smooth tempo ramp, one tiny change per step (the clock never jumps)
             self.ramp_pos += 1;
@@ -2386,6 +2677,12 @@ impl Engine {
         let bar = self.step / 16;
         self.step += 1;
         if s == 0 {
+            if self.sf_clear > 0 && self.now >= self.sf_clear {
+                self.sf_clear = 0;
+                self.style_from = None;
+                let n = self.sty().name;
+                self.say(format!("~ the band has switched to {n}"));
+            }
             self.leader.on_bar();
             self.bias_decay();
             self.msg_budget = (self.msg_budget + 0.7).min(3.0);
@@ -2395,6 +2692,11 @@ impl Engine {
             self.on_bar_line(bar);
             self.conductor_bar(bar);
             self.space_bar();
+        }
+        // a user style switch lands on the next beat: new layers and the new harmony
+        if s % 4 == 0 && s != 0 && self.harm.restarting() {
+            self.gm_manage();
+            self.harmony_bar();
         }
         self.quote_step(bar * 16 + s as u64);
         self.bass_step(s);
@@ -3082,8 +3384,11 @@ impl Engine {
         self.boredom();
         self.gm_manage();
         self.patch_manage();
-        // harmony
         self.bars_since_change += 1;
+        self.harmony_bar();
+    }
+
+    fn harmony_bar(&mut self) {
         let meander = self.meander();
         if let Some(ch) = self.harm.on_bar(self.cur_bpc, meander) {
             let note = ch.note.clone();
@@ -4261,21 +4566,31 @@ impl Engine {
         let now = self.now;
         let g = self.gm.as_ref()?;
         let s = &self.slots[i];
+        let fast = now < self.fast_until;
         let ch = if g.silent(s.chans[s.cur], now) { s.cur } else { 1 - s.cur };
-        if !g.silent(s.chans[ch], now) {
+        if !g.silent(s.chans[ch], now) && !fast {
             return None;
         }
         let role = s.role;
         let (p, wild) = self.pick_program(role);
         let chn = self.slots[i].chans[ch];
-        let fade = self.rng.range(4.0, 9.0);
+        let fade = if fast { 0.1 } else { self.rng.range(4.0, 9.0) };
         if let Some(g) = self.gm.as_mut() {
+            if fast {
+                g.all_off(chn);
+                g.snap(chn, 0.0);
+            }
+            let oc = self.slots[i].chans[1 - ch];
+            if fast && g.expr(oc) > 0.0 {
+                g.fade(oc, 0.0, 0.1);
+            }
             g.program(chn, p, prog_gain(p));
             g.fade(chn, 1.0, fade);
         }
         let sl = &mut self.slots[i];
         sl.cur = ch;
         sl.program = Some(p);
+        sl.changed_at = now;
         sl.synth = None;
         sl.desc = format!("GM {} ({})", GM_NAMES[p as usize], p);
         sl.recent.push_back(p);
@@ -4294,7 +4609,11 @@ impl Engine {
     fn slot_out(&mut self, i: usize) {
         let now = self.now;
         if self.slots[i].synth.is_some() {
-            self.pool.release_owner(i, now);
+            if now < self.fast_until {
+                self.pool.cut_owner(i, now);
+            } else {
+                self.pool.release_owner(i, now);
+            }
             self.slots[i].synth = None;
             return;
         }
@@ -4303,6 +4622,10 @@ impl Engine {
         }
         let s = &self.slots[i];
         let chn = s.chans[s.cur];
+        if now < self.fast_until {
+            self.cut_channel(chn);
+            return;
+        }
         let fade = self.rng.range(6.0, 12.0);
         if let Some(g) = self.gm.as_mut() {
             g.fade(chn, 0.0, fade);
@@ -4317,6 +4640,9 @@ impl Engine {
 
     /// GM to GM crossfade onto the other channel of the pair (held pad notes move across).
     fn slot_gm_swap(&mut self, i: usize) -> Option<(u8, bool)> {
+        if self.now < self.fast_until {
+            return self.slot_gm_fast(i);
+        }
         let now = self.now;
         let s = &self.slots[i];
         if s.synth.is_some() || s.program.is_none() {
@@ -4355,6 +4681,7 @@ impl Engine {
         let sl = &mut self.slots[i];
         sl.cur = other;
         sl.program = Some(p);
+        sl.changed_at = now;
         sl.desc = format!("GM {} ({})", GM_NAMES[p as usize], p);
         sl.recent.push_back(p);
         if sl.recent.len() > 8 {
@@ -4375,6 +4702,7 @@ impl Engine {
         let d = p.describe();
         self.slots[i].synth = Some(p);
         self.slots[i].desc = d.clone();
+        self.slots[i].changed_at = self.now;
         self.synth_used += 1;
         d
     }
@@ -4669,6 +4997,10 @@ impl Engine {
     /// Render interleaved stereo frames.
     pub fn render(&mut self, out: &mut [f32]) {
         let frames = out.len() / 2;
+        // style keys act per audio block, not per step
+        if crate::shared::KEY_STYLE.load(Relaxed) != 0 {
+            self.steer();
+        }
         let ui_on = self.ui.is_some();
         let sti = self.st_idx();
         self.st_time[sti] += frames as f64 / self.sr as f64;
@@ -4694,7 +5026,7 @@ impl Engine {
                     if self.evs[i].at < end {
                         let e = self.evs.swap_remove(i);
                         let g = self.gm.as_mut().unwrap();
-                        if e.vel > 0 { g.note_on(e.ch, e.key, e.vel, now) } else if e.vel < 0 { g.bend(e.ch, -(e.vel + 1)) } else { g.note_off(e.ch, e.key, now) }
+                        if e.vel > 0 { g.note_on(e.ch, e.key, e.vel, now) } else if e.vel < 0 { g.bend(e.ch, -(e.vel + 1)) } else if e.key < 0 { g.all_off(e.ch) } else { g.note_off(e.ch, e.key, now) }
                     } else {
                         i += 1;
                     }
@@ -4957,7 +5289,8 @@ impl Engine {
             self.now = end;
             fi += n;
         }
-        if ui_on && self.now.saturating_sub(self.last_pub) as f32 >= self.sr * 0.1 {
+        if ui_on && (self.pub_now || self.now.saturating_sub(self.last_pub) as f32 >= self.sr * 0.1) {
+            self.pub_now = false;
             let dt = (self.now - self.last_pub) as f32 / self.sr;
             self.last_pub = self.now;
             for m in self.minds.iter_mut() {

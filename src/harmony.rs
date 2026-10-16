@@ -349,6 +349,8 @@ pub struct Harmony {
     phrases_away: u32,
     settle: u32,
     tension: bool,
+    /// a user style switch: drop the plan, change chord at the next bar with the new flavour
+    restart: bool,
     modulate: bool,
     resolve: bool,
     pub warmth: f32,
@@ -372,6 +374,7 @@ impl Harmony {
             key,
             home: key,
             queue: VecDeque::new(),
+            restart: false,
             cur,
             bars: 0,
             phrases_away: 0,
@@ -647,6 +650,16 @@ impl Harmony {
     }
 
     /// Called on every bar line. Returns a Change when the chord moves.
+    pub fn restart(&mut self) {
+        self.queue.clear();
+        self.key_after = None;
+        self.tension = false;
+        self.restart = true;
+    }
+    pub fn restarting(&self) -> bool {
+        self.restart
+    }
+
     pub fn on_bar(&mut self, bars_per_chord: u32, meander: bool) -> Option<Change> {
         let r = self.on_bar_inner(bars_per_chord, meander);
         spell_for(&self.key);
@@ -656,10 +669,11 @@ impl Harmony {
     fn on_bar_inner(&mut self, bars_per_chord: u32, meander: bool) -> Option<Change> {
         self.bars += 1;
         let tension_now = self.tension;
-        if self.bars < bars_per_chord.max(1) && !tension_now {
+        if self.bars < bars_per_chord.max(1) && !tension_now && !self.restart {
             return None;
         }
         self.bars = 0;
+        self.restart = false;
         if tension_now {
             self.tension = false;
             // dominant / secondary dominant of what comes next, or a borrowed chord
