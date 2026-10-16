@@ -179,6 +179,9 @@ struct Chan {
     sent: i32,
     last_note: u64,
     active: u32,
+    /// a hard cut in progress: samples left of the 25 ms fade, then every voice is killed
+    /// and the expression goes back to this
+    choke: Option<(usize, f32)>,
 }
 
 /// the guest musician's channel (its own synthesizer)
@@ -254,9 +257,11 @@ impl Gm {
         self.cc(ch as i32, 10, v);
     }
     pub fn note_on(&mut self, ch: usize, key: i32, vel: i32, now: u64) {
-        if !(0..128).contains(&key) {
+        if !(0..128).contains(&key) || self.chans[ch].choke.is_some() {
+            // nothing starts during a hard cut
             return;
         }
+        sound_log(now as f64 / self.sr as f64, "gm", ch, self.chans[ch].program as i32, key, vel);
         let (s, c) = self.sy(ch as i32);
         s.note_on(c, key, vel.clamp(1, 127));
         if ch == GUEST {
@@ -280,6 +285,18 @@ impl Gm {
         self.chans[ch].last_note = now;
         self.chans[ch].active = self.chans[ch].active.saturating_sub(1);
     }
+    /// a hard cut (user style switch): every channel fades to silence in ~25 ms, then every
+    /// voice is killed so nothing rings into the next style
+    pub fn choke_all(&mut self) {
+        let n = (self.sr * 0.025) as usize;
+        for ch in 0..17 {
+            let c = &mut self.chans[ch];
+            let back = c.target;
+            c.target = 0.0;
+            c.rate = (c.expr / 0.025).max(1e-3);
+            c.choke = Some((n, back));
+        }
+    }
     pub fn all_off(&mut self, ch: usize) {
         let (s, c) = self.sy(ch as i32);
         s.note_off_all_channel(c, false);
@@ -288,12 +305,21 @@ impl Gm {
     /// Expression fade (CC11) towards `target` (0..1) over `secs`.
     pub fn fade(&mut self, ch: usize, target: f32, secs: f32) {
         let c = &mut self.chans[ch];
+        if let Some((left, _)) = c.choke {
+            // mid-cut: this is where the channel goes once the cut is done
+            c.choke = Some((left, target));
+            return;
+        }
         c.target = target;
         c.rate = ((target - c.expr).abs() / secs.max(0.05)).max(1e-3);
     }
     /// set the expression at once (a channel about to be reused after a hard reset)
     pub fn snap(&mut self, ch: usize, v: f32) {
         let c = &mut self.chans[ch];
+        if let Some((left, _)) = c.choke {
+            c.choke = Some((left, v));
+            return;
+        }
         c.expr = v;
         c.target = v;
         let s = (v.sqrt() * 127.0).round() as i32;
@@ -312,6 +338,22 @@ impl Gm {
     pub fn render(&mut self, n: usize) {
         let dt = n as f32 / self.sr;
         for ch in 0..17 {
+            if let Some((left, back)) = self.chans[ch].choke {
+                if left <= n {
+                    let (s, c) = self.sy(ch as i32);
+                    s.note_off_all_channel(c, true);
+                    let cc = &mut self.chans[ch];
+                    cc.choke = None;
+                    cc.active = 0;
+                    cc.expr = back;
+                    cc.target = back;
+                    let v = (back.sqrt() * 127.0).round() as i32;
+                    cc.sent = v;
+                    self.cc(ch as i32, 11, v);
+                    continue;
+                }
+                self.chans[ch].choke = Some((left - n, back));
+            }
             let c = self.chans[ch];
             if c.expr != c.target {
                 let step = c.rate * dt;
@@ -339,6 +381,19 @@ impl Gm {
                 self.l[i] += self.gl[i];
                 self.r[i] += self.gr[i];
             }
+        }
+    }
+}
+
+/// measurement: every note that actually starts sounding (SYSJAM_SOUNDLOG=path):
+/// time, source (gm / pool), channel or owner, program, key, velocity
+pub fn sound_log(t: f64, src: &str, ch: usize, prog: i32, key: i32, vel: i32) {
+    use std::io::Write;
+    static LOG: std::sync::OnceLock<Option<std::sync::Mutex<std::io::BufWriter<std::fs::File>>>> = std::sync::OnceLock::new();
+    let l = LOG.get_or_init(|| std::env::var_os("SYSJAM_SOUNDLOG").and_then(|p| std::fs::File::create(p).ok()).map(|f| std::sync::Mutex::new(std::io::BufWriter::new(f))));
+    if let Some(m) = l {
+        if let Ok(mut w) = m.lock() {
+            let _ = writeln!(w, "{t:.4} {src} {ch} {prog} {key} {vel}");
         }
     }
 }

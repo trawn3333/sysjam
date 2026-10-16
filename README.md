@@ -17,8 +17,8 @@ You can steer it from the terminal UI. **↑/↓** nudge the tempo; **←/→** 
 Celtic Session, Techno, Space Cadet, Tribal/Gamelan, or *auto* (the default: it wanders between them).
 Each style changes the band's instruments, tempo, drum feel, harmony, bass line and theme quotes,
 and it restyles the whole UI (palette, borders, icons, meters, and the conductor's outfit and voice).
-See [Steering](#steering-tempo-and-conductor-styles). A switch you ask for happens at once: the
-harmony on the next beat, everything else within about a second.
+See [Steering](#steering-tempo-and-conductor-styles). A switch you ask for is a hard cut: the old
+style stops at once, a one-beat pickup in the new style follows on the next beat, then the band.
 
 Everyone on stage is a little animated character. The conductor beats real conducting patterns
 phase-locked to the audio you are hearing, and each musician moves with their own notes (sticks on
@@ -319,14 +319,21 @@ drums play (Space Cadet and Techno loosen this). Restraint and CPU stay as befor
 | **Space Cadet** | synth-forward (wavetable/FM, +4 dB allowance), slow, evolving, Lydian and major-third colours |
 | **Tribal / Gamelan** | hand percussion carries a 3+3+2 cycle, pelog-ish five-note melodies in minor and pentatonic in major, kalimba, steel drums, marimba, taiko |
 
-**Switches you ask for are instant.** When you press ←/→ the switch happens at once and may be
-jarring: the harmony restarts on the next beat in the new style, the tempo ramps there within one
-beat, the drum feel and kit change right away, every instrument is swapped with 0.1–0.15 s fades
-(held notes are cut and re-struck), and the UI theme snaps over in 150 ms. Cooldowns, dwell times
-and phrase waits are skipped. Keypress to fully switched (tempo ramp done and in the new range, new
-kit, every playing layer replaced, old channels silent, new ones at full level, harmony restarted),
-30 switches over 3 seeds: **0.55–1.06 s, median about 0.9 s**, down from 25–110 s before (several
-didn't finish within 90 s). The *auto* style's own wanderings stay smooth, as described next.
+**Switches you ask for are a hard cut.** When you press ←/→ the old idea is dropped at once:
+every sounding and scheduled note is choked with a 25 ms release, and the chord history, plan,
+phrases, motifs, theme quote, section, the session (Blues/Country/Celtic) and rage
+(Biker/Metal/Industrial) engines, per-player roles and style-specific mood carry-over are all
+reset. The new key, mode, tempo, kit and instruments apply straight away. On the next beat the
+drummer plays a one-beat pickup in the new idiom (a tom-and-kick run into Metal, boom-chick into
+Country, a tom triplet into a reel, a snare roll into House or Techno, a ride and snare triplet
+into Blues or Jazz, a soft cymbal swell into Space or Monk), and the whole band comes in on
+beat 1 of the new style's song-form opening (with a crash, except in the quiet styles). The UI
+theme snaps over in 150 ms and the conductor still reacts. Measured offline over 233 random
+manual switches (8 seeds, every style): **0 old-style notes sound after the press** (the old
+lingering came from adjacent session styles, e.g. Blues → Country, keeping the blues engine and
+its queued 12-bar running for several bars); keypress to the first new-style note (the pickup)
+**median 0.31 s, max 0.74 s**; keypress to the full band on the downbeat median 0.87 s, max 2.9 s
+(slow new tempos). The *auto* style's own wanderings stay smooth, as described next.
 
 **Auto transitions are musical.** The conductor announces the switch (`“alright folks, jazz club
 tonight — swing it”`, `“Howdy folks! grab a partner — country night”`, `“Lord have mercy… let's play

@@ -830,6 +830,10 @@ impl Harmony {
         self.tension = false;
         self.restart = true;
     }
+    /// a user's hard cut: forget the chords played so far too
+    pub fn forget(&mut self) {
+        self.hist.clear();
+    }
     pub fn restarting(&self) -> bool {
         self.restart
     }

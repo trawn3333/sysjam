@@ -159,6 +159,7 @@ impl Pool {
 
     /// Start a note `at` (sample time), gate for `dur` samples.
     pub fn note(&mut self, owner: usize, p: &Patch, freq: f32, vel: f32, at: u64, dur: u64, pan: f32) {
+        crate::gm::sound_log(at as f64 / self.sr as f64, "pool", owner, -1, (69.0 + 12.0 * (freq / 440.0).log2()).round() as i32, (vel * 100.0) as i32);
         // free voice, else the quietest (released first)
         let idx = self.v.iter().position(|v| !v.on).unwrap_or_else(|| {
             let mut best = 0;
@@ -218,6 +219,20 @@ impl Pool {
 
     /// Silence an owner within ~0.1 s (user style switch): fast release, and notes that
     /// have not started yet are dropped.
+    /// silence every voice within ~40 ms (a hard cut)
+    pub fn cut_all(&mut self, now: u64) {
+        crate::gm::sound_log(now as f64 / self.sr as f64, "cut", 0, -1, 0, 0);
+        for v in self.v.iter_mut() {
+            if v.on {
+                if v.start > now {
+                    v.on = false;
+                    continue;
+                }
+                v.off = now.max(v.start + 1);
+                v.p.r = v.p.r.min(0.04);
+            }
+        }
+    }
     pub fn cut_owner(&mut self, owner: usize, now: u64) {
         for v in self.v.iter_mut() {
             if v.on && v.owner == owner {

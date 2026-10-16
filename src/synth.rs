@@ -368,6 +368,9 @@ pub struct Engine {
     swap_at: [u32; 6],
     /// user style switch being measured: (start sample, from, to); finished times in s
     sw_t0: Option<(u64, usize, usize)>,
+    /// a user switch's hard cut: 1 = waiting for the next beat, 2 = the pickup beat is playing,
+    /// 3 = the downbeat is next (crash); with the sample time of the key press
+    pickup: (u8, u64),
     /// fast (user) switch: short fades for layers coming and going until then; header clears then
     fast_until: u64,
     sw_ramp_end: u64,
@@ -776,6 +779,7 @@ impl Engine {
             style_left: 0,
             swap_at: [0; 6],
             sw_t0: None,
+            pickup: (0, 0),
             fast_until: 0,
             sw_ramp_end: 0,
             sf_clear: 0,
@@ -1279,7 +1283,7 @@ impl Engine {
             let c = self.chord();
             let rel = |x: i32| (x - k.tonic).rem_euclid(12);
             let pcs: Vec<String> = c.pcs().iter().map(|&p| rel(p).to_string()).collect();
-            let line = format!("{pos:.3} {i} {} {} {} {} {} {:.1} {}\n", rel(semi), rel(c.root), pcs.join(","), k.minor as u8, STYLES[self.style].id, self.bpm, (vel * 100.0) as i32);
+            let line = format!("{pos:.3} {i} {} {} {} {} {} {:.1} {} {} {:.4}\n", rel(semi), rel(c.root), pcs.join(","), k.minor as u8, STYLES[self.style].id, self.bpm, (vel * 100.0) as i32, (self.midi_root + semi).rem_euclid(12), self.now as f64 / self.sr as f64 + self.hit_delay.max(0.0) as f64 * self.step_len as f64 / self.sr as f64);
             if let Some(w) = self.notes_log.as_mut() {
                 let _ = w.write_all(line.as_bytes());
             }
@@ -1938,8 +1942,13 @@ impl Engine {
             self.cond_say(format!("{nm} it is — we're already there"), Pose::Calm, None);
             return;
         }
+        let from = self.style;
         self.switch_style(to, "you asked");
         self.sw_t0 = Some((self.now, self.style_from.unwrap_or(self.style), to));
+        if let Some(w) = self.notes_log.as_mut() {
+            use std::io::Write;
+            let _ = writeln!(w, "# switch {:.4} {} {} {:.2}", self.now as f64 / self.sr as f64, STYLES[from].id, STYLES[to].id, self.bpm);
+        }
     }
 
     /// measurement: a user switch is done when the tempo sits in the new style's range,
@@ -2030,6 +2039,7 @@ impl Engine {
     /// drum feel + kit + pattern at once, every playing layer swapped with a ~0.1 s fade
     /// (held notes re-struck on the new sound). No cooldowns, dwell or phrase waits.
     fn instant_switch(&mut self) {
+        self.hard_reset();
         let s = self.sty();
         let name = s.name;
         self.style_left = 0;
@@ -2104,6 +2114,114 @@ impl Engine {
         }
     }
 
+    /// A user switch drops the old idea at once: every sound choked in ~25 ms (nothing rings
+    /// into the new style), scheduled notes dropped, the session / rage engines stopped (the
+    /// new style's engine starts from its own opening), the quote, the guest and the
+    /// conductor's lay-outs cleared, everybody back in, and the energy carried over only as
+    /// far as an energetic entry. The new style comes in after a one-beat pickup, on a bar line.
+    fn hard_reset(&mut self) {
+        let now = self.now;
+        if self.blues_live {
+            self.blues_off();
+        }
+        if self.rage_live {
+            self.rage_off();
+            self.metal_base = 0.0;
+        }
+        self.ramp_pos = self.ramp_len;
+        if let Some(g) = self.gm.as_mut() {
+            g.choke_all();
+        }
+        self.pool.cut_all(now);
+        self.evs.clear();
+        self.pad_held.clear();
+        self.quote = None;
+        self.history.clear();
+        self.hist_ch.clear();
+        self.harm.forget();
+        if self.guest_on {
+            let bar = self.step / 16;
+            self.guest_off(bar);
+        }
+        for i in 0..6 {
+            self.on[i] = true;
+            self.rmode[i] = RMode::Play;
+            self.rel[i] = Rel::Same;
+            self.hold[i] = 0;
+        }
+        self.cond.lay = [0; 7];
+        self.cond.hushv = [1.0; 7];
+        self.surge_left = 0;
+        self.feel = Feel::Normal;
+        self.feel_phrases = 0;
+        // an energetic entry, not a slow build
+        if matches!(self.leader.state, State::Chill | State::Subside) {
+            self.leader.state = State::Alive;
+            self.leader.phrases_in_state = 0;
+            self.leader.bars_in_state = 0;
+        }
+        self.leader.energy = self.leader.energy.max(0.6);
+        self.pickup = (1, now);
+    }
+
+    /// the one-beat pickup into a user-chosen style (steps 12..15 of the bar before its first
+    /// downbeat): a fill or an idiomatic hit on the new kit
+    fn pickup_step(&mut self, s: usize) {
+        let id = self.sty().id;
+        let k = s as i32 - 12; // 0..3
+        let v = 70 + 12 * k;
+        match id {
+            "metal" | "biker" | "industrial" => {
+                let toms = [50, 48, 45, 41];
+                self.drum(toms[k as usize], v + 10, 0.0);
+                self.drum(36, v, 0.0);
+                if k == 3 {
+                    self.drum(38, 110, 0.5);
+                }
+            }
+            "country" => {
+                // boom-chick into the one
+                match k {
+                    0 | 2 => self.drum(36, 95, 0.0),
+                    _ => self.drum(38, 85, 0.0),
+                }
+                self.drum(42, 60, 0.0);
+            }
+            "celtic" => {
+                // a bodhrán roll: low-tom triplets, building
+                for (j, d) in [0.0f32, 0.33, 0.67].iter().enumerate() {
+                    self.drum(if j == 0 { 43 } else { 41 }, v - 10 + 5 * j as i32, *d);
+                }
+            }
+            "blues" | "jazz" => {
+                if k == 0 || k == 2 {
+                    self.drum(51, 70, 0.0);
+                }
+                self.drum(38, v - 15, 0.0);
+                self.drum(38, v - 5, 0.67);
+            }
+            "house" | "techno" => {
+                self.drum(38, v, 0.0);
+                self.drum(38, v - 20, 0.5);
+                if k == 2 {
+                    self.drum(46, 80, 0.0);
+                }
+            }
+            "tribal" => {
+                let toms = [47, 45, 43, 41];
+                self.drum(toms[k as usize], v, 0.0);
+                self.drum(toms[k as usize], v - 20, 0.5);
+            }
+            "baroque" => self.drum(41, v - 10, 0.0),
+            _ => {
+                // monk / space: a soft cymbal swell
+                if k == 0 {
+                    self.drum(52, 50, 0.0);
+                }
+            }
+        }
+    }
+
     /// the drummer grabs one of the style's kits right now
     fn instant_kit(&mut self) {
         let s = self.sty();
@@ -2133,7 +2251,8 @@ impl Engine {
         let what = if role != Role::Bass && self.want_synth(pl) {
             self.slot_cut(i);
             let d = self.slot_synth(i);
-            if role == Role::Pad {
+            // (not on a user's hard cut: the new pad comes in with the band on the downbeat)
+            if role == Role::Pad && self.pickup.0 == 0 {
                 let left = self.cur_bpc.saturating_sub(self.bars_since_change).max(1);
                 self.strike_synth_pad(i, left);
             }
@@ -3550,7 +3669,7 @@ impl Engine {
         if let Some(w) = self.notes_log.as_mut() {
             use std::io::Write;
             let pos = self.step as f64 - 1.0 + delay.max(0.0) as f64;
-            let _ = writeln!(w, "{pos:.3} 2 {key} 0 0 0 {} {:.1} {vel}", STYLES[self.style].id, self.bpm);
+            let _ = writeln!(w, "{pos:.3} 2 {key} 0 0 0 {} {:.1} {vel} -1 {:.4}", STYLES[self.style].id, self.bpm, self.now as f64 / self.sr as f64 + delay.max(0.0) as f64 * self.step_len as f64 / self.sr as f64);
         }
         self.last_drum = self.now.max(1);
         self.hit_delay = delay;
@@ -3604,6 +3723,11 @@ impl Engine {
             self.step_len = self.sr * 60.0 / self.bpm / 4.0;
             self.dlen_target = ((self.step_len * 3.0) as usize).clamp(1, self.dl.len() - 1);
         }
+        if self.pickup.0 == 1 && self.step % 4 == 0 && self.now >= self.pickup.1 + (self.sr * 0.03) as u64 {
+            // the first beat after the cut becomes the pickup: the bar's 4th beat
+            self.step = (self.step / 16) * 16 + 12;
+            self.pickup.0 = 2;
+        }
         let s = (self.step % 16) as usize;
         let bar = self.step / 16;
         {
@@ -3622,6 +3746,25 @@ impl Engine {
         let tb = ["under 70", "70-89", "90-109", "110-129", "130 up"].iter().position(|b| *b == crate::likes::tempo_bucket(self.bpm)).unwrap_or(0);
         self.bpm_secs[tb] += dt;
         self.step += 1;
+        // a user's hard cut: nothing else runs until the downbeat
+        match self.pickup.0 {
+            // the hard cut: silence until the next beat, the pickup, then everyone on the one
+            1 => return,
+            2 if s >= 12 => {
+                self.pickup_step(s);
+                if s == 15 {
+                    self.pickup.0 = 3;
+                }
+                return;
+            }
+            3 if s == 0 => {
+                self.pickup = (0, 0);
+                if !matches!(self.sty().id, "monk" | "space" | "baroque") {
+                    self.drum(49, 105, 0.0);
+                }
+            }
+            _ => {}
+        }
         if s == 0 && self.session_mode().is_some() && !self.blues_live && !self.harm.restarting() {
             // the blues key is set before the bar's first chord sounds (no stray first bar)
             self.blues_on();
@@ -3652,7 +3795,7 @@ impl Engine {
             self.declare_bar(bar);
         }
         // a user style switch lands on the next beat: new layers and the new harmony
-        if s % 4 == 0 && s != 0 && self.harm.restarting() {
+        if s % 4 == 0 && s != 0 && self.harm.restarting() && self.pickup.0 == 0 {
             self.gm_manage();
             self.harmony_bar();
         }
